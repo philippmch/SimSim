@@ -17,9 +17,35 @@ and exploration. Decisions use short-term food and threat memories, target
 commitment, travel safety, energy, and correlated wandering. Urgent threats and
 the need to get food home can override a committed target.
 
+Founders begin with conservative standing variation by default (4% physical and
+6% behavioral variation). This makes selection visible before the first birth
+without overwhelming the configured starting means. Clonal, low-diversity, and
+high-diversity controls are available; zero variation produces exactly equal
+founders. Version-2 experiments migrate to zero founder variation so their prior
+deterministic starting populations remain reproducible.
+
+Biological individual and lineage identifiers are separate from transient render
+objects. A surviving adult keeps its individual identifier across generations;
+offspring receive a new identifier linked to their parent and lineage. The
+generation ledger reconciles each starting individual as survived, hunted,
+energy-depleted, unfed, or late, and records resources, birth capacity, and
+selection means and variances. Clicking a creature opens bounded current-state
+telemetry and its current utility candidates; long per-tick traces are not kept.
+
 The seeded environment persists across generations. Food grows around visible
 patches, obstacles remain fixed, and a configurable seasonal cycle, long-term
 trend, and response rate gradually change each generation's food budget.
+
+## Experiment lab
+
+The Experiment lab compares a control with a treatment across matched random
+seeds. Choose a preset pressure, intervention generation, outcome, replicate
+count, and fixed horizon; the chart reports both medians and middle-50%
+intervals on one shared scale, plus the paired treatment-minus-control effect.
+Runs use a separate worker when available and can be cancelled without changing
+the live ecosystem. Results export as validated versioned JSON or tidy,
+spreadsheet-safe CSV. A result seed can be staged in the live parameters for an
+explicit replay on the next **Apply & restart**.
 
 ## Run locally
 

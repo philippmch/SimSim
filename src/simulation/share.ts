@@ -1,7 +1,8 @@
 import type {Config} from './types'
 import {CONFIG_VERSION,defaultConfig,sanitizeConfig} from './config'
 
-export const STORAGE_KEY='evolution-field-lab:experiment:v2'
+export const STORAGE_KEY='evolution-field-lab:experiment:v3'
+export const LEGACY_STORAGE_KEY='evolution-field-lab:experiment:v2'
 export const MAX_EXPERIMENT_TEXT=64_000
 export const MAX_EXPERIMENT_QUERY=12_000
 type StorageLike={getItem(key:string):string|null;setItem(key:string,value:string):void}
@@ -13,6 +14,7 @@ export function importExperiment(text:string):Config|null{
   try{const value=JSON.parse(text) as unknown;if(!value||typeof value!=='object'||Array.isArray(value))return null;const record=value as Record<string,unknown>
     if(record.version===1&&record.settings&&typeof record.settings==='object'&&!Array.isArray(record.settings))return sanitizeConfig(record.settings)
     if(record.version===0&&record.config&&typeof record.config==='object'&&!Array.isArray(record.config))return sanitizeConfig(record.config)
+    if(record.version===2&&record.config&&typeof record.config==='object'&&!Array.isArray(record.config))return sanitizeConfig({...record.config,founderPhysicalVariation:0,founderBehaviorVariation:0})
     if(record.version===CONFIG_VERSION&&record.config&&typeof record.config==='object'&&!Array.isArray(record.config))return sanitizeConfig(record.config)
     if('version'in record)return null
     const legacyKeys=['seed','initialPopulation','foodPerDay'];if(legacyKeys.every(key=>typeof record[key]==='number'))return sanitizeConfig(record)
@@ -23,6 +25,6 @@ export function encodeExperiment(config:Config){return encodeURIComponent(JSON.s
 export function decodeExperiment(value:string|null){if(!value||value.length>MAX_EXPERIMENT_QUERY)return null;try{return importExperiment(decodeURIComponent(value))}catch{return null}}
 export function configFromSearch(search:string){try{return decodeExperiment(new URLSearchParams(search).get('experiment'))}catch{return null}}
 export function loadInitialConfig(search:string,storage?:StorageLike|null){const fromUrl=configFromSearch(search);if(fromUrl)return fromUrl
-  try{const stored=storage?.getItem(STORAGE_KEY);if(stored){const parsed=importExperiment(stored);if(parsed)return parsed}}catch{/* denied storage */}return{...defaultConfig}}
+  try{for(const key of [STORAGE_KEY,LEGACY_STORAGE_KEY]){const stored=storage?.getItem(key);if(stored){const parsed=importExperiment(stored);if(parsed)return parsed}}}catch{/* denied storage */}return{...defaultConfig}}
 export function persistExperiment(config:Config,storage?:StorageLike|null){const clean=sanitizeConfig(config);try{storage?.setItem(STORAGE_KEY,exportExperiment(clean))}catch{/* denied storage */}return clean}
 export function experimentUrl(config:Config,base:string){const url=new URL(base);url.searchParams.set('experiment',encodeExperiment(config));return url.toString()}

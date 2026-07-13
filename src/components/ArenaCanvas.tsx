@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react'
+import type React from 'react'
 import type { World } from '../simulation/types'
 
-interface Props { world: World; revision: number }
+interface Props { world: World; revision: number;selectedIndividualId:number|null;onSelect:(individualId:number|null)=>void }
 
 function speedColor(speed: number) {
   const t=Math.max(0,Math.min(1,(speed-.55)/1.15))
@@ -9,7 +10,7 @@ function speedColor(speed: number) {
   return `hsl(${hue} 58% ${42+t*14}%)`
 }
 
-export function ArenaCanvas({world,revision}:Props) {
+export function ArenaCanvas({world,revision,selectedIndividualId,onSelect}:Props) {
   const ref=useRef<HTMLCanvasElement>(null)
   const drawRef=useRef<()=>void>(()=>{})
   useEffect(()=>{
@@ -49,6 +50,7 @@ export function ArenaCanvas({world,revision}:Props) {
       for(const c of sorted){
         const x=sx(c.x),y=sy(c.y),base=Math.max(7,Math.min(w,h)*.017*c.size), height=base*1.55
         ctx.fillStyle='rgba(22,38,30,.16)';ctx.beginPath();ctx.ellipse(x,y+base*.46,base*.9,base*.3,0,0,Math.PI*2);ctx.fill()
+        if(c.individualId===selectedIndividualId){ctx.strokeStyle='#f2c94c';ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y-height*.35,base*1.5,0,Math.PI*2);ctx.stroke()}
         const orientation=Math.hypot(c.vx,c.vy)>.001?Math.atan2(c.vy,c.vx):c.angle
         ctx.save();ctx.translate(x,y);ctx.rotate(orientation+Math.PI/2)
         if(c.returning){ctx.strokeStyle='rgba(255,255,255,.7)';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(0,-height*.15,base*1.15,0,Math.PI*2);ctx.stroke()}
@@ -66,9 +68,10 @@ export function ArenaCanvas({world,revision}:Props) {
     drawRef.current=draw;draw()
   },[world,revision])
   useEffect(()=>{const canvas=ref.current;if(!canvas||typeof ResizeObserver==='undefined')return;const observer=new ResizeObserver(()=>drawRef.current());observer.observe(canvas);return()=>observer.disconnect()},[])
-  return <canvas ref={ref} className="arena" role="img" aria-label={`Simulation arena, generation ${world.generation}, ${world.creatures.filter(c=>c.alive).length} living creatures, ${world.food.length} of ${Math.round(world.environment.foodBudget)} food remaining, ${world.environment.patches.length} food patches, and ${world.environment.obstacles.length} obstacles.`}>
+  const chooseAt=(event:React.MouseEvent<HTMLCanvasElement>)=>{const canvas=ref.current;if(!canvas)return;const rect=canvas.getBoundingClientRect(),pad=Math.max(20,Math.min(rect.width,rect.height)*.055),x=(event.clientX-rect.left-pad)/(rect.width-pad*2),y=(event.clientY-rect.top-pad)/(rect.height-pad*2);let best:World['creatures'][number]|undefined,bestD=.05;for(const c of world.creatures.filter(c=>c.alive)){const d=Math.hypot(c.x-x,c.y-y);if(d<bestD){best=c;bestD=d}}onSelect(best?.individualId??null)}
+  return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={`Simulation arena, generation ${world.generation}, ${world.creatures.filter(c=>c.alive).length} living creatures, ${world.food.length} of ${Math.round(world.environment.foodBudget)} food remaining, ${world.environment.patches.length} food patches, and ${world.environment.obstacles.length} obstacles. Click a creature or use the inspector list to select it.`}>
     Natural selection simulation arena. Live counts are available in the statistics region.
-  </canvas>
+  </canvas><label className="creature-picker">Inspect <select value={selectedIndividualId??''} onChange={e=>onSelect(e.target.value?Number(e.target.value):null)}><option value="">No creature selected</option>{[...world.creatures].filter(c=>c.alive).sort((a,b)=>a.individualId-b.individualId).map(c=><option key={c.individualId} value={c.individualId}>Individual {c.individualId}, lineage {c.lineageId}, {c.mode}</option>)}</select></label></>
 }
 
 export { speedColor }

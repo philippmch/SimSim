@@ -5,7 +5,7 @@ import {proposeMotion} from './motion'
 import {advanceFoodBudget,seasonalTarget} from './environment'
 import type {Creature} from './types'
 
-const world=(n=3,extra={})=>createWorld({...defaultConfig,initialPopulation:n,foodPerDay:0,obstacleCount:0,foodPatchCount:2,...extra})
+const world=(n=3,extra={})=>createWorld({...defaultConfig,initialPopulation:n,foodPerDay:0,obstacleCount:0,foodPatchCount:2,founderPhysicalVariation:0,founderBehaviorVariation:0,...extra})
 
 describe('two-phase ecology',()=>{
   it('is invariant to creature array permutation',()=>{

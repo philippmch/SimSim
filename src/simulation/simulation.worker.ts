@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import {createWorld,runGeneration} from './engine'
+import {createWorld,runGeneration,setInspectedIndividual} from './engine'
 import {runScheduled,scheduledTicks} from './scheduler'
 import type {WorkerCommand,WorkerEvent} from './protocol'
 import type {World} from './types'
@@ -11,5 +11,6 @@ self.onmessage=(event:MessageEvent<WorkerCommand>)=>{try{const command=event.dat
   else if(command.type==='play'){playing=true;last=performance.now()}
   else if(command.type==='pause')playing=false
   else if(command.type==='speed')speed=Math.max(.5,Math.min(4,command.speed))
+  else if(command.type==='inspect'&&world){setInspectedIndividual(world,command.individualId);emit({type:'snapshot',world,epoch})}
   else if(command.type==='finish'&&world){playing=false;runGeneration(world);emit({type:'snapshot',world,epoch})}
 }catch(error){emit({type:'error',message:error instanceof Error?error.message:'Simulation worker error',epoch})}}

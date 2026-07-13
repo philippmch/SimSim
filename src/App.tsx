@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { ArenaCanvas } from './components/ArenaCanvas'
-import { BehaviorHistory, Histogram, HistoryChart } from './components/Charts'
+import { BehaviorHistory, Histogram, HistoryChart, summarizeDistribution } from './components/Charts'
 import { createWorld, getModeCounts, getStats } from './simulation/engine'
 import { defaultConfig, sanitizeConfig } from './simulation/config'
 import { createController } from './simulation/controller'
 import type { SimulationController } from './simulation/controller'
 import { experimentUrl,exportExperiment,importExperiment,loadInitialConfig,MAX_EXPERIMENT_TEXT,persistExperiment } from './simulation/share'
-import type { Config, World } from './simulation/types'
+import type { BiologicalTrait,Config, World } from './simulation/types'
+
+const ExperimentPanel=lazy(()=>import('./components/ExperimentPanel').then(module=>({default:module.ExperimentPanel})))
 
 const copyConfig=(c:Config):Config=>({...c})
 
@@ -26,13 +28,17 @@ function App(){
   const [playing,setPlaying]=useState(()=>!window.matchMedia('(prefers-reduced-motion: reduce)').matches)
   const [speed,setSpeed]=useState(1),[revision,setRevision]=useState(0)
   const [settingsOpen,setSettingsOpen]=useState(false)
+  const [experimentOpen,setExperimentOpen]=useState(false)
   const [isNarrow,setIsNarrow]=useState(()=>window.matchMedia('(max-width: 1050px)').matches)
   const settingsToggleRef=useRef<HTMLButtonElement>(null)
+  const experimentToggleRef=useRef<HTMLButtonElement>(null)
   const settingsRef=useRef<HTMLElement>(null)
   const settingsCloseRef=useRef<HTMLButtonElement>(null)
   const importRef=useRef<HTMLInputElement>(null)
   const [actionStatus,setActionStatus]=useState('')
   const [runtimeMode,setRuntimeMode]=useState<'worker'|'fallback'>('worker')
+  const [distributionTrait,setDistributionTrait]=useState<BiologicalTrait>('speed')
+  const [selectedIndividualId,setSelectedIndividualId]=useState<number|null>(null)
   const dirty=JSON.stringify(draft)!==JSON.stringify(world.config)
   const living=world.creatures.filter(c=>c.alive).length
   const extinct=world.creatures.length===0
@@ -41,10 +47,15 @@ function App(){
   const resumeOnVisibleRef=useRef(false)
   const stats=getStats(world)
   const modes=getModeCounts(world)
+  const selected=world.creatures.find(c=>c.individualId===selectedIndividualId)
+  const distribution=summarizeDistribution(world.creatures.filter(c=>c.alive).map(c=>c[distributionTrait]))
   const update=<K extends keyof Config>(key:K,value:Config[K])=>setDraft(c=>({...c,[key]:value}))
   const closeSettings=useCallback(()=>setSettingsOpen(false),[])
-  const reset=useCallback(()=>{const clean=sanitizeConfig(draft);setDraft(clean);persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}controllerRef.current?.send({type:'reset',config:clean});setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
+  const closeExperiment=useCallback(()=>{setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
+  const replayExperiment=useCallback((config:Config)=>{setDraft(sanitizeConfig(config));setActionStatus('Control seed staged. Choose Apply & restart to replay it live.');setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
+  const reset=useCallback(()=>{const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}controllerRef.current?.send({type:'reset',config:clean});setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
   const step=()=>{setPlaying(false);controllerRef.current?.send({type:'finish'})}
+  const selectIndividual=(individualId:number|null)=>{setSelectedIndividualId(individualId);controllerRef.current?.send({type:'inspect',individualId})}
 
   useEffect(()=>{const controller=createController(initialRef.current,w=>{setWorld(w);setRevision(n=>n+1)},()=>setRuntimeMode('fallback'));controllerRef.current=controller;setRuntimeMode(controller.mode);return()=>{controller.dispose();controllerRef.current=null}},[])
 
@@ -82,20 +93,25 @@ function App(){
   const historyStart=world.history.at(-40)?.generation??0
   const historyEnd=world.history.at(-1)?.generation??0
   return <div className="app-shell">
-    <header className="topbar">
+    <header className="topbar" aria-hidden={experimentOpen||undefined}>
       <div className="brand"><div className="mark" aria-hidden="true">∿</div><div><h1>Evolution Field Lab</h1><p>Shape an ecosystem. Watch selection unfold.</p></div></div>
-      <button ref={settingsToggleRef} className="settings-toggle" onClick={()=>setSettingsOpen(v=>!v)} aria-expanded={settingsOpen} aria-controls="settings" aria-haspopup={isNarrow?'dialog':undefined}>
+      <div className="top-actions"><button ref={experimentToggleRef} className="experiment-toggle" onClick={()=>{setPlaying(false);setSettingsOpen(false);setExperimentOpen(true)}} aria-haspopup="dialog"><span aria-hidden="true">◫</span> Experiment lab</button><button ref={settingsToggleRef} className="settings-toggle" onClick={()=>setSettingsOpen(v=>!v)} aria-expanded={settingsOpen} aria-controls="settings" aria-haspopup={isNarrow?'dialog':undefined}>
         <span aria-hidden="true">⚙</span> <span>Parameters</span>{dirty&&<><b aria-hidden="true">•</b><span className="sr-only">Unapplied parameter changes</span></>}
-      </button>
+      </button></div>
     </header>
-    <main>
+    <main aria-hidden={experimentOpen||undefined}>
       <section className="simulation-panel" aria-label="Simulation" aria-hidden={settingsOpen&&isNarrow||undefined}>
         <div className="arena-wrap">
-          <ArenaCanvas world={world} revision={revision}/>
+          <ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual}/>
           <div className="arena-badge">GENERATION {world.generation}<small>{world.food.length} / {Math.round(world.environment.foodBudget)} seasonal food</small></div>
           <div className="legend"><span>Creature speed</span><i/><small>slower</small><small>faster</small></div>
           {extinct&&<div className="extinct" role="status"><strong>Population extinct</strong><span>Increase food or energy, then restart the run.</span></div>}
         </div>
+        {selected&&<section className="inspector" aria-label={`Selected individual ${selected.individualId}`}>
+          <div className="inspector-head"><div><h2>Individual {selected.individualId}</h2><p>Lineage {selected.lineageId} · parent {selected.parentIndividualId??'founder'} · born generation {selected.birthGeneration}</p></div><button onClick={()=>selectIndividual(null)} aria-label="Close individual inspector">×</button></div>
+          <div className="inspector-grid"><dl><div><dt>Age</dt><dd>{selected.age} generations</dd></div><div><dt>Energy</dt><dd>{selected.energy.toFixed(1)}</dd></div><div><dt>Food</dt><dd>{selected.food} / 2</dd></div><div><dt>State</dt><dd>{selected.home?'Safe at home':selected.mode}</dd></div><div><dt>Target</dt><dd>{selected.targetType??'none'} {selected.targetId??''}</dd></div><div><dt>Memory</dt><dd>food {selected.memory.foodX===null?'none':'active'} · threat {selected.memory.threatX===null?'none':'active'}</dd></div></dl><dl>{(['speed','size','sense','aggression','caution','exploration']as BiologicalTrait[]).map(trait=><div key={trait}><dt>{trait}</dt><dd>{selected[trait].toFixed(3)}</dd></div>)}</dl></div>
+          {selected.decisionSummary&&<div className="utility-breakdown"><strong>Decision: {selected.decisionSummary.chosen}</strong><span>{selected.decisionSummary.reason}</span><table><thead><tr><th>Candidate</th><th>Score</th><th>Reason</th></tr></thead><tbody>{selected.decisionSummary.candidates.map((candidate,i)=><tr key={`${candidate.type}-${candidate.targetId}-${i}`}><td>{candidate.type}</td><td>{candidate.score.toFixed(2)}</td><td>{candidate.reason}</td></tr>)}</tbody></table></div>}
+        </section>}
         <div className="transport" role="group" aria-label="Playback controls">
           <button className="play" disabled={extinct} onClick={()=>setPlaying(v=>!v)} aria-label={extinct?'Playback unavailable: population extinct':playing?'Pause simulation':'Play simulation'}>{playing?'Ⅱ':'▶'}</button>
           <button onClick={step} disabled={extinct} aria-label="Pause and finish the current generation">Finish generation</button>
@@ -121,11 +137,11 @@ function App(){
           <div className="outcome-line" role="status">
             <strong>Previous generation</strong>
             {world.generation===1?<span>No outcome yet</span>:<>
-              <span><b>{world.lastReport.survived}</b> survived</span><span><b>{world.lastReport.born}</b> born</span><span><b>{world.lastReport.starved}</b> starved</span><span><b>{world.lastReport.hunted}</b> hunted</span>
+              <span><b>{world.lastReport.survived}</b> survived</span><span><b>{world.lastReport.born}</b> born</span><span><b>{world.lastReport.hunted}</b> hunted</span><span><b>{world.lastReport.energy}</b> energy</span><span><b>{world.lastReport.unfed}</b> unfed</span><span><b>{world.lastReport.late}</b> late</span>{world.lastReport.capped>0&&<span><b>{world.lastReport.capped}</b> births capped</span>}
             </>}
           </div>
           <div className="insights">
-            <div className="chart-card histogram-card"><div className="card-head"><div><h2>Current speed distribution</h2><p>Living creatures by travel rate</p></div><span>N = {living}</span></div><Histogram world={world}/></div>
+            <div className="chart-card histogram-card"><div className="card-head"><div><h2>Current trait distribution</h2><p>Mean {distribution.mean.toFixed(2)} · median {distribution.median.toFixed(2)} · IQR {distribution.iqr.toFixed(2)} · SD {distribution.sd.toFixed(2)}</p></div><label className="metric-select">Metric <select value={distributionTrait} onChange={e=>setDistributionTrait(e.target.value as BiologicalTrait)}>{(['speed','size','sense','aggression','caution','exploration']as BiologicalTrait[]).map(trait=><option key={trait}>{trait}</option>)}</select></label></div><Histogram world={world} trait={distributionTrait}/></div>
             <div className="chart-card history-card"><div className="card-head"><div><h2>Generational history</h2><p>Separate scales keep unlike measures honest</p></div>{world.history.length>1&&<span>Gen {historyStart}–{historyEnd}</span>}</div><HistoryChart world={world}/></div>
             <div className="chart-card behavior-history-card"><div className="card-head"><div><h2>Behavior history</h2><p>Inherited tendencies, each on a 0–1 scale</p></div>{world.history.length>1&&<span>Gen {historyStart}–{historyEnd}</span>}</div><BehaviorHistory world={world}/></div>
           </div>
@@ -151,6 +167,9 @@ function App(){
           <NumberControl label="Speed" value={draft.startSpeed} min={.3} max={2.5} step={.05} onChange={v=>update('startSpeed',v)}/>
           <NumberControl label="Size" value={draft.startSize} min={.4} max={2.2} step={.05} onChange={v=>update('startSize',v)}/>
           <NumberControl label="Sense radius" value={draft.startSense} min={.04} max={.5} step={.01} onChange={v=>update('startSense',v)}/>
+          <div className="diversity-presets" role="group" aria-label="Founder diversity presets"><button onClick={()=>setDraft(c=>({...c,founderPhysicalVariation:0,founderBehaviorVariation:0}))}>Clonal</button><button onClick={()=>setDraft(c=>({...c,founderPhysicalVariation:.04,founderBehaviorVariation:.06}))}>Low diversity</button><button onClick={()=>setDraft(c=>({...c,founderPhysicalVariation:.16,founderBehaviorVariation:.2}))}>High diversity</button></div>
+          <NumberControl label="Founder physical variation" value={draft.founderPhysicalVariation} min={0} max={.35} step={.01} onChange={v=>update('founderPhysicalVariation',v)}/>
+          <NumberControl label="Founder behavior variation" value={draft.founderBehaviorVariation} min={0} max={.35} step={.01} onChange={v=>update('founderBehaviorVariation',v)}/>
         </fieldset>
         <fieldset><legend>Inheritance</legend>
           <NumberControl label="Mutation chance" value={Math.round(draft.mutationRate*100)} min={0} max={100} step={1} unit="%" onChange={v=>update('mutationRate',v/100)}/>
@@ -186,6 +205,7 @@ function App(){
         <button className="apply" onClick={()=>{reset();closeSettings()}} disabled={!dirty}>{dirty?'Apply parameters & restart':'No staged changes'}</button>
       </aside>
     </main>
+    {experimentOpen&&<Suspense fallback={<div className="experiment-backdrop"><section className="experiment-panel" role="status">Opening Experiment Lab…</section></div>}><ExperimentPanel baseConfig={world.config} onClose={closeExperiment} onReplay={replayExperiment}/></Suspense>}
   </div>
 }
 

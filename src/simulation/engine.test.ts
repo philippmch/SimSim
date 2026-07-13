@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createWorld, defaultConfig, finishGeneration, getStats, runGeneration, SIMULATION_TIMESTEP, tick } from './engine'
+import { createWorld, defaultConfig, finishGeneration, getStats, runGeneration, setInspectedIndividual, SIMULATION_TIMESTEP, tick } from './engine'
 
 describe('selection simulation', () => {
   it('is deterministic for a seed and configuration', () => {
@@ -100,5 +100,22 @@ describe('selection simulation', () => {
     tick(w,SIMULATION_TIMESTEP)
     expect(hunter.x).toBeLessThan(.5)
     expect(prey.alive).toBe(true)
+  })
+
+  it('keeps decision telemetry only on the inspected individual', () => {
+    const w=createWorld({...defaultConfig,initialPopulation:3,foodPerDay:0})
+    const [active,home,dead]=w.creatures
+    home.home=true
+    dead.alive=false
+    for(const creature of w.creatures)creature.decisionSummary={chosen:'explore',reason:'stale',candidates:[]}
+    setInspectedIndividual(w,active.individualId)
+    expect(active.decisionSummary).toBeDefined()
+    expect(home.decisionSummary).toBeUndefined()
+    expect(dead.decisionSummary).toBeUndefined()
+    tick(w,SIMULATION_TIMESTEP)
+    expect(active.decisionSummary).toBeDefined()
+    expect(w.creatures.filter(creature=>creature.individualId!==active.individualId).every(creature=>creature.decisionSummary===undefined)).toBe(true)
+    setInspectedIndividual(w,null)
+    expect(w.creatures.every(creature=>creature.decisionSummary===undefined)).toBe(true)
   })
 })

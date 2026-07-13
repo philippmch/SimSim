@@ -1,4 +1,4 @@
-import {createWorld,runGeneration} from './engine'
+import {createWorld,runGeneration,setInspectedIndividual} from './engine'
 import {runScheduled,scheduledTicks} from './scheduler'
 import type {WorkerCommand,WorkerEvent} from './protocol'
 import type {Config,World} from './types'
@@ -9,7 +9,7 @@ export function fallbackController(initial:Config|World,onSnapshot:(world:World)
   let world='creatures'in initial?structuredClone(initial):createWorld(initial),playing=false,speed=1,last=performance.now(),remainder=0
   const timer=setInterval(()=>{if(!playing)return;const now=performance.now(),s=scheduledTicks(Math.min(.1,(now-last)/1000),speed,remainder);last=now;remainder=s.remainder;runScheduled(world,s.count);if(!world.creatures.length)playing=false;onSnapshot({...world})},50)
   onSnapshot(world)
-  return{mode:'fallback',send(command){if(command.type==='init'||command.type==='reset'){world=createWorld(command.config);playing=false;remainder=0;onSnapshot(world)}else if(command.type==='play'){playing=true;last=performance.now()}else if(command.type==='pause')playing=false;else if(command.type==='speed')speed=Math.max(.5,Math.min(4,command.speed));else if(command.type==='finish'){playing=false;runGeneration(world);onSnapshot({...world})}},dispose(){clearInterval(timer)}}
+  return{mode:'fallback',send(command){if(command.type==='init'||command.type==='reset'){world=createWorld(command.config);playing=false;remainder=0;onSnapshot(world)}else if(command.type==='play'){playing=true;last=performance.now()}else if(command.type==='pause')playing=false;else if(command.type==='speed')speed=Math.max(.5,Math.min(4,command.speed));else if(command.type==='inspect'){setInspectedIndividual(world,command.individualId);onSnapshot({...world})}else if(command.type==='finish'){playing=false;runGeneration(world);onSnapshot({...world})}},dispose(){clearInterval(timer)}}
 }
 
 export function createController(config:Config,onSnapshot:(world:World)=>void,onFallback:()=>void):SimulationController{
