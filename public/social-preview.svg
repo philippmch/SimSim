@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Evolution Field Lab</title>
+  <desc id="desc">An interactive natural-selection simulator with a living arena and scientific charts.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#102a22"/>
+      <stop offset="1" stop-color="#285244"/>
+    </linearGradient>
+    <linearGradient id="field" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#f5f0de"/>
+      <stop offset="1" stop-color="#dbe9d9"/>
+    </linearGradient>
+    <linearGradient id="speed" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#508a74"/>
+      <stop offset=".55" stop-color="#a9bd55"/>
+      <stop offset="1" stop-color="#f4c44d"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#06120e" flood-opacity=".28"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <circle cx="1084" cy="102" r="230" fill="#70a27b" opacity=".08"/>
+  <circle cx="130" cy="620" r="260" fill="#e6bb4b" opacity=".06"/>
+
+  <g transform="translate(70 60)">
+    <rect width="48" height="48" rx="15" fill="#f0c75c"/>
+    <path d="M12 26c7-15 15 14 24-4" fill="none" stroke="#17372c" stroke-width="5" stroke-linecap="round"/>
+    <text x="66" y="27" fill="#f9faf3" font-family="Inter,Segoe UI,sans-serif" font-size="25" font-weight="700" letter-spacing=".7">EVOLUTION FIELD LAB</text>
+  </g>
+
+  <text x="70" y="168" fill="#f9faf3" font-family="Georgia,serif" font-size="64" font-weight="700">Shape an ecosystem.</text>
+  <text x="70" y="230" fill="#d8e5db" font-family="Georgia,serif" font-size="58">Watch selection unfold.</text>
+  <text x="73" y="278" fill="#a9c2b5" font-family="Inter,Segoe UI,sans-serif" font-size="20">A deterministic, interactive natural-selection sandbox.</text>
+
+  <g transform="translate(70 315)" filter="url(#shadow)">
+    <rect width="710" height="250" rx="28" fill="#f8faf5"/>
+    <rect x="18" y="18" width="674" height="214" rx="20" fill="url(#field)"/>
+    <g fill="#86a979" opacity=".38">
+      <circle cx="138" cy="82" r="74"/><circle cx="554" cy="138" r="90"/><circle cx="362" cy="198" r="66"/>
+    </g>
+    <g fill="#4c7d65">
+      <circle cx="96" cy="70" r="7"/><circle cx="175" cy="164" r="7"/><circle cx="250" cy="96" r="7"/><circle cx="425" cy="72" r="7"/><circle cx="605" cy="177" r="7"/>
+    </g>
+    <g stroke="#17372c" stroke-width="3" stroke-linecap="round">
+      <g transform="translate(116 124)"><path d="M0 24C1 8 9 0 21 0s20 8 21 24c1 15-7 23-21 23S-1 39 0 24Z" fill="#69956d"/><circle cx="15" cy="19" r="1.5"/><circle cx="27" cy="19" r="1.5"/></g>
+      <g transform="translate(282 48) scale(1.25)"><path d="M0 24C1 8 9 0 21 0s20 8 21 24c1 15-7 23-21 23S-1 39 0 24Z" fill="#d2ba4d"/><circle cx="15" cy="19" r="1.5"/><circle cx="27" cy="19" r="1.5"/></g>
+      <g transform="translate(468 137) scale(.9)"><path d="M0 24C1 8 9 0 21 0s20 8 21 24c1 15-7 23-21 23S-1 39 0 24Z" fill="#4f806a"/><circle cx="15" cy="19" r="1.5"/><circle cx="27" cy="19" r="1.5"/></g>
+      <g transform="translate(586 72) scale(1.1)"><path d="M0 24C1 8 9 0 21 0s20 8 21 24c1 15-7 23-21 23S-1 39 0 24Z" fill="#b3bd50"/><circle cx="15" cy="19" r="1.5"/><circle cx="27" cy="19" r="1.5"/></g>
+      <g transform="translate(364 158) scale(.72)"><path d="M0 24C1 8 9 0 21 0s20 8 21 24c1 15-7 23-21 23S-1 39 0 24Z" fill="#e7bd4e"/><circle cx="15" cy="19" r="1.5"/><circle cx="27" cy="19" r="1.5"/></g>
+    </g>
+    <path d="M56 213h598" stroke="url(#speed)" stroke-width="6" stroke-linecap="round"/>
+  </g>
+
+  <g transform="translate(820 315)" filter="url(#shadow)">
+    <rect width="310" height="250" rx="28" fill="#f8faf5"/>
+    <text x="28" y="42" fill="#17372c" font-family="Inter,Segoe UI,sans-serif" font-size="16" font-weight="700" letter-spacing=".8">LIVE SELECTION</text>
+    <text x="28" y="78" fill="#17372c" font-family="Georgia,serif" font-size="31" font-weight="700">Traits evolve</text>
+    <g transform="translate(30 102)">
+      <path d="M0 92C34 76 53 87 80 62s48-15 75-38 48 0 79-21" fill="none" stroke="#d1aa44" stroke-width="5" stroke-linecap="round"/>
+      <path d="M0 78c34 5 49-7 80-5s48-13 76-7 46-17 78-13" fill="none" stroke="#4f806a" stroke-width="5" stroke-linecap="round"/>
+      <path d="M0 112h240" stroke="#ced8cf" stroke-width="2"/>
+      <g fill="#d1aa44"><circle cx="80" cy="62" r="5"/><circle cx="155" cy="24" r="5"/><circle cx="234" cy="3" r="5"/></g>
+    </g>
+    <text x="30" y="231" fill="#668075" font-family="Inter,Segoe UI,sans-serif" font-size="14">SPEED · SIZE · SENSE · BEHAVIOR</text>
+  </g>
+
+  <g transform="translate(835 74)">
+    <rect width="295" height="62" rx="31" fill="#ffffff" opacity=".1" stroke="#ffffff" stroke-opacity=".18"/>
+    <circle cx="32" cy="31" r="7" fill="#f0c75c"/>
+    <text x="54" y="38" fill="#e8efe9" font-family="Inter,Segoe UI,sans-serif" font-size="17" font-weight="600">Interactive · Reproducible</text>
+  </g>
+</svg>

@@ -3,17 +3,9 @@ import { clamp,distance,random } from './random'
 import { advanceFoodBudget,createEnvironment,spawnFood } from './environment'
 import { decide } from './behavior'
 import { proposeMotion } from './motion'
+import {defaultConfig,MAX_HISTORY_POINTS,MAX_POPULATION,sanitizeConfig} from './config'
 
-export const defaultConfig:Config={
-  seed:2187,initialPopulation:42,foodPerDay:42,startSpeed:1,startSize:1,startSense:.18,startingEnergy:110,
-  startAggression:.42,startCaution:.58,startExploration:.55,
-  mutationRate:.05,mutationStrength:.1,mutateSpeed:true,mutateSize:true,mutateSense:true,
-  mutateAggression:true,mutateCaution:true,mutateExploration:true,
-  predatorRatio:1.2,moveEnergyFactor:.7,senseEnergyFactor:.32,dayLength:18,
-  acceleration:.11,turnRate:4,memoryDuration:2.8,commitmentDuration:.8,
-  foodPatchCount:4,foodPatchiness:.72,foodPatchSpread:.12,obstacleCount:4,
-  seasonAmplitude:.22,seasonLength:8,environmentResponse:.45,foodTrend:0,
-}
+export {defaultConfig} from './config'
 export const SIMULATION_TIMESTEP=.025
 
 function edgePoint(world:World){const edge=Math.floor(random(world)*4),p=.04+random(world)*.92
@@ -31,6 +23,7 @@ function averages(creatures:Creature[],generation:number):HistoryPoint{const n=c
   return{generation,population:n,avgSpeed:sum('speed'),avgSize:sum('size'),avgSense:sum('sense'),avgAggression:sum('aggression'),avgCaution:sum('caution'),avgExploration:sum('exploration')}}
 
 export function createWorld(config:Config=defaultConfig):World{
+  config=sanitizeConfig(config)
   const world={config:{...config},generation:1,dayTime:0,tickIndex:0,creatures:[],food:[],history:[],environment:null as never,rngState:(config.seed||1)>>>0,nextId:1,dayHunted:0,lastReport:{survived:config.initialPopulation,born:0,starved:0,hunted:0}} as World
   world.environment=createEnvironment(world,config)
   world.creatures=Array.from({length:config.initialPopulation},()=>makeCreature(world))
@@ -82,10 +75,13 @@ function mutate(world:World,value:number,trait:Trait){const c=world.config
   const result=behavioral?value+variation:value*(1+variation)
   return clamp(result,trait==='sense'?.035:trait==='speed'||trait==='size'?.3:0,trait==='sense'?.6:trait==='speed'||trait==='size'?2.8:1)}
 
-export function finishGeneration(world:World){const before=world.creatures.length,survivors=world.creatures.filter(c=>c.alive&&c.home&&c.food>=1).sort((a,b)=>a.id-b.id),next:Creature[]=[];let born=0
-  for(const c of survivors){const genes={speed:c.speed,size:c.size,sense:c.sense,aggression:c.aggression,caution:c.caution,exploration:c.exploration,age:c.age+1};next.push(makeCreature(world,genes,c.parentId));if(c.food>=2){next.push(makeCreature(world,{...genes,age:0,speed:mutate(world,c.speed,'speed'),size:mutate(world,c.size,'size'),sense:mutate(world,c.sense,'sense'),aggression:mutate(world,c.aggression,'aggression'),caution:mutate(world,c.caution,'caution'),exploration:mutate(world,c.exploration,'exploration')},c.id));born++}}
+export function finishGeneration(world:World){const before=world.creatures.length,survivors=world.creatures.filter(c=>c.alive&&c.home&&c.food>=1).sort((a,b)=>a.id-b.id)
+  const next:Creature[]=survivors.map(c=>makeCreature(world,{speed:c.speed,size:c.size,sense:c.sense,aggression:c.aggression,caution:c.caution,exploration:c.exploration,age:c.age+1},c.parentId))
+  const available=Math.max(0,MAX_POPULATION-next.length),birthParents=survivors.filter(c=>c.food>=2).slice(0,available)
+  for(const c of birthParents){next.push(makeCreature(world,{speed:mutate(world,c.speed,'speed'),size:mutate(world,c.size,'size'),sense:mutate(world,c.sense,'sense'),aggression:mutate(world,c.aggression,'aggression'),caution:mutate(world,c.caution,'caution'),exploration:mutate(world,c.exploration,'exploration'),age:0},c.id))}
+  const born=birthParents.length
   world.lastReport={survived:survivors.length,born,starved:Math.max(0,before-survivors.length-world.dayHunted),hunted:world.dayHunted}
-  world.generation++;world.dayTime=0;world.tickIndex=0;world.creatures=next;world.food=spawnFood(world,advanceFoodBudget(world.environment,world.config,world.generation));world.history.push(averages(next,world.generation-1));world.dayHunted=0
+  world.generation++;world.dayTime=0;world.tickIndex=0;world.creatures=next;world.food=spawnFood(world,advanceFoodBudget(world.environment,world.config,world.generation));world.history.push(averages(world.creatures,world.generation-1));if(world.history.length>MAX_HISTORY_POINTS)world.history=world.history.slice(-MAX_HISTORY_POINTS);world.dayHunted=0
 }
 export function runGeneration(world:World){const target=world.generation;let guard=0;while(world.generation===target&&guard++<10000)tick(world,SIMULATION_TIMESTEP)}
 export function getStats(world:World){const p=averages(world.creatures.filter(c=>c.alive),world.generation);return{...p,avgSpeed:p.avgSpeed??0,avgSize:p.avgSize??0,avgSense:p.avgSense??0,avgAggression:p.avgAggression??0,avgCaution:p.avgCaution??0,avgExploration:p.avgExploration??0}}

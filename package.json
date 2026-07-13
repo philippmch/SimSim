@@ -2,22 +2,29 @@
   "name": "evolution-field-lab",
   "private": true,
   "version": "0.1.0",
+  "description": "A deterministic, client-only natural-selection sandbox.",
+  "license": "MIT",
+  "engines": { "node": ">=20.19.0" },
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "preview": "vite preview",
+    "bundle:size": "node scripts/check-bundle.mjs",
+    "check": "npm test && npm run build && npm run bundle:size",
+    "benchmark": "vitest run src/simulation/highLoad.test.ts"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "latest",
-    "react": "latest",
-    "react-dom": "latest"
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
   },
   "devDependencies": {
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "vitest": "latest"
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "typescript": "7.0.2",
+    "vite": "8.1.4",
+    "vitest": "4.1.10"
   }
 }

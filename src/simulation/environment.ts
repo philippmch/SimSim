@@ -1,5 +1,6 @@
 import type { Config,Environment,Food,World } from './types'
 import { clamp,distance,random } from './random'
+import {MAX_FOOD} from './config'
 
 const valid=(x:number,y:number,env:Environment,margin=.012)=>x>margin&&x<1-margin&&y>margin&&y<1-margin&&!env.obstacles.some(o=>distance({x,y},o)<o.radius+margin)
 
@@ -29,6 +30,7 @@ export function seasonalTarget(cfg:Config,generation:number){
 export function advanceFoodBudget(env:Environment,cfg:Config,generation:number){
   env.targetFood=seasonalTarget(cfg,generation)
   env.foodBudget+=cfg.environmentResponse*(env.targetFood-env.foodBudget)
+  env.foodBudget=clamp(env.foodBudget,0,MAX_FOOD)
   return Math.max(0,Math.round(env.foodBudget))
 }
 

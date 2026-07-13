@@ -11,6 +11,7 @@ function speedColor(speed: number) {
 
 export function ArenaCanvas({world,revision}:Props) {
   const ref=useRef<HTMLCanvasElement>(null)
+  const drawRef=useRef<()=>void>(()=>{})
   useEffect(()=>{
     const canvas=ref.current
     if(!canvas) return
@@ -19,7 +20,7 @@ export function ArenaCanvas({world,revision}:Props) {
       if(canvas.width!==Math.round(rect.width*dpr)||canvas.height!==Math.round(rect.height*dpr)){
         canvas.width=Math.round(rect.width*dpr);canvas.height=Math.round(rect.height*dpr)
       }
-      const ctx=canvas.getContext('2d')!;ctx.setTransform(dpr,0,0,dpr,0,0)
+      const ctx=canvas.getContext('2d');if(!ctx)return;ctx.setTransform(dpr,0,0,dpr,0,0)
       const w=rect.width,h=rect.height,pad=Math.max(20,Math.min(w,h)*.055)
       ctx.clearRect(0,0,w,h)
       const grad=ctx.createLinearGradient(0,0,w,h);grad.addColorStop(0,'#e8eee4');grad.addColorStop(1,'#dce7d8')
@@ -62,11 +63,9 @@ export function ArenaCanvas({world,revision}:Props) {
       ctx.fillStyle='rgba(16,34,28,.16)';ctx.fillRect(pad,pad-9,w-pad*2,3)
       ctx.fillStyle='#d9b940';ctx.fillRect(pad,pad-9,(w-pad*2)*pct,3)
     }
-    draw()
-    const observer = new ResizeObserver(draw)
-    observer.observe(canvas)
-    return () => observer.disconnect()
+    drawRef.current=draw;draw()
   },[world,revision])
+  useEffect(()=>{const canvas=ref.current;if(!canvas||typeof ResizeObserver==='undefined')return;const observer=new ResizeObserver(()=>drawRef.current());observer.observe(canvas);return()=>observer.disconnect()},[])
   return <canvas ref={ref} className="arena" role="img" aria-label={`Simulation arena, generation ${world.generation}, ${world.creatures.filter(c=>c.alive).length} living creatures, ${world.food.length} of ${Math.round(world.environment.foodBudget)} food remaining, ${world.environment.patches.length} food patches, and ${world.environment.obstacles.length} obstacles.`}>
     Natural selection simulation arena. Live counts are available in the statistics region.
   </canvas>

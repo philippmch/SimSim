@@ -1,0 +1,2 @@
+import{expect,it}from'vitest';import{createWorld,SIMULATION_TIMESTEP,tick}from'./engine';import{defaultConfig,MAX_POPULATION}from'./config'
+it('keeps supported high-load ticks below a catastrophic-regression threshold',()=>{const w=createWorld({...defaultConfig,initialPopulation:MAX_POPULATION,foodPerDay:120,obstacleCount:12,foodPatchCount:12});const start=performance.now();for(let i=0;i<20;i++)tick(w,SIMULATION_TIMESTEP);const elapsed=performance.now()-start;expect(elapsed).toBeLessThan(5000)},10000)

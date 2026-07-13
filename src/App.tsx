@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArenaCanvas } from './components/ArenaCanvas'
 import { BehaviorHistory, Histogram, HistoryChart } from './components/Charts'
-import { createWorld, defaultConfig, getModeCounts, getStats, runGeneration, SIMULATION_TIMESTEP, tick } from './simulation/engine'
+import { createWorld, getModeCounts, getStats } from './simulation/engine'
+import { defaultConfig, sanitizeConfig } from './simulation/config'
+import { createController } from './simulation/controller'
+import type { SimulationController } from './simulation/controller'
+import { experimentUrl,exportExperiment,importExperiment,loadInitialConfig,MAX_EXPERIMENT_TEXT,persistExperiment } from './simulation/share'
 import type { Config, World } from './simulation/types'
 
 const copyConfig=(c:Config):Config=>({...c})
@@ -10,14 +14,15 @@ function NumberControl({label,value,min,max,step,onChange,unit}:{label:string,va
   const id=label.toLowerCase().replace(/\W/g,'-')
   return <div className="control">
     <label htmlFor={id}>{label}<output>{value}{unit}</output></label>
-    <input id={id} type="range" min={min} max={max} step={step} value={value} onChange={e=>onChange(Number(e.target.value))}/>
+    <input id={id} type="range" min={min} max={max} step={step} value={value} aria-valuetext={`${value}${unit??''}`} onChange={e=>onChange(Number(e.target.value))}/>
   </div>
 }
 
 function App(){
-  const [draft,setDraft]=useState<Config>(()=>copyConfig(defaultConfig))
-  const [world,setWorld]=useState<World>(()=>createWorld(defaultConfig))
-  const worldRef=useRef(world); worldRef.current=world
+  const initialRef=useRef<Config>(loadInitialConfig(window.location.search,(()=>{try{return window.localStorage}catch{return null}})()))
+  const [draft,setDraft]=useState<Config>(()=>copyConfig(initialRef.current))
+  const [world,setWorld]=useState<World>(()=>createWorld(initialRef.current))
+  const controllerRef=useRef<SimulationController|null>(null)
   const [playing,setPlaying]=useState(()=>!window.matchMedia('(prefers-reduced-motion: reduce)').matches)
   const [speed,setSpeed]=useState(1),[revision,setRevision]=useState(0)
   const [settingsOpen,setSettingsOpen]=useState(false)
@@ -25,15 +30,23 @@ function App(){
   const settingsToggleRef=useRef<HTMLButtonElement>(null)
   const settingsRef=useRef<HTMLElement>(null)
   const settingsCloseRef=useRef<HTMLButtonElement>(null)
+  const importRef=useRef<HTMLInputElement>(null)
+  const [actionStatus,setActionStatus]=useState('')
+  const [runtimeMode,setRuntimeMode]=useState<'worker'|'fallback'>('worker')
   const dirty=JSON.stringify(draft)!==JSON.stringify(world.config)
   const living=world.creatures.filter(c=>c.alive).length
   const extinct=world.creatures.length===0
+  const playingRef=useRef(playing);playingRef.current=playing
+  const extinctRef=useRef(extinct);extinctRef.current=extinct
+  const resumeOnVisibleRef=useRef(false)
   const stats=getStats(world)
   const modes=getModeCounts(world)
   const update=<K extends keyof Config>(key:K,value:Config[K])=>setDraft(c=>({...c,[key]:value}))
   const closeSettings=useCallback(()=>setSettingsOpen(false),[])
-  const reset=useCallback(()=>{const w=createWorld(draft);worldRef.current=w;setWorld(w);setRevision(n=>n+1)},[draft])
-  const step=()=>{setPlaying(false);runGeneration(worldRef.current);setWorld({...worldRef.current});setRevision(n=>n+1)}
+  const reset=useCallback(()=>{const clean=sanitizeConfig(draft);setDraft(clean);persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}controllerRef.current?.send({type:'reset',config:clean});setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
+  const step=()=>{setPlaying(false);controllerRef.current?.send({type:'finish'})}
+
+  useEffect(()=>{const controller=createController(initialRef.current,w=>{setWorld(w);setRevision(n=>n+1)},()=>setRuntimeMode('fallback'));controllerRef.current=controller;setRuntimeMode(controller.mode);return()=>{controller.dispose();controllerRef.current=null}},[])
 
   useEffect(()=>{
     const query=window.matchMedia('(max-width: 1050px)')
@@ -60,16 +73,9 @@ function App(){
     return()=>{document.removeEventListener('keydown',onKeyDown);document.body.style.overflow=previousOverflow;settingsToggleRef.current?.focus()}
   },[settingsOpen,isNarrow,closeSettings])
 
-  useEffect(()=>{
-    if(!playing)return
-    let id=0,last=performance.now(),acc=0
-    const frame=(now:number)=>{
-      const elapsed=Math.min(.1,(now-last)/1000);last=now;acc+=elapsed*speed
-      while(acc>=SIMULATION_TIMESTEP){tick(worldRef.current,SIMULATION_TIMESTEP);acc-=SIMULATION_TIMESTEP}
-      setRevision(n=>n+1);id=requestAnimationFrame(frame)
-    }
-    id=requestAnimationFrame(frame);return()=>cancelAnimationFrame(id)
-  },[playing,speed])
+  useEffect(()=>{controllerRef.current?.send({type:playing?'play':'pause'})},[playing])
+  useEffect(()=>{controllerRef.current?.send({type:'speed',speed})},[speed])
+  useEffect(()=>{const visibility=()=>{if(document.hidden){resumeOnVisibleRef.current=playingRef.current;if(resumeOnVisibleRef.current)controllerRef.current?.send({type:'pause'})}else{const shouldResume=resumeOnVisibleRef.current&&playingRef.current&&!extinctRef.current;resumeOnVisibleRef.current=false;if(shouldResume)controllerRef.current?.send({type:'play'})}};document.addEventListener('visibilitychange',visibility);return()=>document.removeEventListener('visibilitychange',visibility)},[])
 
   useEffect(()=>{if(extinct)setPlaying(false)},[extinct])
 
@@ -90,7 +96,7 @@ function App(){
           <div className="legend"><span>Creature speed</span><i/><small>slower</small><small>faster</small></div>
           {extinct&&<div className="extinct" role="status"><strong>Population extinct</strong><span>Increase food or energy, then restart the run.</span></div>}
         </div>
-        <div className="transport" aria-label="Playback controls">
+        <div className="transport" role="group" aria-label="Playback controls">
           <button className="play" disabled={extinct} onClick={()=>setPlaying(v=>!v)} aria-label={extinct?'Playback unavailable: population extinct':playing?'Pause simulation':'Play simulation'}>{playing?'Ⅱ':'▶'}</button>
           <button onClick={step} disabled={extinct} aria-label="Pause and finish the current generation">Finish generation</button>
           <div className="day-progress" role="progressbar" aria-label="Current generation progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(world.dayTime/world.config.dayLength*100)}><i style={{width:`${world.dayTime/world.config.dayLength*100}%`}}/></div>
@@ -128,7 +134,14 @@ function App(){
       {settingsOpen&&isNarrow&&<div className="settings-backdrop" aria-hidden="true" onMouseDown={closeSettings}/>}
       <aside ref={settingsRef} id="settings" className={`settings ${settingsOpen?'open':''}`} role={isNarrow?'dialog':'region'} aria-modal={isNarrow&&settingsOpen||undefined} aria-labelledby="settings-title">
         <div className="settings-head"><div><h2 id="settings-title">Experiment parameters</h2><p>Edits are staged until restart</p></div><button ref={settingsCloseRef} onClick={closeSettings} aria-label="Close parameters">×</button></div>
-        <div className="seed-row"><label htmlFor="seed">Random seed</label><input id="seed" type="number" value={draft.seed} min="1" max="9999999" onChange={e=>update('seed',Math.max(1,Number(e.target.value)))}/><button aria-label="Choose a new random seed" onClick={()=>update('seed',Math.floor(Math.random()*9999998)+1)}>↻</button></div>
+        <div className="seed-row"><label htmlFor="seed">Random seed</label><input id="seed" type="number" value={draft.seed} min="1" max="9999999" onChange={e=>{const value=e.currentTarget.valueAsNumber;update('seed',Number.isFinite(value)?Math.max(1,Math.min(9999999,Math.round(value))):defaultConfig.seed)}}/><button aria-label="Choose a new random seed" onClick={()=>update('seed',Math.floor(Math.random()*9999998)+1)}>↻</button></div>
+        <div className="share-tools" role="group" aria-label="Experiment sharing and files">
+          <button onClick={async()=>{try{await navigator.clipboard.writeText(experimentUrl(world.config,location.href));setActionStatus('Experiment link copied.')}catch{setActionStatus('Could not access the clipboard.')}}}>Copy experiment link</button>
+          <button onClick={()=>{try{const blob=new Blob([exportExperiment(world.config)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`evolution-field-lab-seed-${world.config.seed}.json`;a.click();URL.revokeObjectURL(url);setActionStatus('Experiment exported.')}catch{setActionStatus('Could not export this experiment.')}}}>Export experiment</button>
+          <button onClick={()=>importRef.current?.click()}>Import experiment</button>
+          <input ref={importRef} className="sr-only" type="file" accept="application/json,.json" onChange={async e=>{try{const file=e.target.files?.[0];if(!file)return;if(file.size>MAX_EXPERIMENT_TEXT)throw new Error('too large');const imported=importExperiment(await file.text());if(!imported)throw new Error();setDraft(imported);setActionStatus('Experiment imported. Apply and restart to use it.')}catch{setActionStatus('Import failed: choose a valid experiment JSON file under 64 KB.')}finally{e.target.value=''}}}/>
+        </div>
+        <p className="action-status" role="status">{actionStatus}{runtimeMode==='fallback'?' Running in compatibility mode.':''}</p>
         <fieldset><legend>World</legend>
           <NumberControl label="Initial population" value={draft.initialPopulation} min={5} max={120} step={1} onChange={v=>update('initialPopulation',v)}/>
           <NumberControl label="Food per generation" value={draft.foodPerDay} min={2} max={120} step={1} onChange={v=>update('foodPerDay',v)}/>

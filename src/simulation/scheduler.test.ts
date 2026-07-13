@@ -1,0 +1,2 @@
+import{describe,expect,it}from'vitest';import{MAX_TICKS_PER_PULSE,scheduledTicks}from'./scheduler';import{SIMULATION_TIMESTEP}from'./engine'
+describe('bounded scheduler',()=>{it('preserves fixed-step remainder and caps a stalled pulse',()=>{const normal=scheduledTicks(.05,1);expect(normal.count).toBe(2);expect(normal.remainder).toBeCloseTo(0);const stalled=scheduledTicks(10,4);expect(stalled.count).toBe(MAX_TICKS_PER_PULSE);expect(stalled.remainder).toBeGreaterThan(SIMULATION_TIMESTEP)})})
