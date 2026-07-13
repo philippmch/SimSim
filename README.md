@@ -4,37 +4,44 @@ An interactive, deterministic natural-selection sandbox. Creatures forage,
 remember resources and danger, hunt, flee, return home, reproduce, and mutate
 while live charts show selection taking shape across generations.
 
-## Behavior V2 model
+## Ecological behavior model
 
-Each fixed simulation step is resolved in phases. Creatures first observe the
-same immutable world state and choose a utility-scored action. Their accelerated,
-momentum-based movement is then resolved against bounds and circular obstacles.
-Finally, food and predation contacts are settled simultaneously with stable-ID
-tie-breaking, so changing array order cannot change the ecology.
+Each fixed simulation step is resolved in phases: perceive, decide, move and
+metabolize, settle food contacts, settle attacks, then regrow resources.
+Creatures have directional vision, reaction intervals, distance-dependent
+detection, and obstacle occlusion. The selected creature shows its field of
+view, current target, remembered locations, and compact perception counts.
 
 In addition to speed, size, and sensing, creatures inherit aggression, caution,
 and exploration. Decisions use short-term food and threat memories, target
-commitment, travel safety, energy, and correlated wandering. Urgent threats and
-the need to get food home can override a committed target.
+commitment, travel safety, energy, expected hunting payoff, and correlated
+wandering. Attacks are contests shaped by relative size, speed, energy,
+aggression, and caution; attempts cost energy and impose a handling cooldown.
 
 Founders begin with conservative standing variation by default (4% physical and
 6% behavioral variation). This makes selection visible before the first birth
 without overwhelming the configured starting means. Clonal, low-diversity, and
 high-diversity controls are available; zero variation produces exactly equal
 founders. Version-2 experiments migrate to zero founder variation so their prior
-deterministic starting populations remain reproducible.
+deterministic starting populations remain reproducible. Version-3 setups migrate
+to classic lifecycle, perfect-perception, and threshold-predation modes. Fresh
+version-4 setups use ecological modes, while all mechanisms remain switchable.
 
 Biological individual and lineage identifiers are separate from transient render
 objects. A surviving adult keeps its individual identifier across generations;
 offspring receive a new identifier linked to their parent and lineage. The
 generation ledger reconciles each starting individual as survived, hunted,
-energy-depleted, unfed, or late, and records resources, birth capacity, and
-selection means and variances. Clicking a creature opens bounded current-state
-telemetry and its current utility candidates; long per-tick traces are not kept.
+energy-depleted, unfed, late, or aged. Ecological survivors retain configurable
+energy, reproduction deducts a cost, offspring receive a configured reserve, and
+capacity-limited births use a seeded fair ranking. The ledger records production,
+consumption, attack outcomes, birth capacity, and selection moments. Clicking a
+creature opens bounded telemetry; long per-tick traces are not kept.
 
-The seeded environment persists across generations. Food grows around visible
-patches, obstacles remain fixed, and a configurable seasonal cycle, long-term
-trend, and response rate gradually change each generation's food budget.
+The seeded environment persists across generations. Food patches have visible
+stock, bounded capacity, and deterministic within-generation regrowth. Remaining
+food carries across generation boundaries in ecological mode. Obstacles persist,
+and seasons, trend, and response rate change the resource target. Classic mode
+retains the original generation-pulse food rules.
 
 ## Experiment lab
 
@@ -78,11 +85,11 @@ arena omits genetics, disease, social behavior, and real ecosystem complexity.
 Do not use its outcomes to infer the behavior of real species or populations.
 
 Locomotion pressure is proportional to `size³ × actual velocity²`; sensing adds
-a separate linear energy cost. A creature returning with one resource survives,
-while two resources also produce one offspring. Utility scores combine distance,
-need, risk, memory, and estimated time and energy to reach home. These equations
-are deliberately calibrated for legible interactive dynamics rather than fitted
-to empirical data.
+a separate linear energy cost. In ecological mode, positive-energy creatures
+must return home before the generation ends, retain part of their reserve, and
+reproduce only when they can pay the configured cost. In classic mode, one food
+brought home survives and two also produce one offspring. These equations are
+calibrated for legible dynamics rather than fitted to empirical data.
 
 ## Reproducibility and privacy
 
@@ -107,10 +114,9 @@ charts show the latest 40. The high-load test uses a generous five-second
 threshold intended only to catch catastrophic regressions; timings vary by
 machine and CI load.
 
-## Release and deployment
+## Local-only status
 
-Use Node 20.19 or newer and install exact dependencies with `npm ci`. Before a
-release run `npm audit --audit-level=high` and `npm run check`. The production
-artifact is `dist/`; validate it with `npm run preview`. Replace the placeholder
-canonical/social metadata in `index.html` with the final public URL and preview
-image during deployment. No runtime environment variables are required.
+The project is currently intended to run locally. Nothing in the app publishes,
+uploads, or hosts a simulation. Use Node 20.19 or newer and `npm ci` when an exact
+dependency install is needed; `npm run preview` only serves the production build
+on the local machine for verification.

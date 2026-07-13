@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createWorld, defaultConfig, finishGeneration, getStats, runGeneration, setInspectedIndividual, SIMULATION_TIMESTEP, tick } from './engine'
+import {CLASSIC_MODES} from './config'
 
 describe('selection simulation', () => {
   it('is deterministic for a seed and configuration', () => {
@@ -10,7 +11,7 @@ describe('selection simulation', () => {
   })
 
   it('only fed creatures at home survive and two foods yield one child', () => {
-    const w=createWorld({...defaultConfig,initialPopulation:3,foodPerDay:0,mutationRate:0})
+    const w=createWorld({...defaultConfig,...CLASSIC_MODES,initialPopulation:3,foodPerDay:0,mutationRate:0})
     w.creatures[0].food=2; w.creatures[0].home=true
     w.creatures[1].food=1; w.creatures[1].home=true
     w.creatures[2].food=2; w.creatures[2].home=false
@@ -20,7 +21,7 @@ describe('selection simulation', () => {
   })
 
   it('keeps traits unchanged when mutations are disabled', () => {
-    const w=createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0,mutateSpeed:false,mutateSize:false,mutateSense:false,mutationRate:1})
+    const w=createWorld({...defaultConfig,...CLASSIC_MODES,initialPopulation:1,foodPerDay:0,mutateSpeed:false,mutateSize:false,mutateSense:false,mutationRate:1})
     const original=w.creatures[0]
     original.food=2; original.home=true
     finishGeneration(w)
@@ -28,7 +29,7 @@ describe('selection simulation', () => {
   })
 
   it('does not give a predation turn to a creature killed earlier in the tick', () => {
-    const w=createWorld({...defaultConfig,initialPopulation:3,foodPerDay:0,predatorRatio:1.2})
+    const w=createWorld({...defaultConfig,...CLASSIC_MODES,initialPopulation:3,foodPerDay:0,predatorRatio:1.2})
     const [largest,middle,smallest]=w.creatures
     for(const c of w.creatures){c.x=.5;c.y=.5;c.sense=.5;c.angle=0}
     largest.size=2; middle.size=1.5; smallest.size=1
@@ -38,7 +39,7 @@ describe('selection simulation', () => {
   })
 
   it('retires fed creatures safely at home for the rest of the day', () => {
-    const w=createWorld({...defaultConfig,initialPopulation:2,foodPerDay:0,predatorRatio:1.2})
+    const w=createWorld({...defaultConfig,...CLASSIC_MODES,initialPopulation:2,foodPerDay:0,predatorRatio:1.2})
     const [safe,predator]=w.creatures
     safe.food=1;safe.returning=true;safe.energy=47;safe.x=safe.homeX;safe.y=safe.homeY
     predator.x=.5;predator.y=.5
@@ -74,9 +75,9 @@ describe('selection simulation', () => {
   })
 
   it('returns with one food when home travel exceeds the time or energy budget', () => {
-    const early=createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0})
-    const late=createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0})
-    const lowEnergy=createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0})
+    const early=createWorld({...defaultConfig,...CLASSIC_MODES,initialPopulation:1,foodPerDay:0})
+    const late=createWorld({...defaultConfig,...CLASSIC_MODES,initialPopulation:1,foodPerDay:0})
+    const lowEnergy=createWorld({...defaultConfig,...CLASSIC_MODES,initialPopulation:1,foodPerDay:0})
     for(const w of [early,late,lowEnergy]){
       const c=w.creatures[0]
       c.x=.5;c.y=.5;c.food=1;c.energy=defaultConfig.startingEnergy
@@ -92,11 +93,11 @@ describe('selection simulation', () => {
   })
 
   it('pursues the nearer food when sensed prey is farther away', () => {
-    const w=createWorld({...defaultConfig,initialPopulation:2,foodPerDay:0,predatorRatio:1.2})
+    const w=createWorld({...defaultConfig,...CLASSIC_MODES,initialPopulation:2,foodPerDay:0,predatorRatio:1.2})
     const [hunter,prey]=w.creatures
     hunter.x=.5;hunter.y=.5;hunter.angle=Math.PI/2;hunter.size=2;hunter.sense=.3
     prey.x=.6;prey.y=.5;prey.size=1
-    w.food=[{id:999,x:.45,y:.5}]
+    w.food=[{id:999,x:.45,y:.5,patchId:null,energy:22}]
     tick(w,SIMULATION_TIMESTEP)
     expect(hunter.x).toBeLessThan(.5)
     expect(prey.alive).toBe(true)

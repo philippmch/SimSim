@@ -19,6 +19,10 @@ export const INTERVENTION_CONSTRAINTS: readonly InterventionConstraint[] = [
   { key: 'moveEnergyFactor', label: 'Movement energy cost', min: .01, max: 3, step: .05 },
   { key: 'senseEnergyFactor', label: 'Sensing energy cost', min: 0, max: 2, step: .05 },
   { key: 'predatorRatio', label: 'Predator size ratio', min: 1.01, max: 3, step: .01 },
+  { key: 'foodRegrowthRate', label: 'Food regrowth rate', min: 0, max: 1, step: .01 },
+  { key: 'attackCost', label: 'Attack energy cost', min: 0, max: 100, step: 1 },
+  { key: 'reactionTime', label: 'Reaction time', min: 0, max: 5, step: .05 },
+  { key: 'reproductionEnergyCost', label: 'Reproduction energy cost', min: 0, max: 300, step: 5 },
 ]
 
 export const EXPERIMENT_METRIC_OPTIONS: readonly { key: ExperimentMetric; label: string }[] = [
@@ -28,6 +32,12 @@ export const EXPERIMENT_METRIC_OPTIONS: readonly { key: ExperimentMetric; label:
   { key: 'hunted', label: 'Hunted' },
   { key: 'energyDeaths', label: 'Energy deaths' },
   { key: 'foodConsumed', label: 'Food consumed' },
+  { key: 'foodProduced', label: 'Food produced' },
+  { key: 'resourceAbundance', label: 'Resource abundance' },
+  { key: 'attackSuccessRate', label: 'Attack success rate' },
+  { key: 'aged', label: 'Age deaths' },
+  { key: 'avgEnergy', label: 'Average energy' },
+  { key: 'avgAge', label: 'Average age' },
   { key: 'avgSpeed', label: 'Average speed' },
   { key: 'avgSize', label: 'Average size' },
   { key: 'avgSense', label: 'Average sense' },
@@ -66,6 +76,15 @@ export function constraintFor(key: InterventionConfigKey): InterventionConstrain
   return INTERVENTION_CONSTRAINTS.find(item => item.key === key)!
 }
 
+export function inactiveInterventionReason(config:Config,key:InterventionConfigKey):string|null{
+  if((key==='foodRegrowthRate'||key==='reproductionEnergyCost')&&config.ecologyMode!=='energy-regrowth')return`${constraintFor(key).label} is inactive in classic lifecycle mode. Choose Energy + patch regrowth or another pressure.`
+  if(key==='attackCost'&&config.predationMode!=='contest')return`${constraintFor(key).label} is inactive with size-threshold predation. Choose Contested attacks or another pressure.`
+  if(key==='reactionTime'&&config.perceptionMode!=='realistic')return`${constraintFor(key).label} is inactive with perfect perception. Choose realistic perception or another pressure.`
+  return null
+}
+
+export function availableInterventionConstraints(config:Config):readonly InterventionConstraint[]{return INTERVENTION_CONSTRAINTS.filter(item=>inactiveInterventionReason(config,item.key)===null)}
+
 export function normalizeInterventionValue(key: InterventionConfigKey, value: number): number {
   const constraint = constraintFor(key)
   const finite = Number.isFinite(value) ? value : constraint.min
@@ -83,7 +102,7 @@ export function defaultExperimentDraft(baseConfig: Config): ExperimentDraft {
     stopOnExtinction: true,
     interventionGeneration: 5,
     interventionKey: 'foodPerDay',
-    interventionValue: normalizeInterventionValue('foodPerDay', Math.round(baseConfig.foodPerDay * .4)),
+    interventionValue: normalizeInterventionValue('foodPerDay', baseConfig.ecologyMode === 'energy-regrowth' ? 0 : Math.round(baseConfig.foodPerDay * .4)),
   }
 }
 
@@ -105,7 +124,9 @@ export function applyExperimentPreset(preset: ExperimentPreset, draft: Experimen
     ...draft,
     interventionGeneration,
     interventionKey: 'foodPerDay',
-    interventionValue: normalizeInterventionValue('foodPerDay', Math.round(baseConfig.foodPerDay * .35)),
+    // Ecological mode approaches this resource target according to the configured
+    // environment response; classic mode uses it for the next food pulse.
+    interventionValue: normalizeInterventionValue('foodPerDay', baseConfig.ecologyMode === 'energy-regrowth' ? 0 : Math.round(baseConfig.foodPerDay * .35)),
   }
 }
 
@@ -135,6 +156,8 @@ export function buildExperimentPlan(baseConfig: Config, draft: ExperimentDraft):
 }
 
 export function treatmentNoOpReason(baseConfig: Config, draft: ExperimentDraft): string | null {
+  const inactive=inactiveInterventionReason(baseConfig,draft.interventionKey)
+  if(inactive)return inactive
   const constraint = constraintFor(draft.interventionKey)
   const controlValue = normalizeInterventionValue(draft.interventionKey, baseConfig[draft.interventionKey])
   const treatmentValue = normalizeInterventionValue(draft.interventionKey, draft.interventionValue)
@@ -149,4 +172,10 @@ export function workerEventIsCurrent(requestId: string, activeRequestId: string 
 
 export function experimentProgressIsCurrent(requestId: string, activeRequestId: string | null, cancelling: boolean): boolean {
   return !cancelling && workerEventIsCurrent(requestId, activeRequestId)
+}
+
+export function formatExperimentMetricValue(value: number | null, metric?: ExperimentMetric): string {
+  if (value === null) return '—'
+  if (metric === 'survivalRate' || metric === 'attackSuccessRate') return `${(value * 100).toFixed(1)}%`
+  return Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(2)
 }

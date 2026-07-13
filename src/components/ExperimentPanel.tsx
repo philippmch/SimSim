@@ -4,11 +4,15 @@ import type { Config } from '../simulation/types'
 import {
   EXPERIMENT_METRIC_OPTIONS,
   EXPERIMENT_PRESETS,
+  availableInterventionConstraints,
   applyExperimentPreset,
   buildExperimentPlan,
+  constraintFor,
   defaultExperimentDraft,
   experimentProgressIsCurrent,
   maximumExperimentGenerations,
+  normalizeInterventionValue,
+  formatExperimentMetricValue,
   treatmentNoOpReason,
   workerEventIsCurrent,
   type ExperimentDraft,
@@ -16,7 +20,7 @@ import {
 } from '../experiments/panel'
 import { ExperimentCancelledError, runExperiment } from '../experiments/runner'
 import { fromExperimentJson, toExperimentJson, toTidyCsv } from '../experiments/serialize'
-import type { ExperimentPlan, ExperimentProgress, ExperimentResult } from '../experiments/types'
+import type { ExperimentPlan, ExperimentProgress, ExperimentResult, InterventionConfigKey } from '../experiments/types'
 import type { ExperimentWorkerEvent, ExperimentWorkerRequest } from '../experiments/protocol'
 
 interface ExperimentPanelProps {
@@ -28,7 +32,7 @@ interface ExperimentPanelProps {
 type RunStatus = 'idle' | 'running' | 'cancelling' | 'complete' | 'cancelled' | 'error'
 
 const metricLabel = (key: string) => EXPERIMENT_METRIC_OPTIONS.find(item => item.key === key)?.label ?? key
-const format = (value: number | null, metric?: string) => value === null ? '—' : metric === 'survivalRate' ? `${(value * 100).toFixed(1)}%` : Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(2)
+const format = formatExperimentMetricValue
 
 function download(name: string, type: string, contents: string): void {
   const url = URL.createObjectURL(new Blob([contents], { type }))
@@ -122,7 +126,7 @@ function Results({ result, onReplay }: { result: ExperimentResult; onReplay: (co
 
 export function ExperimentPanel({ baseConfig, onClose, onReplay }: ExperimentPanelProps) {
   const [draft, setDraft] = useState<ExperimentDraft>(() => defaultExperimentDraft(baseConfig))
-  const [preset, setPreset] = useState<ExperimentPreset>('drought')
+  const [preset, setPreset] = useState<ExperimentPreset | 'custom'>('drought')
   const [status, setStatus] = useState<RunStatus>('idle')
   const [runtime, setRuntime] = useState<'worker' | 'main'>(() => typeof Worker === 'undefined' ? 'main' : 'worker')
   const [progress, setProgress] = useState<ExperimentProgress | null>(null)
@@ -234,7 +238,10 @@ export function ExperimentPanel({ baseConfig, onClose, onReplay }: ExperimentPan
     else abortRef.current?.abort()
   }
 
-  const choosePreset = (next: ExperimentPreset) => { setPreset(next); setDraft(current => applyExperimentPreset(next, current, baseConfig)) }
+  const choosePreset = (next: ExperimentPreset | 'custom') => { setPreset(next); if (next !== 'custom') setDraft(current => applyExperimentPreset(next, current, baseConfig)) }
+  const choosePressure = (key: InterventionConfigKey) => { setPreset('custom'); setDraft(current => ({ ...current, interventionKey: key, interventionValue: normalizeInterventionValue(key, baseConfig[key]) })) }
+  const treatmentConstraint = constraintFor(draft.interventionKey)
+  const availablePressures = availableInterventionConstraints(baseConfig)
   const progressPercent = progress ? Math.min(100, Math.round(progress.completedGenerationRuns / progress.plannedGenerationRuns * 100)) : 0
 
   return <div className="experiment-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
@@ -252,7 +259,9 @@ export function ExperimentPanel({ baseConfig, onClose, onReplay }: ExperimentPan
             <label className="experiment-check"><input type="checkbox" checked={draft.stopOnExtinction} onChange={event => setDraft(current => ({ ...current, stopOnExtinction: event.target.checked }))}/>Stop each arm after extinction</label>
           </fieldset>
           <fieldset disabled={status === 'running' || status === 'cancelling'}><legend>Treatment</legend>
-            <label>Treatment preset<select value={preset} onChange={event => choosePreset(event.target.value as ExperimentPreset)}>{EXPERIMENT_PRESETS.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}</select></label>
+            <label>Treatment preset<select value={preset} onChange={event => choosePreset(event.target.value as ExperimentPreset | 'custom')}>{EXPERIMENT_PRESETS.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}<option value="custom">Custom pressure</option></select></label>
+            <label>Pressure<select value={draft.interventionKey} onChange={event => choosePressure(event.target.value as InterventionConfigKey)}>{availablePressures.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}</select></label>
+            <label>Treatment value<input type="number" min={treatmentConstraint.min} max={treatmentConstraint.max} step={treatmentConstraint.step} value={draft.interventionValue} onChange={event => { setPreset('custom'); setDraft(current => ({ ...current, interventionValue: normalizeInterventionValue(current.interventionKey, event.currentTarget.valueAsNumber) })) }}/></label>
             <label>Starts at generation<input type="number" min={1} max={draft.generations} value={draft.interventionGeneration} onChange={event => setDraft(current => ({ ...current, interventionGeneration: Math.max(1, Math.min(current.generations, event.currentTarget.valueAsNumber || 1)) }))}/></label>
             <div className="scenario-summary"><div><strong>Control</strong><span>Applied live configuration</span></div><div><strong>Treatment</strong><span>{interventionKey} → {interventionValue} at generation {intervention.generation}</span></div></div>
             {noOpReason&&<p className="experiment-treatment-warning" id="experiment-treatment-warning" role="status">{noOpReason}</p>}

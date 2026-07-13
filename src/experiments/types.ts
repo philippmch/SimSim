@@ -10,6 +10,10 @@ export const INTERVENTION_CONFIG_KEYS = [
   'moveEnergyFactor',
   'senseEnergyFactor',
   'predatorRatio',
+  'foodRegrowthRate',
+  'attackCost',
+  'reactionTime',
+  'reproductionEnergyCost',
 ] as const satisfies readonly (keyof Config)[]
 
 export type InterventionConfigKey = (typeof INTERVENTION_CONFIG_KEYS)[number]
@@ -39,15 +43,21 @@ export const EXPERIMENT_METRICS = [
   'avgAggression',
   'avgCaution',
   'avgExploration',
+  'avgEnergy',
+  'avgAge',
   'survivalRate',
   'births',
   'hunted',
   'energyDeaths',
   'unfed',
   'late',
+  'aged',
   'foodAtStart',
+  'foodProduced',
   'foodConsumed',
+  'resourceAbundance',
   'preyConsumed',
+  'attackSuccessRate',
 ] as const
 
 export type ExperimentMetric = (typeof EXPERIMENT_METRICS)[number]

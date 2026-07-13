@@ -20,6 +20,11 @@ function NumberControl({label,value,min,max,step,onChange,unit}:{label:string,va
   </div>
 }
 
+function SelectControl({label,value,onChange,options}:{label:string,value:string,onChange:(value:string)=>void,options:{value:string;label:string}[]}){
+  const id=label.toLowerCase().replace(/\W/g,'-')
+  return <label className="select-control" htmlFor={id}>{label}<select id={id} value={value} onChange={event=>onChange(event.target.value)}>{options.map(option=><option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+}
+
 function App(){
   const initialRef=useRef<Config>(loadInitialConfig(window.location.search,(()=>{try{return window.localStorage}catch{return null}})()))
   const [draft,setDraft]=useState<Config>(()=>copyConfig(initialRef.current))
@@ -47,6 +52,7 @@ function App(){
   const resumeOnVisibleRef=useRef(false)
   const stats=getStats(world)
   const modes=getModeCounts(world)
+  const lastLedger=world.ledger.at(-1)
   const selected=world.creatures.find(c=>c.individualId===selectedIndividualId)
   const distribution=summarizeDistribution(world.creatures.filter(c=>c.alive).map(c=>c[distributionTrait]))
   const update=<K extends keyof Config>(key:K,value:Config[K])=>setDraft(c=>({...c,[key]:value}))
@@ -103,13 +109,14 @@ function App(){
       <section className="simulation-panel" aria-label="Simulation" aria-hidden={settingsOpen&&isNarrow||undefined}>
         <div className="arena-wrap">
           <ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual}/>
-          <div className="arena-badge">GENERATION {world.generation}<small>{world.food.length} / {Math.round(world.environment.foodBudget)} seasonal food</small></div>
+          <div className="arena-badge">GENERATION {world.generation}<small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} food · ${world.environment.patches.reduce((sum,patch)=>sum+patch.stock,0)} patch stock`:`${world.food.length} / ${Math.round(world.environment.foodBudget)} seasonal food`}</small></div>
           <div className="legend"><span>Creature speed</span><i/><small>slower</small><small>faster</small></div>
           {extinct&&<div className="extinct" role="status"><strong>Population extinct</strong><span>Increase food or energy, then restart the run.</span></div>}
         </div>
         {selected&&<section className="inspector" aria-label={`Selected individual ${selected.individualId}`}>
           <div className="inspector-head"><div><h2>Individual {selected.individualId}</h2><p>Lineage {selected.lineageId} · parent {selected.parentIndividualId??'founder'} · born generation {selected.birthGeneration}</p></div><button onClick={()=>selectIndividual(null)} aria-label="Close individual inspector">×</button></div>
-          <div className="inspector-grid"><dl><div><dt>Age</dt><dd>{selected.age} generations</dd></div><div><dt>Energy</dt><dd>{selected.energy.toFixed(1)}</dd></div><div><dt>Food</dt><dd>{selected.food} / 2</dd></div><div><dt>State</dt><dd>{selected.home?'Safe at home':selected.mode}</dd></div><div><dt>Target</dt><dd>{selected.targetType??'none'} {selected.targetId??''}</dd></div><div><dt>Memory</dt><dd>food {selected.memory.foodX===null?'none':'active'} · threat {selected.memory.threatX===null?'none':'active'}</dd></div></dl><dl>{(['speed','size','sense','aggression','caution','exploration']as BiologicalTrait[]).map(trait=><div key={trait}><dt>{trait}</dt><dd>{selected[trait].toFixed(3)}</dd></div>)}</dl></div>
+          <div className="inspector-grid"><dl><div><dt>Age</dt><dd>{selected.age} generations</dd></div><div><dt>Energy</dt><dd>{selected.energy.toFixed(1)}</dd></div><div><dt>Food</dt><dd>{selected.food}{world.config.ecologyMode==='classic'?' / 2':' collected'}</dd></div><div><dt>State</dt><dd>{selected.home?'Safe at home':selected.mode}</dd></div><div><dt>Target</dt><dd>{selected.targetType??'none'} {selected.targetId??''}</dd></div><div><dt>Attack ready</dt><dd>{selected.attackCooldownUntil<=world.dayTime?'now':`in ${(selected.attackCooldownUntil-world.dayTime).toFixed(2)}s`}</dd></div><div><dt>Memory</dt><dd>food {selected.memory.foodX===null?'none':'active'} · threat {selected.memory.threatX===null?'none':'active'}</dd></div></dl><dl>{(['speed','size','sense','aggression','caution','exploration']as BiologicalTrait[]).map(trait=><div key={trait}><dt>{trait}</dt><dd>{selected[trait].toFixed(3)}</dd></div>)}</dl></div>
+          {selected.perceptionDiagnostics&&<div className="perception-summary" role="group" aria-label="Selected creature perception telemetry"><strong>Perception window {selected.perceptionDiagnostics.reactionWindow}</strong><span>Creatures {selected.perceptionDiagnostics.creatures.detected}/{selected.perceptionDiagnostics.creatures.total}</span><span>Food {selected.perceptionDiagnostics.food.detected}/{selected.perceptionDiagnostics.food.total}</span><span>Missed: {selected.perceptionDiagnostics.creatures.fov+selected.perceptionDiagnostics.food.fov} view · {selected.perceptionDiagnostics.creatures.occlusion+selected.perceptionDiagnostics.food.occlusion} blocked · {selected.perceptionDiagnostics.creatures.detection+selected.perceptionDiagnostics.food.detection} uncertain</span></div>}
           {selected.decisionSummary&&<div className="utility-breakdown"><strong>Decision: {selected.decisionSummary.chosen}</strong><span>{selected.decisionSummary.reason}</span><table><thead><tr><th>Candidate</th><th>Score</th><th>Reason</th></tr></thead><tbody>{selected.decisionSummary.candidates.map((candidate,i)=><tr key={`${candidate.type}-${candidate.targetId}-${i}`}><td>{candidate.type}</td><td>{candidate.score.toFixed(2)}</td><td>{candidate.reason}</td></tr>)}</tbody></table></div>}
         </section>}
         <div className="transport" role="group" aria-label="Playback controls">
@@ -134,10 +141,11 @@ function App(){
             <strong>Behavior genes</strong><span>Aggression <b>{stats.avgAggression.toFixed(2)}</b></span><span>Caution <b>{stats.avgCaution.toFixed(2)}</b></span><span>Exploration <b>{stats.avgExploration.toFixed(2)}</b></span>
           </div>
           <div className="mode-line" aria-label="Current behavior modes"><strong>Current modes</strong><span>{modes.exploring} exploring</span><span>{modes.foraging} foraging</span><span>{modes.hunting} hunting</span><span>{modes.fleeing} fleeing</span><span>{modes.returning} returning</span></div>
+          <div className="ecology-line" aria-label="Current model and energy statistics"><strong>{world.config.ecologyMode==='energy-regrowth'?'Ecological model':'Classic model'}</strong><span>{world.config.perceptionMode} perception</span><span>{world.config.predationMode} predation</span><span>mean energy <b>{stats.avgEnergy.toFixed(1)}</b></span><span>mean age <b>{stats.avgAge.toFixed(1)}</b></span><span>{world.dayFoodProduced} food regrown today</span></div>
           <div className="outcome-line" role="status">
             <strong>Previous generation</strong>
             {world.generation===1?<span>No outcome yet</span>:<>
-              <span><b>{world.lastReport.survived}</b> survived</span><span><b>{world.lastReport.born}</b> born</span><span><b>{world.lastReport.hunted}</b> hunted</span><span><b>{world.lastReport.energy}</b> energy</span><span><b>{world.lastReport.unfed}</b> unfed</span><span><b>{world.lastReport.late}</b> late</span>{world.lastReport.capped>0&&<span><b>{world.lastReport.capped}</b> births capped</span>}
+              <span><b>{world.lastReport.survived}</b> survived</span><span><b>{world.lastReport.born}</b> born</span><span><b>{world.lastReport.hunted}</b> hunted</span><span><b>{world.lastReport.energy}</b> energy</span>{world.lastReport.aged>0&&<span><b>{world.lastReport.aged}</b> aged</span>}<span><b>{world.lastReport.unfed}</b> unfed</span><span><b>{world.lastReport.late}</b> late</span>{lastLedger&&<span><b>{lastLedger.attackSuccesses}/{lastLedger.attackAttempts}</b> attacks won</span>}{world.lastReport.capped>0&&<span><b>{world.lastReport.capped}</b> births capped</span>}
             </>}
           </div>
           <div className="insights">
@@ -158,10 +166,27 @@ function App(){
           <input ref={importRef} className="sr-only" type="file" accept="application/json,.json" onChange={async e=>{try{const file=e.target.files?.[0];if(!file)return;if(file.size>MAX_EXPERIMENT_TEXT)throw new Error('too large');const imported=importExperiment(await file.text());if(!imported)throw new Error();setDraft(imported);setActionStatus('Experiment imported. Apply and restart to use it.')}catch{setActionStatus('Import failed: choose a valid experiment JSON file under 64 KB.')}finally{e.target.value=''}}}/>
         </div>
         <p className="action-status" role="status">{actionStatus}{runtimeMode==='fallback'?' Running in compatibility mode.':''}</p>
+        <fieldset><legend>Simulation model</legend>
+          <div className="model-presets" role="group" aria-label="Simulation model presets">
+            <button aria-pressed={draft.ecologyMode==='energy-regrowth'&&draft.perceptionMode==='realistic'&&draft.predationMode==='contest'} onClick={()=>setDraft(config=>({...config,ecologyMode:'energy-regrowth',perceptionMode:'realistic',predationMode:'contest'}))}>Ecological</button>
+            <button aria-pressed={draft.ecologyMode==='classic'&&draft.perceptionMode==='perfect'&&draft.predationMode==='threshold'} onClick={()=>setDraft(config=>({...config,ecologyMode:'classic',perceptionMode:'perfect',predationMode:'threshold'}))}>Classic</button>
+          </div>
+          <p className="model-note">Ecological uses energy carryover, regrowing patches, limited perception, and contested hunts. Classic preserves the original token rules.</p>
+          <SelectControl label="Lifecycle & resources" value={draft.ecologyMode} onChange={value=>update('ecologyMode',value as Config['ecologyMode'])} options={[{value:'energy-regrowth',label:'Energy + patch regrowth'},{value:'classic',label:'Classic generation pulse'}]}/>
+          <SelectControl label="Perception" value={draft.perceptionMode} onChange={value=>update('perceptionMode',value as Config['perceptionMode'])} options={[{value:'realistic',label:'Directional, delayed & occluded'},{value:'perfect',label:'Perfect local sensing'}]}/>
+          <SelectControl label="Predation" value={draft.predationMode} onChange={value=>update('predationMode',value as Config['predationMode'])} options={[{value:'contest',label:'Contested attacks'},{value:'threshold',label:'Size-threshold attacks'}]}/>
+        </fieldset>
         <fieldset><legend>World</legend>
           <NumberControl label="Initial population" value={draft.initialPopulation} min={5} max={120} step={1} onChange={v=>update('initialPopulation',v)}/>
-          <NumberControl label="Food per generation" value={draft.foodPerDay} min={2} max={120} step={1} onChange={v=>update('foodPerDay',v)}/>
+          <NumberControl label="Food per generation" value={draft.foodPerDay} min={0} max={120} step={1} onChange={v=>update('foodPerDay',v)}/>
           <NumberControl label="Starting energy" value={draft.startingEnergy} min={30} max={250} step={5} onChange={v=>update('startingEnergy',v)}/>
+          {draft.ecologyMode==='energy-regrowth'&&<details className="rule-tuning"><summary>Energy lifecycle tuning</summary>
+            <NumberControl label="Food energy" value={draft.foodEnergy} min={0} max={100} step={1} onChange={v=>update('foodEnergy',v)}/>
+            <NumberControl label="Energy retained" value={Math.round(draft.energyRetention*100)} min={0} max={100} step={5} unit="%" onChange={v=>update('energyRetention',v/100)}/>
+            <NumberControl label="Reproduction energy cost" value={draft.reproductionEnergyCost} min={0} max={200} step={5} onChange={v=>update('reproductionEnergyCost',v)}/>
+            <NumberControl label="Offspring energy" value={draft.offspringEnergy} min={10} max={250} step={5} onChange={v=>update('offspringEnergy',v)}/>
+            <NumberControl label="Maximum age" value={draft.maxAge} min={1} max={80} step={1} unit=" gen" onChange={v=>update('maxAge',v)}/>
+          </details>}
         </fieldset>
         <fieldset><legend>Starting traits</legend>
           <NumberControl label="Speed" value={draft.startSpeed} min={.3} max={2.5} step={.05} onChange={v=>update('startSpeed',v)}/>
@@ -185,6 +210,12 @@ function App(){
           <NumberControl label="Turning agility" value={draft.turnRate} min={1} max={8} step={.25} onChange={v=>update('turnRate',v)}/>
           <NumberControl label="Memory duration" value={draft.memoryDuration} min={.5} max={8} step={.25} unit="s" onChange={v=>update('memoryDuration',v)}/>
           <NumberControl label="Target commitment" value={draft.commitmentDuration} min={.1} max={3} step={.1} unit="s" onChange={v=>update('commitmentDuration',v)}/>
+          {draft.perceptionMode==='realistic'&&<details className="rule-tuning"><summary>Perception tuning</summary>
+            <NumberControl label="Field of view" value={draft.fieldOfView} min={30} max={360} step={5} unit="°" onChange={v=>update('fieldOfView',v)}/>
+            <NumberControl label="Detection falloff" value={Math.round(draft.detectionFalloff*100)} min={0} max={100} step={5} unit="%" onChange={v=>update('detectionFalloff',v/100)}/>
+            <NumberControl label="Reaction interval" value={draft.reactionTime} min={0} max={2} step={.05} unit="s" onChange={v=>update('reactionTime',v)}/>
+            <label className="check-control"><input type="checkbox" checked={draft.obstacleOcclusion} onChange={event=>update('obstacleOcclusion',event.target.checked)}/> Obstacles block sight</label>
+          </details>}
         </fieldset>
         <fieldset><legend>Environment &amp; seasons</legend>
           <NumberControl label="Food patches" value={draft.foodPatchCount} min={1} max={8} step={1} onChange={v=>update('foodPatchCount',v)}/>
@@ -195,13 +226,24 @@ function App(){
           <NumberControl label="Season length" value={draft.seasonLength} min={2} max={30} step={1} unit=" gen" onChange={v=>update('seasonLength',v)}/>
           <NumberControl label="Environment response" value={Math.round(draft.environmentResponse*100)} min={5} max={100} step={5} unit="%" onChange={v=>update('environmentResponse',v/100)}/>
           <NumberControl label="Food trend / generation" value={Math.round(draft.foodTrend*100)} min={-5} max={5} step={1} unit="%" onChange={v=>update('foodTrend',v/100)}/>
+          {draft.ecologyMode==='energy-regrowth'&&<details className="rule-tuning"><summary>Resource regrowth tuning</summary>
+            <NumberControl label="Capacity per patch" value={draft.patchCapacity} min={1} max={180} step={1} onChange={v=>update('patchCapacity',v)}/>
+            <NumberControl label="Regrowth rate" value={Math.round(draft.foodRegrowthRate*100)} min={0} max={100} step={1} unit="% / gen" onChange={v=>update('foodRegrowthRate',v/100)}/>
+          </details>}
         </fieldset>
         <fieldset><legend>Selection pressures</legend>
           <NumberControl label="Predator size ratio" value={draft.predatorRatio} min={1.05} max={2} step={.05} unit="×" onChange={v=>update('predatorRatio',v)}/>
           <NumberControl label="Movement energy cost" value={draft.moveEnergyFactor} min={.1} max={2} step={.05} onChange={v=>update('moveEnergyFactor',v)}/>
           <NumberControl label="Sensing energy cost" value={draft.senseEnergyFactor} min={.05} max={1.5} step={.05} onChange={v=>update('senseEnergyFactor',v)}/>
+          {draft.predationMode==='contest'&&<details className="rule-tuning"><summary>Attack contest tuning</summary>
+            <NumberControl label="Prey energy reward" value={draft.preyEnergy} min={0} max={200} step={5} onChange={v=>update('preyEnergy',v)}/>
+            <NumberControl label="Attack energy cost" value={draft.attackCost} min={0} max={50} step={1} onChange={v=>update('attackCost',v)}/>
+            <NumberControl label="Handling time" value={draft.handlingTime} min={0} max={3} step={.05} unit="s" onChange={v=>update('handlingTime',v)}/>
+            <NumberControl label="Contest sharpness" value={draft.contestSharpness} min={.1} max={12} step={.1} onChange={v=>update('contestSharpness',v)}/>
+            <NumberControl label="Evasion weight" value={draft.evasionWeight} min={0} max={3} step={.05} onChange={v=>update('evasionWeight',v)}/>
+          </details>}
         </fieldset>
-        <details><summary>Rules of this ecosystem</summary><p>Creatures weigh food, prey, danger, memory, and the cost of returning home. One food brought home survives; two also produces one mutated offspring. Larger creatures can eat animals at least {draft.predatorRatio.toFixed(2)}× smaller. Momentum, obstacles, seasonal food, and inherited behavior genes shape each run.</p></details>
+        <details><summary>Rules of this ecosystem</summary><p>{draft.ecologyMode==='classic'?'One food brought home survives; two also produces one mutated offspring.':'Creatures survive by returning home with energy, retain part of it, pay to reproduce, age, and forage from patches that regrow during the generation.'} {draft.perceptionMode==='realistic'?'They react at intervals and can miss targets outside their view or behind obstacles.':'They sense every target inside their radius.'} {draft.predationMode==='contest'?'Eligible hunts are probabilistic contests shaped by size, speed, energy, aggression, and caution.':`Larger creatures instantly catch animals at least ${draft.predatorRatio.toFixed(2)}× smaller.`}</p></details>
         <button className="apply" onClick={()=>{reset();closeSettings()}} disabled={!dirty}>{dirty?'Apply parameters & restart':'No staged changes'}</button>
       </aside>
     </main>

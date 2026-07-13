@@ -1,4 +1,4 @@
-import { defaultConfig, sanitizeConfig } from '../simulation/config'
+import { defaultConfig, LEGACY_V3_CONFIG_KEYS, sanitizeConfig, sanitizeLegacyConfig } from '../simulation/config'
 import type { Config } from '../simulation/types'
 import {
   EXPERIMENT_METRICS,
@@ -17,6 +17,7 @@ const METRICS = new Set<string>(EXPERIMENT_METRICS)
 const INTERVENTION_KEYS = new Set<string>(INTERVENTION_CONFIG_KEYS)
 const CONFIG_KEYS = Object.keys(defaultConfig) as (keyof Config)[]
 const CONFIG_KEY_SET = new Set<string>(CONFIG_KEYS)
+const LEGACY_CONFIG_KEY_SET = new Set<string>(LEGACY_V3_CONFIG_KEYS)
 
 export interface ExperimentExport {
   schema: 'evolution-field-lab/experiment-result'
@@ -102,24 +103,31 @@ function assertNesting(source: string): void {
   }
 }
 
-function validateConfig(value: unknown, path: string, partial = false): void {
+function validateConfig(value: unknown, path: string, partial = false): RecordValue {
   const config = record(value, path)
   const keys = Object.keys(config)
+  const legacyFull = !partial && keys.length === LEGACY_V3_CONFIG_KEYS.length && keys.every(key => LEGACY_CONFIG_KEY_SET.has(key))
   if (partial) {
     for (const key of keys) if (!CONFIG_KEY_SET.has(key)) fail(`${path}.${key} is unsupported`)
-  } else {
+  } else if (!legacyFull) {
     exactKeys(config, CONFIG_KEYS, [], path)
+  } else {
+    exactKeys(config, LEGACY_V3_CONFIG_KEYS, [], path)
   }
-  const sanitized = sanitizeConfig({ ...defaultConfig, ...config })
-  for (const key of partial ? keys as (keyof Config)[] : CONFIG_KEYS) {
+  const sanitized = legacyFull ? sanitizeLegacyConfig(config) : sanitizeConfig({ ...defaultConfig, ...config })
+  for (const key of partial ? keys as (keyof Config)[] : legacyFull ? LEGACY_V3_CONFIG_KEYS : CONFIG_KEYS) {
     const raw = config[key]
     if (typeof defaultConfig[key] === 'boolean') {
       boolean(raw, `${path}.${key}`)
+    } else if (typeof defaultConfig[key] === 'string') {
+      text(raw, `${path}.${key}`, true)
+      if (sanitized[key] !== raw) fail(`${path}.${key} is unsupported`)
     } else {
       finite(raw, `${path}.${key}`)
       if (sanitized[key] !== raw) fail(`${path}.${key} is outside the supported range`)
     }
   }
+  return legacyFull ? sanitized as unknown as RecordValue : { ...config }
 }
 
 interface ValidatedScenario {
@@ -133,7 +141,7 @@ function validateScenario(value: unknown, path: string, generations: number): Va
   exactKeys(scenario, ['id', 'label'], ['config', 'interventions'], path)
   const id = text(scenario.id, `${path}.id`, true)
   const label = text(scenario.label, `${path}.label`)
-  if (scenario.config !== undefined) validateConfig(scenario.config, `${path}.config`, true)
+  if (scenario.config !== undefined) scenario.config=validateConfig(scenario.config, `${path}.config`, true)
   const interventions = new Map<number, string[]>()
   const seen = new Set<string>()
   for (const [index, raw] of array(scenario.interventions ?? [], `${path}.interventions`, MAX_INTERVENTIONS).entries()) {
@@ -176,7 +184,7 @@ function validatePlan(value: unknown): ValidatedPlan {
   const replicates = integer(plan.replicates, `${path}.replicates`, 1, 1_000)
   const generations = integer(plan.generations, `${path}.generations`, 1, 1_000)
   if (replicates * generations * 2 > MAX_GENERATION_RUNS) fail(`${path} exceeds the generation-run limit`)
-  validateConfig(plan.baseConfig, `${path}.baseConfig`)
+  plan.baseConfig=validateConfig(plan.baseConfig, `${path}.baseConfig`)
   const rawMetrics = array(plan.metrics, `${path}.metrics`, EXPERIMENT_METRICS.length)
   if (!rawMetrics.length) fail(`${path}.metrics must not be empty`)
   const metrics = rawMetrics.map((metric, index) => {

@@ -29,10 +29,20 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect}:Props
       ctx.strokeStyle='rgba(47,78,65,.18)';ctx.lineWidth=1;ctx.stroke()
       ctx.save();ctx.setLineDash([4,8]);ctx.strokeStyle='rgba(37,75,62,.22)';ctx.strokeRect(pad+10,pad+10,w-pad*2-20,h-pad*2-20);ctx.restore()
       const sx=(x:number)=>pad+x*(w-pad*2), sy=(y:number)=>pad+y*(h-pad*2)
+      const selected=world.creatures.find(creature=>creature.individualId===selectedIndividualId&&creature.alive)
+      if(selected){
+        const x=sx(selected.x),y=sy(selected.y),rx=selected.sense*(w-pad*2),ry=selected.sense*(h-pad*2),half=world.config.fieldOfView/360*Math.PI
+        ctx.save();ctx.fillStyle='rgba(227,188,63,.10)';ctx.strokeStyle='rgba(227,188,63,.7)';ctx.lineWidth=1.25;ctx.setLineDash([5,5]);ctx.beginPath()
+        if(world.config.perceptionMode==='realistic'&&world.config.fieldOfView<359.9){ctx.moveTo(x,y);ctx.ellipse(x,y,rx,ry,0,selected.angle-half,selected.angle+half);ctx.closePath()}else ctx.ellipse(x,y,rx,ry,0,0,Math.PI*2)
+        ctx.fill();ctx.stroke();ctx.restore()
+        if(selected.targetType){ctx.save();ctx.strokeStyle='rgba(242,201,76,.6)';ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(sx(selected.targetX),sy(selected.targetY));ctx.stroke();ctx.restore()}
+        for(const memory of [{x:selected.memory.foodX,y:selected.memory.foodY,color:'#d5bb43'},{x:selected.memory.threatX,y:selected.memory.threatY,color:'#bd6651'}])if(memory.x!==null&&memory.y!==null){ctx.save();ctx.strokeStyle=memory.color;ctx.lineWidth=1.5;ctx.setLineDash([2,3]);ctx.beginPath();ctx.arc(sx(memory.x),sy(memory.y),7,0,Math.PI*2);ctx.stroke();ctx.restore()}
+      }
       for(const patch of world.environment.patches){
         const x=sx(patch.x),y=sy(patch.y),r=Math.max(24,Math.min(w,h)*world.config.foodPatchSpread*.72)
         const halo=ctx.createRadialGradient(x,y,0,x,y,r);halo.addColorStop(0,'rgba(183,190,88,.16)');halo.addColorStop(1,'rgba(183,190,88,0)')
         ctx.fillStyle=halo;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill()
+        if(world.config.ecologyMode==='energy-regrowth'){const stock=Math.max(0,Math.min(1,patch.stock/Math.max(1,world.config.patchCapacity)));ctx.strokeStyle='rgba(171,183,78,.7)';ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,Math.max(8,r*.32),-Math.PI/2,-Math.PI/2+Math.PI*2*stock);ctx.stroke()}
       }
       for(const obstacle of world.environment.obstacles){
         const x=sx(obstacle.x),y=sy(obstacle.y),r=obstacle.radius*Math.min(w-pad*2,h-pad*2)
@@ -66,10 +76,11 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect}:Props
       ctx.fillStyle='#d9b940';ctx.fillRect(pad,pad-9,(w-pad*2)*pct,3)
     }
     drawRef.current=draw;draw()
-  },[world,revision])
+  },[world,revision,selectedIndividualId])
   useEffect(()=>{const canvas=ref.current;if(!canvas||typeof ResizeObserver==='undefined')return;const observer=new ResizeObserver(()=>drawRef.current());observer.observe(canvas);return()=>observer.disconnect()},[])
   const chooseAt=(event:React.MouseEvent<HTMLCanvasElement>)=>{const canvas=ref.current;if(!canvas)return;const rect=canvas.getBoundingClientRect(),pad=Math.max(20,Math.min(rect.width,rect.height)*.055),x=(event.clientX-rect.left-pad)/(rect.width-pad*2),y=(event.clientY-rect.top-pad)/(rect.height-pad*2);let best:World['creatures'][number]|undefined,bestD=.05;for(const c of world.creatures.filter(c=>c.alive)){const d=Math.hypot(c.x-x,c.y-y);if(d<bestD){best=c;bestD=d}}onSelect(best?.individualId??null)}
-  return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={`Simulation arena, generation ${world.generation}, ${world.creatures.filter(c=>c.alive).length} living creatures, ${world.food.length} of ${Math.round(world.environment.foodBudget)} food remaining, ${world.environment.patches.length} food patches, and ${world.environment.obstacles.length} obstacles. Click a creature or use the inspector list to select it.`}>
+  const resourceLabel=world.config.ecologyMode==='energy-regrowth'?`${world.food.length} food available and ${world.environment.patches.reduce((sum,patch)=>sum+patch.stock,0)} total stock across ${world.environment.patches.length} regrowing patches`:`${world.food.length} food remaining from a ${Math.round(world.environment.foodBudget)}-item generation pulse across ${world.environment.patches.length} patches`
+  return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={`Simulation arena, generation ${world.generation}, ${world.creatures.filter(c=>c.alive).length} living creatures, ${resourceLabel}, and ${world.environment.obstacles.length} obstacles. Click a creature or use the inspector list to select it.`}>
     Natural selection simulation arena. Live counts are available in the statistics region.
   </canvas><label className="creature-picker">Inspect <select value={selectedIndividualId??''} onChange={e=>onSelect(e.target.value?Number(e.target.value):null)}><option value="">No creature selected</option>{[...world.creatures].filter(c=>c.alive).sort((a,b)=>a.individualId-b.individualId).map(c=><option key={c.individualId} value={c.individualId}>Individual {c.individualId}, lineage {c.lineageId}, {c.mode}</option>)}</select></label></>
 }

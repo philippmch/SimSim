@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { defaultConfig } from '../simulation/engine'
+import { createWorld, defaultConfig, runGeneration as runWorldGeneration } from '../simulation/engine'
+import { CLASSIC_MODES, V4_ONLY_CONFIG_KEYS } from '../simulation/config'
 import type { ExperimentPlan, ReplicateResult } from './types'
 import {
   ExperimentCancelledError,
@@ -47,6 +48,41 @@ describe('paired experiment runner', () => {
     expect(result.aggregates.every(point => point.effect.mean === 0)).toBe(true)
   })
 
+  it('keeps all advanced ecology metrics exactly paired for identical arms', async () => {
+    const metrics = ['avgEnergy', 'avgAge', 'aged', 'foodProduced', 'resourceAbundance', 'attackSuccessRate'] as const
+    const result = await runExperiment(plan({ replicates: 1, generations: 2, metrics }))
+    for (const point of result.replicates[0].pairedDeltas) {
+      expect(Object.fromEntries(metrics.map(metric => [metric, point.metrics[metric]]))).toEqual(Object.fromEntries(metrics.map(metric => [metric, 0])))
+    }
+    expect(result.schemaVersion).toBe(1)
+  })
+
+  it('uses null for undefined rates and extinct averages while event/resource counts stay zero', async () => {
+    const result = await runExperiment(plan({
+      replicates: 1,
+      generations: 1,
+      baseConfig: { ...defaultConfig, ...CLASSIC_MODES, initialPopulation: 1, foodPerDay: 0, startingEnergy: 10, dayLength: 5 },
+      metrics: ['avgEnergy', 'avgAge', 'aged', 'foodProduced', 'resourceAbundance', 'attackSuccessRate'],
+    }))
+    expect(result.replicates[0].scenarioA.generations[0].metrics).toEqual({ avgEnergy: null, avgAge: null, aged: 0, foodProduced: 0, resourceAbundance: 0, attackSuccessRate: null })
+  })
+
+  it('runs v4 continuous pressure interventions deterministically from their scheduled boundary', async () => {
+    const input = plan({
+      replicates: 1,
+      generations: 2,
+      baseConfig: { ...defaultConfig, initialPopulation: 5, foodPerDay: 8, dayLength: 5 },
+      metrics: ['population', 'avgEnergy', 'foodProduced', 'resourceAbundance', 'attackSuccessRate'],
+      scenarioB: { id: 'treatment', label: 'Treatment', interventions: [{ id: 'v4-pressure', generation: 2, changes: { foodRegrowthRate: .5, attackCost: 12, reactionTime: .5, reproductionEnergyCost: 55 } }] },
+    })
+    const first = await runExperiment(input), second = await runExperiment(input)
+    expect(second).toEqual(first)
+    expect(first.replicates[0].scenarioB.generations.map(point => point.appliedInterventionIds)).toEqual([[], ['v4-pressure']])
+    expect(Object.values(first.replicates[0].pairedDeltas[0].metrics).every(value => Object.is(value, 0))).toBe(true)
+    expect(fromExperimentJson(toExperimentJson(first)).result).toEqual(first)
+    expect(toTidyCsv(first)).toContain(',foodProduced,')
+  })
+
   it('reruns deterministically', async () => {
     const input = plan({
       scenarioB: { id: 'treatment', label: 'Treatment', config: { foodPerDay: 4 } },
@@ -73,7 +109,7 @@ describe('paired experiment runner', () => {
     const input = plan({
       replicates: 1,
       generations: 3,
-      baseConfig: { ...defaultConfig, initialPopulation: 1, foodPerDay: 8, seasonAmplitude: 0, environmentResponse: 1, dayLength: 5 },
+      baseConfig: { ...defaultConfig, ...CLASSIC_MODES, initialPopulation: 1, foodPerDay: 8, seasonAmplitude: 0, environmentResponse: 1, dayLength: 5 },
       metrics: ['foodAtStart'],
       scenarioA: {
         id: 'control',
@@ -92,6 +128,23 @@ describe('paired experiment runner', () => {
     expect(result.replicates[0].scenarioB.generations.map(point => point.metrics.foodAtStart)).toEqual([8, 8, 8])
     expect(fromExperimentJson(toExperimentJson(result)).result).toEqual(result)
     expect(input).toEqual(before)
+  })
+
+  it('applies setup configuration at the boundary without leaking into the final tick',()=>{
+    const classic=createWorld({...defaultConfig,...CLASSIC_MODES,seed:71,initialPopulation:1,foodPerDay:8,seasonAmplitude:0,environmentResponse:1,dayLength:5})
+    const classicBoundary={...classic.config,foodPerDay:0}
+    runWorldGeneration(classic,classicBoundary)
+    expect(classic.config.foodPerDay).toBe(8)
+    expect(classic.environment.targetFood).toBe(0)
+    expect(classic.food).toHaveLength(0)
+
+    const advanced=createWorld({...defaultConfig,seed:73,initialPopulation:1,foodPerDay:8,seasonAmplitude:0,environmentResponse:1,foodRegrowthRate:1,patchCapacity:20,dayLength:5})
+    const control=structuredClone(advanced),advancedBoundary={...advanced.config,foodPerDay:0}
+    runWorldGeneration(advanced,advancedBoundary);runWorldGeneration(control)
+    expect(advanced.config.foodPerDay).toBe(8)
+    expect(advanced.environment.targetFood).toBe(0)
+    expect(advanced.ledger[0].foodProduced).toBe(control.ledger[0].foodProduced)
+    expect(advanced.ledger[0]).toEqual(control.ledger[0])
   })
 
   it('roundtrips multiple distinct interventions at the same generation', async () => {
@@ -134,7 +187,7 @@ describe('paired experiment runner', () => {
       replicates: 1,
       generations: 4,
       stopOnExtinction: true,
-      baseConfig: { ...defaultConfig, initialPopulation: 1, foodPerDay: 0, startingEnergy: 10, dayLength: 5 },
+      baseConfig: { ...defaultConfig, ...CLASSIC_MODES, initialPopulation: 1, foodPerDay: 0, startingEnergy: 10, dayLength: 5 },
       metrics: ['population'],
     }))
     expect(result.replicates[0].scenarioA).toMatchObject({ extinct: true, completedGenerations: 1 })
@@ -174,6 +227,15 @@ describe('paired experiment runner', () => {
     expect(lines[3]).toContain(',paired_delta,B-A,1,population,0')
   })
 
+  it('normalizes exact legacy v3 result configs to classic v4 modes', async () => {
+    const result = await runExperiment(plan({ replicates: 1, generations: 1, metrics: ['population'] }))
+    const payload = JSON.parse(toExperimentJson(result))
+    for (const key of V4_ONLY_CONFIG_KEYS) delete payload.result.plan.baseConfig[key]
+    const imported = fromExperimentJson(JSON.stringify(payload))
+    expect(imported.result.plan.baseConfig).toMatchObject({ ecologyMode: 'classic', perceptionMode: 'perfect', predationMode: 'threshold' })
+    expect(imported.result.plan.baseConfig.foodEnergy).toBe(defaultConfig.foodEnergy)
+  })
+
   it('neutralizes spreadsheet formulas in every string-backed CSV identifier', async () => {
     const result = await runExperiment(plan({
       id: '  =1+1',
@@ -207,6 +269,8 @@ describe('paired experiment runner', () => {
       mutate(payload => { payload.result.aggregates[0].effect.interval.push(0) }),
       mutate(payload => { payload.result.aggregates[0].scenarioA.mean = Number.NaN }),
       mutate(payload => { payload.result.replicates[0].scenarioB.generations[0].unexpected = true }),
+      mutate(payload => { payload.result.plan.baseConfig.ecologyMode = 'unknown' }),
+      mutate(payload => { payload.result.plan.metrics = ['attackSuccessRate']; payload.result.replicates[0].scenarioA.generations[0].metrics = { attackSuccessRate: 'none' } }),
     ]
     for (const source of malformed) expect(() => fromExperimentJson(source)).toThrow(TypeError)
 

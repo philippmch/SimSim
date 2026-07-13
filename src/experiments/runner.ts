@@ -24,14 +24,6 @@ export const MAX_GENERATION_RUNS = 2_000
 const MAX_SEED = 9_999_999
 const METRIC_SET = new Set<string>(EXPERIMENT_METRICS)
 const INTERVENTION_KEY_SET = new Set<string>(INTERVENTION_CONFIG_KEYS)
-const ENVIRONMENT_BOUNDARY_KEYS = [
-  'foodPerDay',
-  'seasonAmplitude',
-  'seasonLength',
-  'environmentResponse',
-  'foodTrend',
-] as const satisfies readonly (keyof Config)[]
-
 export class ExperimentCancelledError extends Error {
   constructor(public readonly completedGenerationRuns: number) {
     super('Experiment cancelled')
@@ -132,15 +124,21 @@ function metricValues(world: World, metrics: readonly ExperimentMetric[]): Metri
       case 'avgAggression': values[metric] = stats.population ? stats.avgAggression : null; break
       case 'avgCaution': values[metric] = stats.population ? stats.avgCaution : null; break
       case 'avgExploration': values[metric] = stats.population ? stats.avgExploration : null; break
+      case 'avgEnergy': values[metric] = stats.population ? stats.avgEnergy : null; break
+      case 'avgAge': values[metric] = stats.population ? stats.avgAge : null; break
       case 'survivalRate': values[metric] = ledger && ledger.startPopulation ? ledger.outcomes.survived / ledger.startPopulation : 0; break
       case 'births': values[metric] = ledger?.birthsAdmitted ?? 0; break
       case 'hunted': values[metric] = ledger?.outcomes.hunted ?? 0; break
       case 'energyDeaths': values[metric] = ledger?.outcomes.energy ?? 0; break
       case 'unfed': values[metric] = ledger?.outcomes.unfed ?? 0; break
       case 'late': values[metric] = ledger?.outcomes.late ?? 0; break
+      case 'aged': values[metric] = ledger?.outcomes.aged ?? 0; break
       case 'foodAtStart': values[metric] = ledger?.foodAtStart ?? 0; break
+      case 'foodProduced': values[metric] = ledger?.foodProduced ?? 0; break
       case 'foodConsumed': values[metric] = ledger?.foodConsumed ?? 0; break
+      case 'resourceAbundance': values[metric] = ledger?.foodRemaining ?? 0; break
       case 'preyConsumed': values[metric] = ledger?.preyConsumed ?? 0; break
+      case 'attackSuccessRate': values[metric] = ledger?.attackAttempts ? ledger.attackSuccesses / ledger.attackAttempts : null; break
     }
   }
   return values
@@ -203,14 +201,10 @@ async function runArm(
       ? applyInterventionsAtBoundary(activeConfig, interventions, generation + 1, applied)
       : { config: activeConfig, appliedIds: [] }
 
-    // Food for generation N+1 is created inside finishGeneration(N). Only the
-    // environment keys are staged for that boundary; behavioral pressures stay
-    // active through the final tick of generation N.
-    const finishConfig = { ...activeConfig }
-    for (const key of ENVIRONMENT_BOUNDARY_KEYS) finishConfig[key] = nextApplication.config[key] as never
-    world.config = finishConfig
-
-    runGeneration(world)
+    // Ticks and settlement retain the current configuration. The engine uses
+    // the optional next configuration only for generation-boundary targets and
+    // the classic next-generation food pulse.
+    runGeneration(world, nextApplication.config)
     generations.push({ generation, metrics: metricValues(world, plan.metrics), appliedInterventionIds: [...appliedNow] })
     world.config = nextApplication.config
     nextApplication.appliedIds.forEach(id => applied.add(id))

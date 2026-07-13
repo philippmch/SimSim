@@ -4,8 +4,10 @@ import {decide} from './behavior'
 import {proposeMotion} from './motion'
 import {advanceFoodBudget,seasonalTarget} from './environment'
 import type {Creature} from './types'
+import {CLASSIC_MODES} from './config'
 
-const world=(n=3,extra={})=>createWorld({...defaultConfig,initialPopulation:n,foodPerDay:0,obstacleCount:0,foodPatchCount:2,founderPhysicalVariation:0,founderBehaviorVariation:0,...extra})
+const world=(n=3,extra={})=>createWorld({...defaultConfig,...CLASSIC_MODES,initialPopulation:n,foodPerDay:0,obstacleCount:0,foodPatchCount:2,founderPhysicalVariation:0,founderBehaviorVariation:0,...extra})
+const food=(id:number,x:number,y:number)=>({id,x,y,patchId:null,energy:22})
 
 describe('two-phase ecology',()=>{
   it('is invariant to creature array permutation',()=>{
@@ -17,7 +19,7 @@ describe('two-phase ecology',()=>{
   it('resolves contested food by distance then stable id',()=>{
     const w=world(2),[a,b]=w.creatures
     for(const c of [a,b])Object.assign(c,{x:.5,y:.5,angle:0,vx:0,vy:0,sense:.2})
-    w.food=[{id:999,x:.5,y:.5}];tick(w,SIMULATION_TIMESTEP)
+    w.food=[food(999,.5,.5)];tick(w,SIMULATION_TIMESTEP)
     expect(a.id).toBeLessThan(b.id);expect([a.food,b.food]).toEqual([1,0]);expect(w.food).toHaveLength(0)
   })
   it('allows a killed predator to complete its pre-decided contact',()=>{
@@ -30,7 +32,7 @@ describe('two-phase ecology',()=>{
   })
   it('consumes at most one resource per actor per tick and caps intake at two',()=>{
     const w=world(2),[actor,prey]=w.creatures
-    Object.assign(actor,{x:.5,y:.5,size:2,sense:.3,aggression:1,food:1});Object.assign(prey,{x:.5,y:.5,size:1});w.food=[{id:700,x:.5,y:.5}]
+    Object.assign(actor,{x:.5,y:.5,size:2,sense:.3,aggression:1,food:1});Object.assign(prey,{x:.5,y:.5,size:1});w.food=[food(700,.5,.5)]
     tick(w,SIMULATION_TIMESTEP)
     expect(actor.food).toBe(2);expect(prey.food).toBeLessThanOrEqual(1)
     tick(w,SIMULATION_TIMESTEP);expect(actor.food).toBe(2)
@@ -80,12 +82,12 @@ describe('utility, memory, and commitment',()=>{
     const bold=decide(actor,w.creatures,[],w.config,0,1)
     actor.caution=1;const cautious=decide(actor,w.creatures,[],w.config,0,1)
     expect(bold.mode).toBe('hunting');expect(cautious.mode).toBe('fleeing')
-    actor.aggression=0;actor.caution=0;const food=decide(actor,[actor,prey],[{id:90,x:.58,y:.5}],w.config,0,1)
-    expect(food.mode).toBe('foraging')
+    actor.aggression=0;actor.caution=0;const foodDecision=decide(actor,[actor,prey],[food(90,.58,.5)],w.config,0,1)
+    expect(foodDecision.mode).toBe('foraging')
   })
   it('uses and expires food memory',()=>{
     const w=world(1),c=w.creatures[0];Object.assign(c,{x:.5,y:.5,sense:.2})
-    const seen=decide(c,[c],[{id:90,x:.58,y:.5}],w.config,0,1);c.memory=seen.memory
+    const seen=decide(c,[c],[food(90,.58,.5)],w.config,0,1);c.memory=seen.memory
     const remembered=decide(c,[c],[],w.config,1,2);expect(remembered.targetType).toBe('memory')
     c.memory=remembered.memory;const expired=decide(c,[c],[],w.config,10,3)
     expect(expired.memory.foodX).toBeNull();expect(expired.targetType).toBe('explore')
@@ -98,7 +100,7 @@ describe('utility, memory, and commitment',()=>{
   })
   it('holds a committed target but urgent return overrides it',()=>{
     const w=world(1),c=w.creatures[0];Object.assign(c,{x:.5,y:.5,sense:.3,targetType:'food',targetId:91,commitUntil:5})
-    const held=decide(c,[c],[{id:90,x:.59,y:.5},{id:91,x:.6,y:.5}],w.config,1,2)
+    const held=decide(c,[c],[food(90,.59,.5),food(91,.6,.5)],w.config,1,2)
     expect(held.targetId).toBe(91)
     c.food=2;const safe=decide(c,[c],[],w.config,1,3);expect(safe.mode).toBe('returning')
   })

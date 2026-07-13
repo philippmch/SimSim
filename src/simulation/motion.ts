@@ -42,6 +42,6 @@ export function proposeMotion(c:Creature,d:Decision,cfg:Config,obstacles:Obstacl
   if(y<.012){y=.012;vy=Math.max(0,vy)}else if(y>.988){y=.988;vy=Math.min(0,vy)}
   const actual=Math.hypot(vx,vy)/.038
   const metabolic=.08+cfg.senseEnergyFactor*c.sense*8+cfg.moveEnergyFactor*c.size**3*actual**2
-  const home=c.food>=1&&Math.hypot(x-c.homeX,y-c.homeY)<.025
+  const home=(cfg.ecologyMode==='classic'?c.food>=1:d.mode==='returning')&&Math.hypot(x-c.homeX,y-c.homeY)<.025
   return{id:c.id,x,y,vx:home?0:vx,vy:home?0:vy,angle,energy:c.energy-metabolic*dt,home}
 }
