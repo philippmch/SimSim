@@ -43,6 +43,14 @@ food carries across generation boundaries in ecological mode. Obstacles persist,
 and seasons, trend, and response rate change the resource target. Classic mode
 retains the original generation-pulse food rules.
 
+During a run, **Resource bloom**, **Drought**, and **Founder migration** apply
+immediately without restarting. They obey the food and population safety caps
+and are deterministic for a seed when replayed at the same simulation ticks. A
+bounded event timeline records each shock. The Evolution story summarizes living
+lineages, inverse-Simpson effective diversity, leading lineage shares, and the
+latest survivor/reproducer trait shifts. Selecting a creature also highlights
+its living lineage relatives in the arena.
+
 ## Experiment lab
 
 The Experiment lab compares a control with a treatment across matched random

@@ -60,6 +60,7 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect}:Props
       for(const c of sorted){
         const x=sx(c.x),y=sy(c.y),base=Math.max(7,Math.min(w,h)*.017*c.size), height=base*1.55
         ctx.fillStyle='rgba(22,38,30,.16)';ctx.beginPath();ctx.ellipse(x,y+base*.46,base*.9,base*.3,0,0,Math.PI*2);ctx.fill()
+        if(selected&&c.individualId!==selected.individualId&&c.lineageId===selected.lineageId){ctx.strokeStyle='rgba(242,201,76,.46)';ctx.lineWidth=1.5;ctx.setLineDash([2,3]);ctx.beginPath();ctx.arc(x,y-height*.35,base*1.35,0,Math.PI*2);ctx.stroke();ctx.setLineDash([])}
         if(c.individualId===selectedIndividualId){ctx.strokeStyle='#f2c94c';ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y-height*.35,base*1.5,0,Math.PI*2);ctx.stroke()}
         const orientation=Math.hypot(c.vx,c.vy)>.001?Math.atan2(c.vy,c.vx):c.angle
         ctx.save();ctx.translate(x,y);ctx.rotate(orientation+Math.PI/2)

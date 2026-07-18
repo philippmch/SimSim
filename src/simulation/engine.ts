@@ -1,9 +1,9 @@
-import type { BiologicalTrait,Config,Creature,GenerationLedger,HistoryPoint,SelectionSummary,Trait,World } from './types'
+import type { BiologicalTrait,Config,Creature,GenerationLedger,HistoryPoint,InterventionKind,LineageAnalytics,SelectionSummary,Trait,World } from './types'
 import { clamp,distance,random } from './random'
 import { advanceFoodBudget,createEnvironment,effectiveFoodRegrowthRate,enforceAdvancedPatchCapacity,spawnFood,spawnRegrownFood,syncPatchStocks } from './environment'
 import { decide,type Decision } from './behavior'
 import { proposeMotion } from './motion'
-import {defaultConfig,MAX_HISTORY_POINTS,MAX_POPULATION,sanitizeConfig} from './config'
+import {defaultConfig,MAX_FOOD,MAX_HISTORY_POINTS,MAX_POPULATION,sanitizeConfig} from './config'
 import {perceive} from './perception'
 import {collectAttackClaims,resolveAttackClaims} from './predation'
 import {advanceResourceDynamics,consumeResourceStock} from './resourceDynamics'
@@ -16,6 +16,7 @@ function edgePoint(world:World){const edge=Math.floor(random(world)*4),p=.04+ran
   return edge===0?{x:p,y:.025}:edge===1?{x:.975,y:p}:edge===2?{x:p,y:.975}:{x:.025,y:p}}
 const emptyMemory=()=>({foodX:null,foodY:null,foodUntil:0,threatX:null,threatY:null,threatUntil:0})
 const traitKeys:BiologicalTrait[]=['speed','size','sense','aggression','caution','exploration']
+const MAX_WORLD_EVENTS=60
 export function summarizeValues(values:number[]){if(!values.length)return{mean:null,variance:null,sd:null};const mean=values.reduce((a,b)=>a+b,0)/values.length,variance=values.reduce((sum,value)=>sum+(value-mean)**2,0)/values.length;return{mean,variance,sd:Math.sqrt(variance)}}
 function selectionSummary(creatures:Creature[]):SelectionSummary{return Object.fromEntries(traitKeys.map(key=>[key,summarizeValues(creatures.map(c=>c[key]))])) as SelectionSummary}
 function founderValue(world:World,value:number,variation:number,min:number,max:number,multiplicative=true){if(!variation)return value;const noise=random(world)+random(world)+random(world)+random(world)-2;return clamp(multiplicative?value*(1+noise*variation):value+noise*variation,min,max)}
@@ -37,7 +38,7 @@ function averages(creatures:Creature[],generation:number):HistoryPoint{const n=c
 
 export function createWorld(config:Config=defaultConfig):World{
   config=sanitizeConfig(config)
-  const world={config:{...config},generation:1,dayTime:0,tickIndex:0,creatures:[],food:[],history:[],ledger:[],environment:null as never,rngState:(config.seed||1)>>>0,nextId:1,nextIndividualId:1,nextLineageId:1,inspectedIndividualId:null,dayHunted:0,dayFoodProduced:0,dayFoodConsumed:0,dayPreyConsumed:0,dayAttackAttempts:0,dayAttackSuccesses:0,dayAttackFailures:0,generationFoodStart:0,lastReport:{survived:config.initialPopulation,born:0,starved:0,hunted:0,energy:0,unfed:0,late:0,aged:0,capped:0}} as World
+  const world={config:{...config},generation:1,dayTime:0,tickIndex:0,creatures:[],food:[],history:[],ledger:[],events:[],environment:null as never,rngState:(config.seed||1)>>>0,nextId:1,nextIndividualId:1,nextLineageId:1,inspectedIndividualId:null,dayHunted:0,dayFoodProduced:0,dayFoodRemoved:0,dayFoodConsumed:0,dayPreyConsumed:0,dayAttackAttempts:0,dayAttackSuccesses:0,dayAttackFailures:0,generationFoodStart:0,lastReport:{survived:config.initialPopulation,born:0,starved:0,hunted:0,energy:0,unfed:0,late:0,aged:0,capped:0}} as World
   world.environment=createEnvironment(world,config)
   world.creatures=Array.from({length:config.initialPopulation},()=>makeCreature(world,{},undefined,true))
   world.food=spawnFood(world,Math.round(world.environment.foodBudget));enforceAdvancedPatchCapacity(world);syncPatchStocks(world);world.generationFoodStart=world.food.length;world.history=[averages(world.creatures,0)]
@@ -47,6 +48,52 @@ export function createWorld(config:Config=defaultConfig):World{
 export function setInspectedIndividual(world:World,individualId:number|null){
   world.inspectedIndividualId=individualId
   for(const creature of world.creatures)if(creature.individualId!==individualId){delete creature.decisionSummary;delete creature.perceptionDiagnostics}
+}
+
+function recordEvent(world:World,kind:InterventionKind,summary:string,count:number){
+  world.events??=[]
+  world.events.push({generation:world.generation,day:Number(world.dayTime.toFixed(2)),kind,summary,count})
+  if(world.events.length>MAX_WORLD_EVENTS)world.events=world.events.slice(-MAX_WORLD_EVENTS)
+}
+
+/** Applies a deterministic, live ecological shock. Replaying a seed with the same command sequence yields the same world. */
+export function applyIntervention(world:World,kind:InterventionKind){
+  if(kind==='resource-bloom'){
+    const requested=Math.min(24,MAX_FOOD-world.food.length)
+    const before=world.food.length
+    if(requested>0)world.food.push(...spawnFood(world,requested))
+    enforceAdvancedPatchCapacity(world);syncPatchStocks(world)
+    const count=world.food.length-before
+    world.dayFoodProduced+=count
+    recordEvent(world,kind,count?`Resource bloom added ${count} food.`:'Resource bloom was capped; no food was added.',count)
+    return count
+  }
+  if(kind==='drought'){
+    const count=Math.min(world.food.length,Math.ceil(world.food.length*.4))
+    const removed=new Set([...world.food].sort((a,b)=>a.id-b.id).slice(-count).map(food=>food.id))
+    world.food=world.food.filter(food=>!removed.has(food.id))
+    world.dayFoodRemoved+=count
+    for(const patch of world.environment.patches)patch.accumulator=Math.min(patch.accumulator,.25)
+    syncPatchStocks(world)
+    recordEvent(world,kind,count?`Drought removed ${count} food.`:'Drought found no food to remove.',count)
+    return count
+  }
+  const available=Math.max(0,MAX_POPULATION-world.creatures.filter(creature=>creature.alive).length)
+  const count=Math.min(8,available)
+  for(let i=0;i<count;i++)world.creatures.push(makeCreature(world,{},undefined,true))
+  recordEvent(world,kind,count?`${count} new founders migrated into the population.`:'Migration was capped; the population is full.',count)
+  return count
+}
+
+export function getLineageAnalytics(world:World):LineageAnalytics{
+  const living=world.creatures.filter(creature=>creature.alive)
+  const counts=new Map<number,number>()
+  for(const creature of living)counts.set(creature.lineageId,(counts.get(creature.lineageId)??0)+1)
+  const topLineages=[...counts].map(([lineageId,count])=>({lineageId,count,share:living.length?count/living.length:0})).sort((a,b)=>b.count-a.count||a.lineageId-b.lineageId).slice(0,5)
+  const concentration=living.length?[...counts.values()].reduce((sum,count)=>sum+(count/living.length)**2,0):0
+  const latest=world.ledger.at(-1)
+  const delta=(after:number|null,before:number|null)=>after===null||before===null?null:after-before
+  return{livingLineages:counts.size,effectiveDiversity:concentration?1/concentration:0,topLineages,latestGeneration:latest?.generation??null,selectionShifts:traitKeys.map(trait=>({trait,survivor:latest?delta(latest.selection.survivor[trait].mean,latest.selection.start[trait].mean):null,reproducer:latest?delta(latest.selection.reproducer[trait].mean,latest.selection.start[trait].mean):null}))}
 }
 
 export function tick(world:World,dt:number,boundaryConfig?:Config){
@@ -93,6 +140,7 @@ export function tick(world:World,dt:number,boundaryConfig?:Config){
   for(const id of killed){const prey=byId.get(id);if(prey&&!prey.home){prey.alive=false;prey.deathCause='hunted'}}
   world.dayHunted+=killed.size
   if(advanced){const step=advanceResourceDynamics({patches:world.environment.patches},{ecologyMode:'energy-regrowth',patchCapacity:world.config.patchCapacity,foodRegrowthRate:effectiveFoodRegrowthRate(world.environment,world.config),foodPatchSpread:world.config.foodPatchSpread,maxFood:180},{seed:world.config.seed,generation:world.generation,dt,generationDuration:world.config.dayLength,currentFoodCount:world.food.length});world.environment.patches=step.state.patches;const produced=spawnRegrownFood(world,step.placements);world.food.push(...produced);world.dayFoodProduced+=produced.length}
+  if(world.inspectedIndividualId!==null&&!world.creatures.some(creature=>creature.alive&&creature.individualId===world.inspectedIndividualId))setInspectedIndividual(world,null)
   world.dayTime+=dt;world.tickIndex++
   if(world.dayTime>=world.config.dayLength){finishGeneration(world,boundaryConfig);return true}return false
 }
@@ -108,12 +156,12 @@ function mutate(world:World,value:number,trait:Trait){const c=world.config
 export function finishGeneration(world:World,boundaryConfig:Config=world.config){const start=[...world.creatures].sort((a,b)=>a.individualId-b.individualId),settlement=settleLifecycle(start,world.config,{seed:world.config.seed,generation:world.generation,maxPopulation:MAX_POPULATION}),survivors=settlement.survivors.map(item=>item.individual),birthParents=settlement.admittedParents,outcomes=settlement.outcomeCounts
   const next:Creature[]=settlement.survivors.map(({individual:c,nextAge,settledEnergy})=>makeCreature(world,{speed:c.speed,size:c.size,sense:c.sense,aggression:c.aggression,caution:c.caution,exploration:c.exploration,age:nextAge,energy:settledEnergy},{individualId:c.individualId,lineageId:c.lineageId,parentIndividualId:c.parentIndividualId,birthGeneration:c.birthGeneration}))
   for(const {parent:c,energy} of settlement.births){next.push(makeCreature(world,{speed:mutate(world,c.speed,'speed'),size:mutate(world,c.size,'size'),sense:mutate(world,c.sense,'sense'),aggression:mutate(world,c.aggression,'aggression'),caution:mutate(world,c.caution,'caution'),exploration:mutate(world,c.exploration,'exploration'),age:0,energy},{lineageId:c.lineageId,parentIndividualId:c.individualId,birthGeneration:world.generation+1}))}
-  const ledger:GenerationLedger={generation:world.generation,startPopulation:start.length,outcomes,foodAtStart:world.generationFoodStart,foodProduced:world.dayFoodProduced,foodConsumed:world.dayFoodConsumed,foodRemaining:world.food.length,preyConsumed:world.dayPreyConsumed,attackAttempts:world.dayAttackAttempts,attackSuccesses:world.dayAttackSuccesses,attackFailures:world.dayAttackFailures,birthsEligible:settlement.eligibleParents.length,birthsAdmitted:birthParents.length,birthsCapped:settlement.birthsCapped,selection:{start:selectionSummary(start),survivor:selectionSummary(survivors),reproducer:selectionSummary(birthParents)}}
+  const ledger:GenerationLedger={generation:world.generation,startPopulation:start.length,outcomes,foodAtStart:world.generationFoodStart,foodProduced:world.dayFoodProduced,foodRemoved:world.dayFoodRemoved,foodConsumed:world.dayFoodConsumed,foodRemaining:world.food.length,preyConsumed:world.dayPreyConsumed,attackAttempts:world.dayAttackAttempts,attackSuccesses:world.dayAttackSuccesses,attackFailures:world.dayAttackFailures,birthsEligible:settlement.eligibleParents.length,birthsAdmitted:birthParents.length,birthsCapped:settlement.birthsCapped,selection:{start:selectionSummary(start),survivor:selectionSummary(survivors),reproducer:selectionSummary(birthParents)}}
   world.ledger.push(ledger);if(world.ledger.length>MAX_HISTORY_POINTS)world.ledger=world.ledger.slice(-MAX_HISTORY_POINTS)
   world.lastReport={survived:outcomes.survived,born:birthParents.length,starved:outcomes.energy+outcomes.unfed+outcomes.late,hunted:outcomes.hunted,energy:outcomes.energy,unfed:outcomes.unfed,late:outcomes.late,aged:outcomes.aged,capped:ledger.birthsCapped}
   world.generation++;world.dayTime=0;world.tickIndex=0;world.creatures=next;if(world.inspectedIndividualId!==null&&!next.some(c=>c.individualId===world.inspectedIndividualId))world.inspectedIndividualId=null
   const nextFoodBudget=advanceFoodBudget(world.environment,boundaryConfig,world.generation);if(boundaryConfig.ecologyMode==='classic'){world.food=spawnFood(world,nextFoodBudget,boundaryConfig);syncPatchStocks(world)}world.generationFoodStart=world.food.length;world.history.push(averages(world.creatures,world.generation-1));if(world.history.length>MAX_HISTORY_POINTS)world.history=world.history.slice(-MAX_HISTORY_POINTS)
-  world.dayHunted=0;world.dayFoodProduced=0;world.dayFoodConsumed=0;world.dayPreyConsumed=0;world.dayAttackAttempts=0;world.dayAttackSuccesses=0;world.dayAttackFailures=0
+  world.dayHunted=0;world.dayFoodProduced=0;world.dayFoodRemoved=0;world.dayFoodConsumed=0;world.dayPreyConsumed=0;world.dayAttackAttempts=0;world.dayAttackSuccesses=0;world.dayAttackFailures=0
 }
 export function runGeneration(world:World,boundaryConfig?:Config){const target=world.generation;let guard=0;while(world.generation===target&&guard++<10000)tick(world,SIMULATION_TIMESTEP,boundaryConfig)}
 export function getStats(world:World){const p=averages(world.creatures.filter(c=>c.alive),world.generation);return{...p,avgSpeed:p.avgSpeed??0,avgSize:p.avgSize??0,avgSense:p.avgSense??0,avgAggression:p.avgAggression??0,avgCaution:p.avgCaution??0,avgExploration:p.avgExploration??0,avgEnergy:p.avgEnergy??0,avgAge:p.avgAge??0}}

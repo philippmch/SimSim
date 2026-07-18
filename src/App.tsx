@@ -1,12 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { ArenaCanvas } from './components/ArenaCanvas'
 import { BehaviorHistory, Histogram, HistoryChart, summarizeDistribution } from './components/Charts'
-import { createWorld, getModeCounts, getStats } from './simulation/engine'
-import { defaultConfig, sanitizeConfig } from './simulation/config'
+import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
+import { defaultConfig,MAX_FOOD,MAX_POPULATION, sanitizeConfig } from './simulation/config'
 import { createController } from './simulation/controller'
 import type { SimulationController } from './simulation/controller'
 import { experimentUrl,exportExperiment,importExperiment,loadInitialConfig,MAX_EXPERIMENT_TEXT,persistExperiment } from './simulation/share'
-import type { BiologicalTrait,Config, World } from './simulation/types'
+import type { BiologicalTrait,Config,InterventionKind, World } from './simulation/types'
 
 const ExperimentPanel=lazy(()=>import('./components/ExperimentPanel').then(module=>({default:module.ExperimentPanel})))
 
@@ -52,8 +52,9 @@ function App(){
   const resumeOnVisibleRef=useRef(false)
   const stats=getStats(world)
   const modes=getModeCounts(world)
+  const lineage=getLineageAnalytics(world)
   const lastLedger=world.ledger.at(-1)
-  const selected=world.creatures.find(c=>c.individualId===selectedIndividualId)
+  const selected=world.creatures.find(c=>c.individualId===selectedIndividualId&&c.alive)
   const distribution=summarizeDistribution(world.creatures.filter(c=>c.alive).map(c=>c[distributionTrait]))
   const update=<K extends keyof Config>(key:K,value:Config[K])=>setDraft(c=>({...c,[key]:value}))
   const closeSettings=useCallback(()=>setSettingsOpen(false),[])
@@ -62,6 +63,7 @@ function App(){
   const reset=useCallback(()=>{const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}controllerRef.current?.send({type:'reset',config:clean});setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
   const step=()=>{setPlaying(false);controllerRef.current?.send({type:'finish'})}
   const selectIndividual=(individualId:number|null)=>{setSelectedIndividualId(individualId);controllerRef.current?.send({type:'inspect',individualId})}
+  const intervene=(kind:InterventionKind)=>{controllerRef.current?.send({type:'intervene',kind});setActionStatus(kind==='resource-bloom'?'Resource bloom released.':kind==='drought'?'Drought applied.':'Founder migration released.')}
 
   useEffect(()=>{const controller=createController(initialRef.current,w=>{setWorld(w);setRevision(n=>n+1)},()=>setRuntimeMode('fallback'));controllerRef.current=controller;setRuntimeMode(controller.mode);return()=>{controller.dispose();controllerRef.current=null}},[])
 
@@ -95,6 +97,7 @@ function App(){
   useEffect(()=>{const visibility=()=>{if(document.hidden){resumeOnVisibleRef.current=playingRef.current;if(resumeOnVisibleRef.current)controllerRef.current?.send({type:'pause'})}else{const shouldResume=resumeOnVisibleRef.current&&playingRef.current&&!extinctRef.current;resumeOnVisibleRef.current=false;if(shouldResume)controllerRef.current?.send({type:'play'})}};document.addEventListener('visibilitychange',visibility);return()=>document.removeEventListener('visibilitychange',visibility)},[])
 
   useEffect(()=>{if(extinct)setPlaying(false)},[extinct])
+  useEffect(()=>{if(selectedIndividualId!==null&&!world.creatures.some(creature=>creature.alive&&creature.individualId===selectedIndividualId)){setSelectedIndividualId(null);controllerRef.current?.send({type:'inspect',individualId:null})}},[world,selectedIndividualId])
 
   const historyStart=world.history.at(-40)?.generation??0
   const historyEnd=world.history.at(-1)?.generation??0
@@ -111,7 +114,7 @@ function App(){
           <ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual}/>
           <div className="arena-badge">GENERATION {world.generation}<small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} food · ${world.environment.patches.reduce((sum,patch)=>sum+patch.stock,0)} patch stock`:`${world.food.length} / ${Math.round(world.environment.foodBudget)} seasonal food`}</small></div>
           <div className="legend"><span>Creature speed</span><i/><small>slower</small><small>faster</small></div>
-          {extinct&&<div className="extinct" role="status"><strong>Population extinct</strong><span>Increase food or energy, then restart the run.</span></div>}
+          {extinct&&<div className="extinct" role="status"><strong>Population extinct</strong><span>Use Founder migration to rescue this run, or adjust the parameters and restart.</span></div>}
         </div>
         {selected&&<section className="inspector" aria-label={`Selected individual ${selected.individualId}`}>
           <div className="inspector-head"><div><h2>Individual {selected.individualId}</h2><p>Lineage {selected.lineageId} · parent {selected.parentIndividualId??'founder'} · born generation {selected.birthGeneration}</p></div><button onClick={()=>selectIndividual(null)} aria-label="Close individual inspector">×</button></div>
@@ -125,6 +128,13 @@ function App(){
           <div className="day-progress" role="progressbar" aria-label="Current generation progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(world.dayTime/world.config.dayLength*100)}><i style={{width:`${world.dayTime/world.config.dayLength*100}%`}}/></div>
           <label className="speed-select">Playback speed <select value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value={.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option><option value={4}>4×</option></select></label>
           <button className="reset" onClick={reset}>{dirty?'Apply & restart':'Restart run'}</button>
+        </div>
+        <div className="interventions" role="group" aria-label="Live ecological interventions">
+          <span><strong>Live shocks</strong><small>No restart needed</small></span>
+          <button onClick={()=>intervene('resource-bloom')} disabled={world.food.length>=MAX_FOOD} title={world.food.length>=MAX_FOOD?'Food is at the safety cap':'Add a deterministic pulse of food'}>Resource bloom</button>
+          <button onClick={()=>intervene('drought')} disabled={!world.food.length} title={!world.food.length?'There is no food to remove':'Remove 40% of current food'}>Drought</button>
+          <button onClick={()=>intervene('founder-migration')} disabled={living>=MAX_POPULATION} title={living>=MAX_POPULATION?'Population is at the safety cap':'Add up to eight genetically varied founders'}>Founder migration</button>
+          <output aria-live="polite">{world.events.at(-1)?.summary??'The ecosystem is undisturbed.'}</output>
         </div>
         {dirty&&<div className="pending" role="status">Changes are staged and will take effect when you choose <strong>Apply &amp; restart</strong>.</div>}
 
@@ -141,13 +151,21 @@ function App(){
             <strong>Behavior genes</strong><span>Aggression <b>{stats.avgAggression.toFixed(2)}</b></span><span>Caution <b>{stats.avgCaution.toFixed(2)}</b></span><span>Exploration <b>{stats.avgExploration.toFixed(2)}</b></span>
           </div>
           <div className="mode-line" aria-label="Current behavior modes"><strong>Current modes</strong><span>{modes.exploring} exploring</span><span>{modes.foraging} foraging</span><span>{modes.hunting} hunting</span><span>{modes.fleeing} fleeing</span><span>{modes.returning} returning</span></div>
-          <div className="ecology-line" aria-label="Current model and energy statistics"><strong>{world.config.ecologyMode==='energy-regrowth'?'Ecological model':'Classic model'}</strong><span>{world.config.perceptionMode} perception</span><span>{world.config.predationMode} predation</span><span>mean energy <b>{stats.avgEnergy.toFixed(1)}</b></span><span>mean age <b>{stats.avgAge.toFixed(1)}</b></span><span>{world.dayFoodProduced} food regrown today</span></div>
+          <div className="ecology-line" aria-label="Current model and energy statistics"><strong>{world.config.ecologyMode==='energy-regrowth'?'Ecological model':'Classic model'}</strong><span>{world.config.perceptionMode} perception</span><span>{world.config.predationMode} predation</span><span>mean energy <b>{stats.avgEnergy.toFixed(1)}</b></span><span>mean age <b>{stats.avgAge.toFixed(1)}</b></span><span>{world.dayFoodProduced} food added today</span>{world.dayFoodRemoved>0&&<span>{world.dayFoodRemoved} removed by drought</span>}</div>
           <div className="outcome-line" role="status">
             <strong>Previous generation</strong>
             {world.generation===1?<span>No outcome yet</span>:<>
               <span><b>{world.lastReport.survived}</b> survived</span><span><b>{world.lastReport.born}</b> born</span><span><b>{world.lastReport.hunted}</b> hunted</span><span><b>{world.lastReport.energy}</b> energy</span>{world.lastReport.aged>0&&<span><b>{world.lastReport.aged}</b> aged</span>}<span><b>{world.lastReport.unfed}</b> unfed</span><span><b>{world.lastReport.late}</b> late</span>{lastLedger&&<span><b>{lastLedger.attackSuccesses}/{lastLedger.attackAttempts}</b> attacks won</span>}{world.lastReport.capped>0&&<span><b>{world.lastReport.capped}</b> births capped</span>}
             </>}
           </div>
+          <section className="evolution-story" aria-labelledby="evolution-story-title">
+            <div className="story-head"><div><h2 id="evolution-story-title">Evolution story</h2><p>Who remains, and which traits selection favored most recently.</p></div><dl><div><dt>Living lineages</dt><dd>{lineage.livingLineages}</dd></div><div><dt>Effective diversity</dt><dd>{lineage.effectiveDiversity.toFixed(2)}</dd></div></dl></div>
+            <div className="story-grid">
+              <div><h3>Leading lineages</h3>{lineage.topLineages.length?<ol>{lineage.topLineages.map(item=><li key={item.lineageId}><span>Lineage {item.lineageId}</span><b>{item.count}</b><small>{Math.round(item.share*100)}%</small><i style={{width:`${item.share*100}%`}}/></li>)}</ol>:<p>No living lineages.</p>}</div>
+              <div><h3>{lineage.latestGeneration===null?'Selection shifts':'Selection shifts · generation '+lineage.latestGeneration}</h3>{lineage.latestGeneration===null?<p>Finish a generation to compare starters, survivors, and reproducers.</p>:<ul>{[...lineage.selectionShifts].sort((a,b)=>Math.max(Math.abs(b.survivor??0),Math.abs(b.reproducer??0))-Math.max(Math.abs(a.survivor??0),Math.abs(a.reproducer??0))).slice(0,4).map(shift=><li key={shift.trait}><strong>{shift.trait}</strong><span>survivors {shift.survivor===null?'—':`${shift.survivor>=0?'+':''}${shift.survivor.toFixed(3)}`}</span><span>reproducers {shift.reproducer===null?'—':`${shift.reproducer>=0?'+':''}${shift.reproducer.toFixed(3)}`}</span></li>)}</ul>}</div>
+              <div className="event-story"><h3>Latest ecosystem events</h3>{world.events.length?<ul>{world.events.slice(-3).reverse().map((event,index)=><li key={`${event.generation}-${event.day}-${event.kind}-${index}`}><span>Gen {event.generation} · day {event.day.toFixed(1)}</span><strong>{event.summary}</strong></li>)}</ul>:<p>Use a live shock to begin an intervention timeline.</p>}</div>
+            </div>
+          </section>
           <div className="insights">
             <div className="chart-card histogram-card"><div className="card-head"><div><h2>Current trait distribution</h2><p>Mean {distribution.mean.toFixed(2)} · median {distribution.median.toFixed(2)} · IQR {distribution.iqr.toFixed(2)} · SD {distribution.sd.toFixed(2)}</p></div><label className="metric-select">Metric <select value={distributionTrait} onChange={e=>setDistributionTrait(e.target.value as BiologicalTrait)}>{(['speed','size','sense','aggression','caution','exploration']as BiologicalTrait[]).map(trait=><option key={trait}>{trait}</option>)}</select></label></div><Histogram world={world} trait={distributionTrait}/></div>
             <div className="chart-card history-card"><div className="card-head"><div><h2>Generational history</h2><p>Separate scales keep unlike measures honest</p></div>{world.history.length>1&&<span>Gen {historyStart}–{historyEnd}</span>}</div><HistoryChart world={world}/></div>

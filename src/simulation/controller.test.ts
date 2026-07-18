@@ -1,6 +1,6 @@
 import{afterEach,describe,expect,it,vi}from'vitest'
 import{controllerEventIsCurrent,createController,fallbackController}from'./controller'
-import{createWorld,defaultConfig}from'./engine'
+import{applyIntervention,createWorld,defaultConfig}from'./engine'
 import type{WorkerCommand,WorkerEvent}from'./protocol'
 
 class FakeWorker{
@@ -24,5 +24,40 @@ describe('controller failover and ordering',()=>{
     const current=createWorld(resetConfig);current.generation=4;worker.emit({type:'snapshot',world:current,epoch:2});expect(observed.generation).toBe(4)
     worker.fail();expect(fallbacks).toBe(1);expect(observed.generation).toBe(4);expect(observed.config.seed).toBe(202)
     worker.emit({type:'snapshot',world:stale,epoch:1});expect(observed.generation).toBe(4);controller.dispose()
+  })
+  it('tags intervention commands so worker snapshots can acknowledge them',()=>{
+    vi.stubGlobal('Worker',FakeWorker as unknown as typeof Worker);const controller=createController(defaultConfig,()=>{},()=>{}),worker=FakeWorker.instances[0]
+    controller.send({type:'intervene',kind:'resource-bloom'})
+    expect(worker.sent.at(-1)).toEqual({type:'intervene',kind:'resource-bloom',commandId:1})
+    controller.dispose()
+  })
+  it('replays only unacknowledged interventions during worker failover',()=>{
+    vi.stubGlobal('Worker',FakeWorker as unknown as typeof Worker);let observed=createWorld(defaultConfig)
+    const controller=createController(defaultConfig,world=>{observed=structuredClone(world)},()=>{}),worker=FakeWorker.instances[0]
+    const baseline=createWorld(defaultConfig);worker.emit({type:'snapshot',world:baseline,epoch:1,lastCommandId:0})
+    controller.send({type:'intervene',kind:'resource-bloom'})
+    worker.fail()
+    expect(observed.events).toHaveLength(1)
+    expect(observed.events[0].kind).toBe('resource-bloom')
+    controller.dispose()
+  })
+  it('does not replay an intervention acknowledged by the latest worker snapshot',()=>{
+    vi.stubGlobal('Worker',FakeWorker as unknown as typeof Worker);let observed=createWorld(defaultConfig)
+    const controller=createController(defaultConfig,world=>{observed=structuredClone(world)},()=>{}),worker=FakeWorker.instances[0]
+    const applied=createWorld(defaultConfig);applyIntervention(applied,'resource-bloom')
+    controller.send({type:'intervene',kind:'resource-bloom'})
+    worker.emit({type:'snapshot',world:applied,epoch:1,lastCommandId:1})
+    worker.fail()
+    expect(observed.events).toHaveLength(1)
+    controller.dispose()
+  })
+  it('applies intervention commands and emits snapshots in fallback mode',()=>{
+    const snapshots:ReturnType<typeof createWorld>[]=[]
+    const controller=fallbackController({...defaultConfig,seed:303},world=>snapshots.push(structuredClone(world)))
+    const before=snapshots.at(-1)!.food.length
+    controller.send({type:'intervene',kind:'resource-bloom'})
+    expect(snapshots.at(-1)!.food.length).toBeGreaterThan(before)
+    expect(snapshots.at(-1)!.events.at(-1)).toMatchObject({kind:'resource-bloom'})
+    controller.dispose()
   })
 })

@@ -56,12 +56,18 @@ export type BiologicalTrait='speed'|'size'|'sense'|'aggression'|'caution'|'explo
 export interface TraitMoments{mean:number|null;variance:number|null;sd:number|null}
 export type SelectionSummary=Record<BiologicalTrait,TraitMoments>
 export type EndCause='survived'|'hunted'|'energy'|'unfed'|'late'|'aged'
-export interface GenerationLedger{generation:number;startPopulation:number;outcomes:Record<EndCause,number>;foodAtStart:number;foodProduced:number;foodConsumed:number;foodRemaining:number;preyConsumed:number;attackAttempts:number;attackSuccesses:number;attackFailures:number;birthsEligible:number;birthsAdmitted:number;birthsCapped:number;selection:{start:SelectionSummary;survivor:SelectionSummary;reproducer:SelectionSummary}}
+export interface GenerationLedger{generation:number;startPopulation:number;outcomes:Record<EndCause,number>;foodAtStart:number;foodProduced:number;foodRemoved:number;foodConsumed:number;foodRemaining:number;preyConsumed:number;attackAttempts:number;attackSuccesses:number;attackFailures:number;birthsEligible:number;birthsAdmitted:number;birthsCapped:number;selection:{start:SelectionSummary;survivor:SelectionSummary;reproducer:SelectionSummary}}
+export type InterventionKind='resource-bloom'|'drought'|'founder-migration'
+export interface WorldEvent{generation:number;day:number;kind:InterventionKind;summary:string;count:number}
+export interface LineageShare{lineageId:number;count:number;share:number}
+export interface SelectionShift{trait:BiologicalTrait;survivor:number|null;reproducer:number|null}
+export interface LineageAnalytics{livingLineages:number;effectiveDiversity:number;topLineages:LineageShare[];latestGeneration:number|null;selectionShifts:SelectionShift[]}
 export interface World {
   config:Config;generation:number;dayTime:number;tickIndex:number
   creatures:Creature[];food:Food[];history:HistoryPoint[];environment:Environment
   rngState:number;nextId:number;dayHunted:number
   nextIndividualId:number;nextLineageId:number;inspectedIndividualId:number|null
-  dayFoodProduced:number;dayFoodConsumed:number;dayPreyConsumed:number;dayAttackAttempts:number;dayAttackSuccesses:number;dayAttackFailures:number;generationFoodStart:number;ledger:GenerationLedger[]
+  dayFoodProduced:number;dayFoodRemoved:number;dayFoodConsumed:number;dayPreyConsumed:number;dayAttackAttempts:number;dayAttackSuccesses:number;dayAttackFailures:number;generationFoodStart:number;ledger:GenerationLedger[]
+  events:WorldEvent[]
   lastReport:{survived:number;born:number;starved:number;hunted:number;energy:number;unfed:number;late:number;aged:number;capped:number}
 }
