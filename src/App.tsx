@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { ArenaCanvas } from './components/ArenaCanvas'
+import { ArenaCanvas, CREATURE_STATE_METADATA } from './components/ArenaCanvas'
+import type { CreatureState } from './components/ArenaCanvas'
 import { BehaviorHistory, Histogram, HistoryChart, summarizeDistribution } from './components/Charts'
 import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
 import { defaultConfig,MAX_FOOD,MAX_POPULATION, sanitizeConfig } from './simulation/config'
@@ -9,6 +10,7 @@ import { experimentUrl,exportExperiment,importExperiment,loadInitialConfig,MAX_E
 import type { BiologicalTrait,Config,InterventionKind, World } from './simulation/types'
 
 const ExperimentPanel=lazy(()=>import('./components/ExperimentPanel').then(module=>({default:module.ExperimentPanel})))
+const creatureStates=Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]
 
 const copyConfig=(c:Config):Config=>({...c})
 
@@ -52,6 +54,8 @@ function App(){
   const resumeOnVisibleRef=useRef(false)
   const stats=getStats(world)
   const modes=getModeCounts(world)
+  const activeModeTotal=Object.values(modes).reduce((sum,count)=>sum+count,0)
+  const stateCounts:Record<CreatureState,number>={safe:living-activeModeTotal,...modes}
   const lineage=getLineageAnalytics(world)
   const lastLedger=world.ledger.at(-1)
   const selected=world.creatures.find(c=>c.individualId===selectedIndividualId&&c.alive)
@@ -113,12 +117,15 @@ function App(){
         <div className="arena-wrap">
           <ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual}/>
           <div className="arena-badge">GENERATION {world.generation}<small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} food · ${world.environment.patches.reduce((sum,patch)=>sum+patch.stock,0)} patch stock`:`${world.food.length} / ${Math.round(world.environment.foodBudget)} seasonal food`}</small></div>
-          <div className="legend"><span>Creature speed</span><i/><small>slower</small><small>faster</small></div>
+          <div className="arena-keys">
+            <div className="state-key" role="group" aria-label="Creature action outline key"><strong>Outline = action · body color = speed</strong>{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/>{metadata.label}</span>)}</div>
+            <div className="legend"><span>Body color = speed</span><i/><small>slower</small><small>faster</small></div>
+          </div>
           {extinct&&<div className="extinct" role="status"><strong>Population extinct</strong><span>Use Founder migration to rescue this run, or adjust the parameters and restart.</span></div>}
         </div>
         {selected&&<section className="inspector" aria-label={`Selected individual ${selected.individualId}`}>
           <div className="inspector-head"><div><h2>Individual {selected.individualId}</h2><p>Lineage {selected.lineageId} · parent {selected.parentIndividualId??'founder'} · born generation {selected.birthGeneration}</p></div><button onClick={()=>selectIndividual(null)} aria-label="Close individual inspector">×</button></div>
-          <div className="inspector-grid"><dl><div><dt>Age</dt><dd>{selected.age} generations</dd></div><div><dt>Energy</dt><dd>{selected.energy.toFixed(1)}</dd></div><div><dt>Food</dt><dd>{selected.food}{world.config.ecologyMode==='classic'?' / 2':' collected'}</dd></div><div><dt>State</dt><dd>{selected.home?'Safe at home':selected.mode}</dd></div><div><dt>Target</dt><dd>{selected.targetType??'none'} {selected.targetId??''}</dd></div><div><dt>Attack ready</dt><dd>{selected.attackCooldownUntil<=world.dayTime?'now':`in ${(selected.attackCooldownUntil-world.dayTime).toFixed(2)}s`}</dd></div><div><dt>Memory</dt><dd>food {selected.memory.foodX===null?'none':'active'} · threat {selected.memory.threatX===null?'none':'active'}</dd></div></dl><dl>{(['speed','size','sense','aggression','caution','exploration']as BiologicalTrait[]).map(trait=><div key={trait}><dt>{trait}</dt><dd>{selected[trait].toFixed(3)}</dd></div>)}</dl></div>
+          <div className="inspector-grid"><dl><div><dt>Age</dt><dd>{selected.age} generations</dd></div><div><dt>Energy</dt><dd>{selected.energy.toFixed(1)}</dd></div><div><dt>Food</dt><dd>{selected.food}{world.config.ecologyMode==='classic'?' / 2':' collected'}</dd></div><div><dt>State</dt><dd>{CREATURE_STATE_METADATA[selected.home?'safe':selected.mode].label}</dd></div><div><dt>Target</dt><dd>{selected.targetType??'none'} {selected.targetId??''}</dd></div><div><dt>Attack ready</dt><dd>{selected.attackCooldownUntil<=world.dayTime?'now':`in ${(selected.attackCooldownUntil-world.dayTime).toFixed(2)}s`}</dd></div><div><dt>Memory</dt><dd>food {selected.memory.foodX===null?'none':'active'} · threat {selected.memory.threatX===null?'none':'active'}</dd></div></dl><dl>{(['speed','size','sense','aggression','caution','exploration']as BiologicalTrait[]).map(trait=><div key={trait}><dt>{trait}</dt><dd>{selected[trait].toFixed(3)}</dd></div>)}</dl></div>
           {selected.perceptionDiagnostics&&<div className="perception-summary" role="group" aria-label="Selected creature perception telemetry"><strong>Perception window {selected.perceptionDiagnostics.reactionWindow}</strong><span>Creatures {selected.perceptionDiagnostics.creatures.detected}/{selected.perceptionDiagnostics.creatures.total}</span><span>Food {selected.perceptionDiagnostics.food.detected}/{selected.perceptionDiagnostics.food.total}</span><span>Missed: {selected.perceptionDiagnostics.creatures.fov+selected.perceptionDiagnostics.food.fov} view · {selected.perceptionDiagnostics.creatures.occlusion+selected.perceptionDiagnostics.food.occlusion} blocked · {selected.perceptionDiagnostics.creatures.detection+selected.perceptionDiagnostics.food.detection} uncertain</span></div>}
           {selected.decisionSummary&&<div className="utility-breakdown"><strong>Decision: {selected.decisionSummary.chosen}</strong><span>{selected.decisionSummary.reason}</span><table><thead><tr><th>Candidate</th><th>Score</th><th>Reason</th></tr></thead><tbody>{selected.decisionSummary.candidates.map((candidate,i)=><tr key={`${candidate.type}-${candidate.targetId}-${i}`}><td>{candidate.type}</td><td>{candidate.score.toFixed(2)}</td><td>{candidate.reason}</td></tr>)}</tbody></table></div>}
         </section>}
@@ -150,7 +157,7 @@ function App(){
           <div className="behavior-summary" aria-label="Live behavior gene averages">
             <strong>Behavior genes</strong><span>Aggression <b>{stats.avgAggression.toFixed(2)}</b></span><span>Caution <b>{stats.avgCaution.toFixed(2)}</b></span><span>Exploration <b>{stats.avgExploration.toFixed(2)}</b></span>
           </div>
-          <div className="mode-line" aria-label="Current behavior modes"><strong>Current modes</strong><span>{modes.exploring} exploring</span><span>{modes.foraging} foraging</span><span>{modes.hunting} hunting</span><span>{modes.fleeing} fleeing</span><span>{modes.returning} returning</span></div>
+          <div className="mode-line activity-line" aria-label={`What creatures are doing now. ${living} living creatures total.`}><strong>What creatures are doing now</strong>{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/><b>{stateCounts[state]}</b> {metadata.label.toLowerCase()}</span>)}</div>
           <div className="ecology-line" aria-label="Current model and energy statistics"><strong>{world.config.ecologyMode==='energy-regrowth'?'Ecological model':'Classic model'}</strong><span>{world.config.perceptionMode} perception</span><span>{world.config.predationMode} predation</span><span>mean energy <b>{stats.avgEnergy.toFixed(1)}</b></span><span>mean age <b>{stats.avgAge.toFixed(1)}</b></span><span>{world.dayFoodProduced} food added today</span>{world.dayFoodRemoved>0&&<span>{world.dayFoodRemoved} removed by drought</span>}</div>
           <div className="outcome-line" role="status">
             <strong>Previous generation</strong>

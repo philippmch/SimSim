@@ -1,8 +1,19 @@
 import { useEffect, useRef } from 'react'
 import type React from 'react'
-import type { World } from '../simulation/types'
+import type { Mode, World } from '../simulation/types'
 
 interface Props { world: World; revision: number;selectedIndividualId:number|null;onSelect:(individualId:number|null)=>void }
+
+export type CreatureState = 'safe'|Mode
+
+export const CREATURE_STATE_METADATA = {
+  safe:{label:'Safe at home',color:'#f8fafc'},
+  exploring:{label:'Exploring',color:'#38bdf8'},
+  foraging:{label:'Finding food',color:'#fde047'},
+  hunting:{label:'Hunting prey',color:'#fb7185'},
+  fleeing:{label:'Fleeing danger',color:'#c084fc'},
+  returning:{label:'Going home',color:'#4ade80'}
+} as const satisfies Record<CreatureState,{label:string;color:string}>
 
 function speedColor(speed: number) {
   const t=Math.max(0,Math.min(1,(speed-.55)/1.15))
@@ -59,14 +70,17 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect}:Props
       const sorted=[...world.creatures].filter(c=>c.alive).sort((a,b)=>a.y-b.y)
       for(const c of sorted){
         const x=sx(c.x),y=sy(c.y),base=Math.max(7,Math.min(w,h)*.017*c.size), height=base*1.55
+        const state=CREATURE_STATE_METADATA[c.home?'safe':c.mode]
         ctx.fillStyle='rgba(22,38,30,.16)';ctx.beginPath();ctx.ellipse(x,y+base*.46,base*.9,base*.3,0,0,Math.PI*2);ctx.fill()
         if(selected&&c.individualId!==selected.individualId&&c.lineageId===selected.lineageId){ctx.strokeStyle='rgba(242,201,76,.46)';ctx.lineWidth=1.5;ctx.setLineDash([2,3]);ctx.beginPath();ctx.arc(x,y-height*.35,base*1.35,0,Math.PI*2);ctx.stroke();ctx.setLineDash([])}
         if(c.individualId===selectedIndividualId){ctx.strokeStyle='#f2c94c';ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y-height*.35,base*1.5,0,Math.PI*2);ctx.stroke()}
         const orientation=Math.hypot(c.vx,c.vy)>.001?Math.atan2(c.vy,c.vx):c.angle
         ctx.save();ctx.translate(x,y);ctx.rotate(orientation+Math.PI/2)
-        if(c.returning){ctx.strokeStyle='rgba(255,255,255,.7)';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(0,-height*.15,base*1.15,0,Math.PI*2);ctx.stroke()}
         const g=ctx.createLinearGradient(-base,-height,base,base*.45);g.addColorStop(0,'rgba(255,255,255,.35)');g.addColorStop(.25,speedColor(c.speed));g.addColorStop(1,'#304b35')
-        ctx.fillStyle=g;ctx.beginPath();ctx.moveTo(-base*.78,base*.35);ctx.bezierCurveTo(-base*1.05,-height*.18,-base*.56,-height,0,-height);ctx.bezierCurveTo(base*.56,-height,base*1.05,-height*.18,base*.78,base*.35);ctx.quadraticCurveTo(0,base*.65,-base*.78,base*.35);ctx.fill()
+        const bodyPath=()=>{ctx.beginPath();ctx.moveTo(-base*.78,base*.35);ctx.bezierCurveTo(-base*1.05,-height*.18,-base*.56,-height,0,-height);ctx.bezierCurveTo(base*.56,-height,base*1.05,-height*.18,base*.78,base*.35);ctx.quadraticCurveTo(0,base*.65,-base*.78,base*.35);ctx.closePath()}
+        ctx.fillStyle=g;bodyPath();ctx.fill()
+        ctx.lineJoin='round';ctx.strokeStyle='rgba(12,29,23,.82)';ctx.lineWidth=4.8;bodyPath();ctx.stroke()
+        ctx.strokeStyle=state.color;ctx.lineWidth=2.6;bodyPath();ctx.stroke()
         const look=Math.cos(c.angle)*base*.1
         ctx.fillStyle='#132019';ctx.beginPath();ctx.arc(-base*.25+look,-height*.55,Math.max(1.2,base*.075),0,Math.PI*2);ctx.arc(base*.25+look,-height*.55,Math.max(1.2,base*.075),0,Math.PI*2);ctx.fill()
         if(c.food>0){ctx.fillStyle='#f2d45d';ctx.font=`600 ${Math.max(8,base*.55)}px system-ui`;ctx.textAlign='center';ctx.fillText(String(c.food),0,base*.15)}
@@ -80,10 +94,14 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect}:Props
   },[world,revision,selectedIndividualId])
   useEffect(()=>{const canvas=ref.current;if(!canvas||typeof ResizeObserver==='undefined')return;const observer=new ResizeObserver(()=>drawRef.current());observer.observe(canvas);return()=>observer.disconnect()},[])
   const chooseAt=(event:React.MouseEvent<HTMLCanvasElement>)=>{const canvas=ref.current;if(!canvas)return;const rect=canvas.getBoundingClientRect(),pad=Math.max(20,Math.min(rect.width,rect.height)*.055),x=(event.clientX-rect.left-pad)/(rect.width-pad*2),y=(event.clientY-rect.top-pad)/(rect.height-pad*2);let best:World['creatures'][number]|undefined,bestD=.05;for(const c of world.creatures.filter(c=>c.alive)){const d=Math.hypot(c.x-x,c.y-y);if(d<bestD){best=c;bestD=d}}onSelect(best?.individualId??null)}
+  const livingCreatures=world.creatures.filter(c=>c.alive)
+  const stateCounts:Record<CreatureState,number>={safe:0,exploring:0,foraging:0,hunting:0,fleeing:0,returning:0}
+  for(const creature of livingCreatures)stateCounts[creature.home?'safe':creature.mode]++
+  const stateSummary=(Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]).map(([state,metadata])=>`${stateCounts[state]} ${metadata.label.toLowerCase()}`).join(', ')
   const resourceLabel=world.config.ecologyMode==='energy-regrowth'?`${world.food.length} food available and ${world.environment.patches.reduce((sum,patch)=>sum+patch.stock,0)} total stock across ${world.environment.patches.length} regrowing patches`:`${world.food.length} food remaining from a ${Math.round(world.environment.foodBudget)}-item generation pulse across ${world.environment.patches.length} patches`
-  return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={`Simulation arena, generation ${world.generation}, ${world.creatures.filter(c=>c.alive).length} living creatures, ${resourceLabel}, and ${world.environment.obstacles.length} obstacles. Click a creature or use the inspector list to select it.`}>
+  return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={`Simulation arena, generation ${world.generation}, ${livingCreatures.length} living creatures: ${stateSummary}. ${resourceLabel}, and ${world.environment.obstacles.length} obstacles. Creature body color shows speed and the bright body outline shows its current action. Click a creature or use the inspector list to select it.`}>
     Natural selection simulation arena. Live counts are available in the statistics region.
-  </canvas><label className="creature-picker">Inspect <select value={selectedIndividualId??''} onChange={e=>onSelect(e.target.value?Number(e.target.value):null)}><option value="">No creature selected</option>{[...world.creatures].filter(c=>c.alive).sort((a,b)=>a.individualId-b.individualId).map(c=><option key={c.individualId} value={c.individualId}>Individual {c.individualId}, lineage {c.lineageId}, {c.mode}</option>)}</select></label></>
+  </canvas><label className="creature-picker">Inspect <select value={selectedIndividualId??''} onChange={e=>onSelect(e.target.value?Number(e.target.value):null)}><option value="">No creature selected</option>{livingCreatures.sort((a,b)=>a.individualId-b.individualId).map(c=><option key={c.individualId} value={c.individualId}>Individual {c.individualId}, lineage {c.lineageId}, {CREATURE_STATE_METADATA[c.home?'safe':c.mode].label}</option>)}</select></label></>
 }
 
 export { speedColor }
