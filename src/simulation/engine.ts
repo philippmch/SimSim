@@ -17,6 +17,8 @@ function edgePoint(world:World){const edge=Math.floor(random(world)*4),p=.04+ran
 const emptyMemory=()=>({foodX:null,foodY:null,foodUntil:0,threatX:null,threatY:null,threatUntil:0})
 const traitKeys:BiologicalTrait[]=['speed','size','sense','aggression','caution','exploration']
 const MAX_WORLD_EVENTS=60
+const traitRanges:Record<BiologicalTrait,number>={speed:2.5,size:2.5,sense:.565,aggression:1,caution:1,exploration:1}
+const traitDirections:Record<BiologicalTrait,readonly [string,string]>={speed:['slower','faster'],size:['smaller','larger'],sense:['narrower-sensing','broader-sensing'],aggression:['less aggressive','more aggressive'],caution:['less cautious','more cautious'],exploration:['less exploratory','more exploratory']}
 export function summarizeValues(values:number[]){if(!values.length)return{mean:null,variance:null,sd:null};const mean=values.reduce((a,b)=>a+b,0)/values.length,variance=values.reduce((sum,value)=>sum+(value-mean)**2,0)/values.length;return{mean,variance,sd:Math.sqrt(variance)}}
 function selectionSummary(creatures:Creature[]):SelectionSummary{return Object.fromEntries(traitKeys.map(key=>[key,summarizeValues(creatures.map(c=>c[key]))])) as SelectionSummary}
 function founderValue(world:World,value:number,variation:number,min:number,max:number,multiplicative=true){if(!variation)return value;const noise=random(world)+random(world)+random(world)+random(world)-2;return clamp(multiplicative?value*(1+noise*variation):value+noise*variation,min,max)}
@@ -94,6 +96,37 @@ export function getLineageAnalytics(world:World):LineageAnalytics{
   const latest=world.ledger.at(-1)
   const delta=(after:number|null,before:number|null)=>after===null||before===null?null:after-before
   return{livingLineages:counts.size,effectiveDiversity:concentration?1/concentration:0,topLineages,latestGeneration:latest?.generation??null,selectionShifts:traitKeys.map(trait=>({trait,survivor:latest?delta(latest.selection.survivor[trait].mean,latest.selection.start[trait].mean):null,reproducer:latest?delta(latest.selection.reproducer[trait].mean,latest.selection.start[trait].mean):null}))}
+}
+
+type SelectionSignal={trait:BiologicalTrait;direction:string;effect:number;cohort:'survivor'|'reproducer'}
+function strongestSelectionSignal(ledger:GenerationLedger,cohort:SelectionSignal['cohort']):SelectionSignal|null{
+  let strongest:SelectionSignal|null=null
+  for(const trait of traitKeys){
+    const start=ledger.selection.start[trait],after=ledger.selection[cohort][trait]
+    if(start.mean===null||start.sd===null||after.mean===null)continue
+    const change=after.mean-start.mean,range=traitRanges[trait]
+    if(start.sd<range*.005||Math.abs(change)<range*.005)continue
+    const effect=change/start.sd
+    if(Math.abs(effect)<.2||strongest&&Math.abs(effect)<=Math.abs(strongest.effect))continue
+    strongest={trait,direction:traitDirections[trait][effect<0?0:1],effect,cohort}
+  }
+  return strongest
+}
+
+/** Turns the latest selection moments into one cautious, comparable plain-language takeaway. */
+export function getSelectionTakeaway(ledger:GenerationLedger|undefined){
+  if(!ledger)return'Finish a generation to see which traits stood out.'
+  if(ledger.outcomes.survived===0)return`Generation ${ledger.generation} ended with no survivors, so there is no trait shift to compare.`
+  const survivor=strongestSelectionSignal(ledger,'survivor'),reproducer=ledger.birthsAdmitted?strongestSelectionSignal(ledger,'reproducer'):null
+  if(!survivor&&!reproducer)return`Generation ${ledger.generation}: trait averages stayed close to the starting population; no single trait stood out.${ledger.birthsAdmitted?'':' No offspring were born.'}`
+  if(survivor&&reproducer&&survivor.trait===reproducer.trait&&Math.sign(survivor.effect)===Math.sign(reproducer.effect)){
+    const direction=survivor.direction[0].toUpperCase()+survivor.direction.slice(1)
+    return`Generation ${ledger.generation}: ${direction} creatures stood out among both survivors and parents of newborns.`
+  }
+  const signal=!survivor?reproducer:!reproducer?survivor:Math.abs(survivor.effect)>=Math.abs(reproducer.effect)?survivor:reproducer
+  const magnitude=Math.abs(signal!.effect)<.5?'slightly':Math.abs(signal!.effect)<1?'noticeably':'substantially'
+  const subject=signal!.cohort==='survivor'?'survivors':'parents of newborns'
+  return`Generation ${ledger.generation}: ${subject} were ${magnitude} ${signal!.direction} on average than the starting population.${ledger.birthsAdmitted?'':' No offspring were born.'}`
 }
 
 export function tick(world:World,dt:number,boundaryConfig?:Config){

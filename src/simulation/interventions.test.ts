@@ -1,5 +1,5 @@
 import{describe,expect,it}from'vitest'
-import{applyIntervention,createWorld,finishGeneration,getLineageAnalytics,setInspectedIndividual,SIMULATION_TIMESTEP,tick}from'./engine'
+import{applyIntervention,createWorld,finishGeneration,getLineageAnalytics,getSelectionTakeaway,setInspectedIndividual,SIMULATION_TIMESTEP,tick}from'./engine'
 import{defaultConfig,MAX_FOOD,MAX_POPULATION}from'./config'
 import type{GenerationLedger,SelectionSummary}from'./types'
 
@@ -61,5 +61,32 @@ describe('lineage analytics',()=>{
     expect(result.selectionShifts[0].trait).toBe('speed')
     expect(result.selectionShifts[0].survivor).toBeCloseTo(.1)
     expect(result.selectionShifts[0].reproducer).toBeCloseTo(-.1)
+  })
+})
+
+describe('selection takeaway',()=>{
+  const selectionLedger=(survivorSpeed:number|null,reproducerSpeed:number|null,births=1,survived=2)=>{
+    const result=ledger(1,survivorSpeed??1,reproducerSpeed??1)
+    result.outcomes.survived=survived
+    result.birthsAdmitted=births
+    result.selection.start.speed={mean:1,variance:.01,sd:.1}
+    result.selection.survivor.speed=survivorSpeed===null?{mean:null,variance:null,sd:null}:{mean:survivorSpeed,variance:.01,sd:.1}
+    result.selection.reproducer.speed=reproducerSpeed===null?{mean:null,variance:null,sd:null}:{mean:reproducerSpeed,variance:.01,sd:.1}
+    return result
+  }
+
+  it('combines the same survivor and newborn-parent signal',()=>{
+    expect(getSelectionTakeaway(selectionLedger(1.08,1.07))).toBe('Generation 3: Faster creatures stood out among both survivors and parents of newborns.')
+  })
+
+  it('reports only the stronger cohort when signals conflict',()=>{
+    expect(getSelectionTakeaway(selectionLedger(1.03,.92))).toBe('Generation 3: parents of newborns were noticeably slower on average than the starting population.')
+  })
+
+  it('avoids overclaiming weak shifts and explains missing cohorts',()=>{
+    expect(getSelectionTakeaway(selectionLedger(1.01,1.01,0))).toBe('Generation 3: trait averages stayed close to the starting population; no single trait stood out. No offspring were born.')
+    expect(getSelectionTakeaway(selectionLedger(1.08,null,0))).toBe('Generation 3: survivors were noticeably faster on average than the starting population. No offspring were born.')
+    expect(getSelectionTakeaway(selectionLedger(null,null,0,0))).toBe('Generation 3 ended with no survivors, so there is no trait shift to compare.')
+    expect(getSelectionTakeaway(undefined)).toBe('Finish a generation to see which traits stood out.')
   })
 })

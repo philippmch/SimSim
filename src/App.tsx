@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { ArenaCanvas, CREATURE_STATE_METADATA } from './components/ArenaCanvas'
 import type { CreatureState } from './components/ArenaCanvas'
 import { BehaviorHistory, Histogram, HistoryChart, summarizeDistribution } from './components/Charts'
-import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
+import { createWorld, getLineageAnalytics, getModeCounts, getSelectionTakeaway, getStats } from './simulation/engine'
 import { defaultConfig,MAX_FOOD,MAX_POPULATION, sanitizeConfig } from './simulation/config'
 import { createController } from './simulation/controller'
 import type { SimulationController } from './simulation/controller'
@@ -169,7 +169,7 @@ function App(){
             <div className="story-head"><div><h2 id="evolution-story-title">Evolution story</h2><p>Who remains, and which traits selection favored most recently.</p></div><dl><div><dt>Living lineages</dt><dd>{lineage.livingLineages}</dd></div><div><dt>Effective diversity</dt><dd>{lineage.effectiveDiversity.toFixed(2)}</dd></div></dl></div>
             <div className="story-grid">
               <div><h3>Leading lineages</h3>{lineage.topLineages.length?<ol>{lineage.topLineages.map(item=><li key={item.lineageId}><span>Lineage {item.lineageId}</span><b>{item.count}</b><small>{Math.round(item.share*100)}%</small><i style={{width:`${item.share*100}%`}}/></li>)}</ol>:<p>No living lineages.</p>}</div>
-              <div><h3>{lineage.latestGeneration===null?'Selection shifts':'Selection shifts · generation '+lineage.latestGeneration}</h3>{lineage.latestGeneration===null?<p>Finish a generation to compare starters, survivors, and reproducers.</p>:<ul>{[...lineage.selectionShifts].sort((a,b)=>Math.max(Math.abs(b.survivor??0),Math.abs(b.reproducer??0))-Math.max(Math.abs(a.survivor??0),Math.abs(a.reproducer??0))).slice(0,4).map(shift=><li key={shift.trait}><strong>{shift.trait}</strong><span>survivors {shift.survivor===null?'—':`${shift.survivor>=0?'+':''}${shift.survivor.toFixed(3)}`}</span><span>reproducers {shift.reproducer===null?'—':`${shift.reproducer>=0?'+':''}${shift.reproducer.toFixed(3)}`}</span></li>)}</ul>}</div>
+              <div><h3>{lineage.latestGeneration===null?'Selection shifts':'Selection shifts · generation '+lineage.latestGeneration}</h3><p>{getSelectionTakeaway(lastLedger)}</p>{lineage.latestGeneration!==null&&<ul>{lineage.selectionShifts.map(shift=><li key={shift.trait}><strong>{shift.trait}</strong><span>survivors {shift.survivor===null?'—':`${shift.survivor>=0?'+':''}${shift.survivor.toFixed(3)}`}</span><span>newborn parents {shift.reproducer===null?'—':`${shift.reproducer>=0?'+':''}${shift.reproducer.toFixed(3)}`}</span></li>)}</ul>}</div>
               <div className="event-story"><h3>Latest ecosystem events</h3>{world.events.length?<ul>{world.events.slice(-3).reverse().map((event,index)=><li key={`${event.generation}-${event.day}-${event.kind}-${index}`}><span>Gen {event.generation} · day {event.day.toFixed(1)}</span><strong>{event.summary}</strong></li>)}</ul>:<p>Use a live shock to begin an intervention timeline.</p>}</div>
             </div>
           </section>
