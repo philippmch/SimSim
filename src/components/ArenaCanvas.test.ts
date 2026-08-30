@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
+  ARENA_FOCUS_DIM_ALPHA,
+  ARENA_FOCUS_LABELS,
+  ARENA_FOCUS_OPTIONS,
   ARENA_HUNT_CONTACT_KEY,
   ARENA_PATCH_STOCK_KEY,
   ARENA_QUICK_START,
   ARENA_SELECTED_OVERLAY_KEY,
   arenaPlaybackStatus,
+  arenaCreatureAlpha,
+  arenaLineageRingAlpha,
   formatArenaAccessibleDescription,
   formatArenaDayProgress,
+  formatArenaFocusDescription,
   formatArenaOverlayDescription,
   formatSelectedTarget,
   showArenaQuickStart,
@@ -27,6 +33,37 @@ const descriptionInput = (overrides: Partial<ArenaAccessibleDescriptionInput> = 
 })
 
 describe('arena clarity helpers', () => {
+  it('offers stable action focus labels and keeps the selected creature visible', () => {
+    expect(ARENA_FOCUS_OPTIONS.map(option => option.label)).toEqual([
+      'All creatures',
+      'Safe at home',
+      'Exploring',
+      'Finding food',
+      'Hunting prey',
+      'Fleeing danger',
+      'Going home',
+    ])
+    expect(ARENA_FOCUS_OPTIONS.map(option => option.label)).toEqual(Object.values(ARENA_FOCUS_LABELS))
+    expect(arenaCreatureAlpha('all', 'hunting')).toBe(1)
+    expect(arenaCreatureAlpha('hunting', 'hunting')).toBe(1)
+    expect(arenaCreatureAlpha('hunting', 'foraging')).toBe(ARENA_FOCUS_DIM_ALPHA)
+    expect(arenaCreatureAlpha('hunting', 'foraging', true)).toBe(1)
+  })
+
+  it('keeps same-lineage relationship rings readable around dimmed bodies', () => {
+    expect(arenaCreatureAlpha('hunting', 'foraging')).toBe(ARENA_FOCUS_DIM_ALPHA)
+    expect(arenaLineageRingAlpha()).toBe(1)
+  })
+
+  it('describes whether action focus is dimming the rest of the arena', () => {
+    const all = formatArenaAccessibleDescription(descriptionInput({ focus: 'all' }))
+    expect(all).toContain(formatArenaFocusDescription('all'))
+    expect(all).not.toContain('dimmed')
+
+    const hunting = formatArenaAccessibleDescription(descriptionInput({ focus: 'hunting' }))
+    expect(hunting).toContain('Focus: Hunting prey; other creatures are dimmed.')
+  })
+
   it('gives extinction status precedence and formats day progress consistently', () => {
     expect(arenaPlaybackStatus(true, false)).toBe('Running')
     expect(arenaPlaybackStatus(false, false)).toBe('Paused')

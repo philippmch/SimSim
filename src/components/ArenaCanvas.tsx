@@ -2,9 +2,10 @@ import { useEffect, useRef } from 'react'
 import type React from 'react'
 import type { Mode, TargetType, World } from '../simulation/types'
 
-interface Props { world: World; revision: number;selectedIndividualId:number|null;onSelect:(individualId:number|null)=>void }
+interface Props { world: World; revision: number;selectedIndividualId:number|null;onSelect:(individualId:number|null)=>void;arenaFocus:ArenaFocus }
 
 export type CreatureState = 'safe'|Mode
+export type ArenaFocus = 'all'|CreatureState
 
 export type ArenaPlaybackStatus = 'Running'|'Paused'|'Extinct'
 
@@ -15,6 +16,40 @@ export const ARENA_QUICK_START = [
   'Try this: pause → inspect a creature → finish generation.',
   'Then change one parameter and restart to compare.',
 ] as const
+
+export const ARENA_FOCUS_LABELS = {
+  all:'All creatures',
+  safe:'Safe at home',
+  exploring:'Exploring',
+  foraging:'Finding food',
+  hunting:'Hunting prey',
+  fleeing:'Fleeing danger',
+  returning:'Going home',
+} as const satisfies Record<ArenaFocus,string>
+
+export const ARENA_FOCUS_OPTIONS = [
+  {value:'all',label:ARENA_FOCUS_LABELS.all},
+  {value:'safe',label:ARENA_FOCUS_LABELS.safe},
+  {value:'exploring',label:ARENA_FOCUS_LABELS.exploring},
+  {value:'foraging',label:ARENA_FOCUS_LABELS.foraging},
+  {value:'hunting',label:ARENA_FOCUS_LABELS.hunting},
+  {value:'fleeing',label:ARENA_FOCUS_LABELS.fleeing},
+  {value:'returning',label:ARENA_FOCUS_LABELS.returning},
+] as const
+
+export const ARENA_FOCUS_DIM_ALPHA = .24
+
+export function arenaCreatureAlpha(focus: ArenaFocus, state: CreatureState, selected = false): number {
+  return focus === 'all' || selected || focus === state ? 1 : ARENA_FOCUS_DIM_ALPHA
+}
+
+export function arenaLineageRingAlpha(): number {
+  return 1
+}
+
+export function formatArenaFocusDescription(focus: ArenaFocus): string {
+  return focus === 'all' ? 'All creatures are shown.' : `Focus: ${ARENA_FOCUS_LABELS[focus]}; other creatures are dimmed.`
+}
 
 export function showArenaQuickStart(completedGenerations: number): boolean {
   return completedGenerations === 0
@@ -65,6 +100,7 @@ export interface ArenaAccessibleDescriptionInput {
   ecologyMode: World['config']['ecologyMode']
   hasSelectedCreature: boolean
   selectedIsHunting?: boolean
+  focus?: ArenaFocus
 }
 
 export function formatArenaOverlayDescription(
@@ -86,10 +122,11 @@ export function formatArenaAccessibleDescription(input: ArenaAccessibleDescripti
     ? `${input.foodCount} food items distributed across ${input.patchCount} resource patches`
     : `${input.foodCount} food remaining from a ${Math.round(input.foodBudget)}-item generation pulse across ${input.patchCount} patches`
   const overlayDescription = formatArenaOverlayDescription(input.ecologyMode, input.hasSelectedCreature, input.selectedIsHunting)
+  const focusDescription = formatArenaFocusDescription(input.focus ?? 'all')
   const selectionHint = input.hasSelectedCreature
     ? ''
     : 'Select a creature to reveal its focus, sight, target, memory, and same-lineage overlays.'
-  return `Simulation arena, generation ${input.generation}, ${input.livingCreatures} living creatures: ${input.stateSummary}. ${resourceLabel}. ${input.obstacleCount} obstacles. ${overlayDescription ? `${overlayDescription} ` : ''}${selectionHint} Creature body color shows speed and the bright body outline shows its current action. Click a creature or use the inspector list to select it.`
+  return `Simulation arena, generation ${input.generation}, ${input.livingCreatures} living creatures: ${input.stateSummary}. ${resourceLabel}. ${input.obstacleCount} obstacles. ${overlayDescription ? `${overlayDescription} ` : ''}${focusDescription} ${selectionHint} Creature body color shows speed and the bright body outline shows its current action. Click a creature or use the inspector list to select it.`
 }
 
 export const CREATURE_STATE_METADATA = {
@@ -107,7 +144,7 @@ function speedColor(speed: number) {
   return `hsl(${hue} 58% ${42+t*14}%)`
 }
 
-export function ArenaCanvas({world,revision,selectedIndividualId,onSelect}:Props) {
+export function ArenaCanvas({world,revision,selectedIndividualId,onSelect,arenaFocus}:Props) {
   const ref=useRef<HTMLCanvasElement>(null)
   const drawRef=useRef<()=>void>(()=>{})
   useEffect(()=>{
@@ -156,9 +193,11 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect}:Props
       const sorted=[...world.creatures].filter(c=>c.alive).sort((a,b)=>a.y-b.y)
       for(const c of sorted){
         const x=sx(c.x),y=sy(c.y),base=Math.max(7,Math.min(w,h)*.017*c.size), height=base*1.55
-        const state=CREATURE_STATE_METADATA[c.home?'safe':c.mode]
+        const stateKey=c.home?'safe':c.mode
+        const state=CREATURE_STATE_METADATA[stateKey]
+        ctx.save();ctx.globalAlpha=arenaCreatureAlpha(arenaFocus,stateKey,c.individualId===selectedIndividualId)
         ctx.fillStyle='rgba(22,38,30,.16)';ctx.beginPath();ctx.ellipse(x,y+base*.46,base*.9,base*.3,0,0,Math.PI*2);ctx.fill()
-        if(selected&&c.individualId!==selected.individualId&&c.lineageId===selected.lineageId){ctx.strokeStyle='rgba(242,201,76,.46)';ctx.lineWidth=1.5;ctx.setLineDash([2,3]);ctx.beginPath();ctx.arc(x,y-height*.35,base*1.35,0,Math.PI*2);ctx.stroke();ctx.setLineDash([])}
+        if(selected&&c.individualId!==selected.individualId&&c.lineageId===selected.lineageId){ctx.save();ctx.globalAlpha=arenaLineageRingAlpha();ctx.strokeStyle='rgba(242,201,76,.46)';ctx.lineWidth=1.5;ctx.setLineDash([2,3]);ctx.beginPath();ctx.arc(x,y-height*.35,base*1.35,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);ctx.restore()}
         if(c.individualId===selectedIndividualId){ctx.strokeStyle='#f2c94c';ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y-height*.35,base*1.5,0,Math.PI*2);ctx.stroke()}
         const orientation=Math.hypot(c.vx,c.vy)>.001?Math.atan2(c.vy,c.vx):c.angle
         ctx.save();ctx.translate(x,y);ctx.rotate(orientation+Math.PI/2)
@@ -171,13 +210,14 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect}:Props
         ctx.fillStyle='#132019';ctx.beginPath();ctx.arc(-base*.25+look,-height*.55,Math.max(1.2,base*.075),0,Math.PI*2);ctx.arc(base*.25+look,-height*.55,Math.max(1.2,base*.075),0,Math.PI*2);ctx.fill()
         if(c.food>0){ctx.fillStyle='#f2d45d';ctx.font=`600 ${Math.max(8,base*.55)}px system-ui`;ctx.textAlign='center';ctx.fillText(String(c.food),0,base*.15)}
         ctx.restore()
+        ctx.restore()
       }
       const pct=Math.min(1,world.dayTime/world.config.dayLength)
       ctx.fillStyle='rgba(16,34,28,.16)';ctx.fillRect(pad,pad-9,w-pad*2,3)
       ctx.fillStyle='#d9b940';ctx.fillRect(pad,pad-9,(w-pad*2)*pct,3)
     }
     drawRef.current=draw;draw()
-  },[world,revision,selectedIndividualId])
+  },[world,revision,selectedIndividualId,arenaFocus])
   useEffect(()=>{const canvas=ref.current;if(!canvas||typeof ResizeObserver==='undefined')return;const observer=new ResizeObserver(()=>drawRef.current());observer.observe(canvas);return()=>observer.disconnect()},[])
   const chooseAt=(event:React.MouseEvent<HTMLCanvasElement>)=>{const canvas=ref.current;if(!canvas)return;const rect=canvas.getBoundingClientRect(),pad=Math.max(20,Math.min(rect.width,rect.height)*.055),x=(event.clientX-rect.left-pad)/(rect.width-pad*2),y=(event.clientY-rect.top-pad)/(rect.height-pad*2);let best:World['creatures'][number]|undefined,bestD=.05;for(const c of world.creatures.filter(c=>c.alive)){const d=Math.hypot(c.x-x,c.y-y);if(d<bestD){best=c;bestD=d}}onSelect(best?.individualId??null)}
   const livingCreatures=world.creatures.filter(c=>c.alive)
@@ -185,7 +225,7 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect}:Props
   const stateCounts:Record<CreatureState,number>={safe:0,exploring:0,foraging:0,hunting:0,fleeing:0,returning:0}
   for(const creature of livingCreatures)stateCounts[creature.home?'safe':creature.mode]++
   const stateSummary=(Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]).map(([state,metadata])=>`${stateCounts[state]} ${metadata.label.toLowerCase()}`).join(', ')
-  const accessibleDescription=formatArenaAccessibleDescription({generation:world.generation,livingCreatures:livingCreatures.length,stateSummary,foodCount:world.food.length,patchCount:world.environment.patches.length,foodBudget:world.environment.foodBudget,obstacleCount:world.environment.obstacles.length,ecologyMode:world.config.ecologyMode,hasSelectedCreature:Boolean(selected),selectedIsHunting:selected?.mode==='hunting'})
+  const accessibleDescription=formatArenaAccessibleDescription({generation:world.generation,livingCreatures:livingCreatures.length,stateSummary,foodCount:world.food.length,patchCount:world.environment.patches.length,foodBudget:world.environment.foodBudget,obstacleCount:world.environment.obstacles.length,ecologyMode:world.config.ecologyMode,hasSelectedCreature:Boolean(selected),selectedIsHunting:selected?.mode==='hunting',focus:arenaFocus})
   return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={accessibleDescription}>
     Natural selection simulation arena. Live counts are available in the statistics region.
   </canvas><label className="creature-picker">Inspect <select value={selectedIndividualId??''} onChange={e=>onSelect(e.target.value?Number(e.target.value):null)}><option value="">No creature selected</option>{livingCreatures.sort((a,b)=>a.individualId-b.individualId).map(c=><option key={c.individualId} value={c.individualId}>Individual {c.individualId}, lineage {c.lineageId}, {CREATURE_STATE_METADATA[c.home?'safe':c.mode].label}</option>)}</select></label></>
