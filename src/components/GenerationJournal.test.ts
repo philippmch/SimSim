@@ -89,6 +89,7 @@ describe('generation journal helpers',()=>{
   it('derives reconciled outcomes, resources, attacks, births, and selection text',()=>{
     const review=deriveGenerationReview(makeLedger(7))!
     expect(review.evaluatedPopulation).toBe(5)
+    expect(review).toMatchObject({nextPopulation:4,populationChange:-1})
     expect(review.outcomes.map(outcome=>outcome.label)).toEqual(['Survived','Hunted','Energy depleted','Returned without enough food','Missed return deadline','Old age'])
     expect(review.outcomes.reduce((sum,outcome)=>sum+outcome.count,0)).toBe(review.evaluatedPopulation)
     expect(review.resource).toMatchObject({start:12,produced:5,removed:3,consumed:4,remaining:10,expected:10,reconciled:true})
@@ -100,9 +101,15 @@ describe('generation journal helpers',()=>{
   it('makes extinction and no-birth reviews explicit',()=>{
     const review=deriveGenerationReview(makeLedger(8,{outcomes:{survived:0,hunted:1,energy:2,unfed:1,late:0,aged:1},birthsEligible:0,birthsAdmitted:0,birthsCapped:0,foodAtStart:0,foodProduced:0,foodRemoved:0,foodConsumed:0,foodRemaining:0}))!
     expect(review.survivors).toBe(0)
+    expect(review).toMatchObject({nextPopulation:0,populationChange:-5})
     expect(review.births).toEqual({eligible:0,admitted:0,capped:0})
     expect(review.takeaway).toContain('no survivors')
     expect(review.resource.reconciled).toBe(true)
+  })
+
+  it('makes growing and unchanged next-population equations exact',()=>{
+    expect(deriveGenerationReview(makeLedger(20,{outcomes:{survived:5,hunted:0,energy:0,unfed:0,late:0,aged:0},birthsAdmitted:2}))!).toMatchObject({evaluatedPopulation:5,nextPopulation:7,populationChange:2})
+    expect(deriveGenerationReview(makeLedger(21,{outcomes:{survived:4,hunted:1,energy:0,unfed:0,late:0,aged:0},birthsAdmitted:1}))!).toMatchObject({evaluatedPopulation:5,nextPopulation:5,populationChange:0})
   })
 
   it('finds one strong, descriptive outcome pattern against the evaluated cohort',()=>{

@@ -44,6 +44,8 @@ export interface PressureFingerprint {
 export interface GenerationReview {
   generation:number
   evaluatedPopulation:number
+  nextPopulation:number
+  populationChange:number
   outcomes:{cause:EndCause;label:string;count:number}[]
   survivors:number
   resource:{start:number;produced:number;removed:number;consumed:number;remaining:number;expected:number;reconciled:boolean}
@@ -161,6 +163,7 @@ export function derivePressureFingerprints(ledger:GenerationLedger|undefined):Pr
 /** Convert a ledger into the plain-language review shown by the journal. */
 export function deriveGenerationReview(ledger:GenerationLedger|undefined):GenerationReview|null{
   if(!ledger)return null
+  const nextPopulation=(ledger.outcomes.survived??0)+(ledger.birthsAdmitted??0)
   const resource={
     start:ledger.foodAtStart,
     produced:ledger.foodProduced,
@@ -172,6 +175,8 @@ export function deriveGenerationReview(ledger:GenerationLedger|undefined):Genera
   return{
     generation:ledger.generation,
     evaluatedPopulation:ledger.startPopulation,
+    nextPopulation,
+    populationChange:nextPopulation-ledger.startPopulation,
     outcomes:JOURNAL_OUTCOME_KEYS.map(cause=>({cause,label:OUTCOME_LABELS[cause],count:ledger.outcomes[cause]??0})),
     survivors:ledger.outcomes.survived,
     resource:{...resource,reconciled:resource.expected===resource.remaining},
@@ -277,7 +282,7 @@ export function GenerationJournal({ledgers,events,requestedGeneration,onRequeste
     {!review?<p className="journal-empty" role="status">Finish a generation to open its review. The selector will retain up to the latest 40 completed generations.</p>:<>
       <div className="journal-context" role="status"><strong>Generation {review.generation}</strong><span>{selection.followsLatest?'Following latest completed generation':'Pinned historical review'}</span></div>
       <div className="story-grid journal-grid">
-        <div><h3>Population outcomes</h3><p className="journal-kicker">Evaluated cohort: <strong>{review.evaluatedPopulation}</strong> creatures at settlement · each has one result</p><div className="utility-breakdown"><table><tbody>{review.outcomes.map(outcome=><tr key={outcome.cause}><th scope="row">{outcome.label}</th><td>{outcome.count}</td></tr>)}</tbody></table></div></div>
+        <div><h3>Population outcomes</h3><p className="journal-kicker">Evaluated cohort: <strong>{review.evaluatedPopulation}</strong> creatures at settlement · each has one result</p><p className="journal-equation"><strong>{review.evaluatedPopulation}</strong> evaluated → <strong>{review.survivors}</strong> survived + <strong>{review.births.admitted}</strong> newborns = <strong>{review.nextPopulation}</strong> next population ({review.populationChange===0?'no net change':`${review.populationChange>0?'+':''}${review.populationChange}`})</p><div className="utility-breakdown"><table><tbody>{review.outcomes.map(outcome=><tr key={outcome.cause}><th scope="row">{outcome.label}</th><td>{outcome.count}</td></tr>)}</tbody></table></div></div>
         <div><h3>Resource balance</h3><p className="journal-equation"><strong>{formatNumber(review.resource.start)}</strong> start + <strong>{formatNumber(review.resource.produced)}</strong> produced − <strong>{formatNumber(review.resource.removed)}</strong> drought removed − <strong>{formatNumber(review.resource.consumed)}</strong> consumed = <strong>{formatNumber(review.resource.remaining)}</strong> remaining</p><p className={review.resource.reconciled?'journal-check':'journal-warning'} role="status">{review.resource.reconciled?'✓ Resource count reconciles.':`Check resource count: expected ${formatNumber(review.resource.expected)}.`}</p><p className="journal-kicker">Survivors: <strong>{review.survivors}</strong></p></div>
         <div><h3>Attacks &amp; births</h3><div className="utility-breakdown"><table><tbody><tr><th scope="row">Attack attempts</th><td>{review.attacks.attempts}</td></tr><tr><th scope="row">Wins / failures</th><td>{review.attacks.wins} / {review.attacks.failures}</td></tr><tr><th scope="row">Prey consumed</th><td>{review.attacks.preyConsumed}</td></tr><tr><th scope="row">Eligible parents → admitted births</th><td>{review.births.eligible} → {review.births.admitted}</td></tr><tr><th scope="row">Births capped</th><td>{review.births.capped}</td></tr><tr><th scope="row">Parents of newborns</th><td>{review.births.admitted}</td></tr></tbody></table></div></div>
       </div>
