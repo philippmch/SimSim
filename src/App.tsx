@@ -2,7 +2,6 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { ARENA_PATCH_STOCK_KEY, ARENA_SELECTED_OVERLAY_KEY, ArenaCanvas, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress } from './components/ArenaCanvas'
 import type { CreatureState } from './components/ArenaCanvas'
 import { BehaviorHistory, buildHistoryTimeline, Histogram, HistoryChart, summarizeDistribution } from './components/Charts'
-import { GenerationJournal } from './components/GenerationJournal'
 import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
 import { defaultConfig,MAX_FOOD,MAX_POPULATION, sanitizeConfig } from './simulation/config'
 import { createController } from './simulation/controller'
@@ -11,6 +10,7 @@ import { experimentUrl,exportExperiment,importExperiment,loadInitialConfig,MAX_E
 import type { BiologicalTrait,Config,InterventionKind, World } from './simulation/types'
 
 const ExperimentPanel=lazy(()=>import('./components/ExperimentPanel').then(module=>({default:module.ExperimentPanel})))
+const GenerationJournal=lazy(()=>import('./components/GenerationJournal'))
 const creatureStates=Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]
 
 const copyConfig=(c:Config):Config=>({...c})
@@ -164,7 +164,7 @@ function App(){
           </div>
           <div className="mode-line activity-line" aria-label={`What creatures are doing now. ${living} living creatures total.`}><strong>What creatures are doing now</strong>{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/><b>{stateCounts[state]}</b> {metadata.label.toLowerCase()}</span>)}</div>
           <div className="ecology-line" aria-label="Current model and energy statistics"><strong>{world.config.ecologyMode==='energy-regrowth'?'Ecological model':'Classic model'}</strong><span>{world.config.perceptionMode} perception</span><span>{world.config.predationMode} predation</span><span>mean energy <b>{stats.avgEnergy.toFixed(1)}</b></span><span>mean age <b>{stats.avgAge.toFixed(1)}</b></span><span>{world.dayFoodProduced} food added today</span>{world.dayFoodRemoved>0&&<span>{world.dayFoodRemoved} removed by drought</span>}</div>
-          <GenerationJournal ledgers={world.ledger} events={world.events} requestedGeneration={requestedGeneration} onRequestedGenerationChange={setRequestedGeneration}/>
+          <Suspense fallback={<section className="evolution-story generation-journal" aria-busy="true"><p className="journal-empty" role="status">Opening generation journal…</p></section>}><GenerationJournal ledgers={world.ledger} events={world.events} requestedGeneration={requestedGeneration} onRequestedGenerationChange={setRequestedGeneration}/></Suspense>
           <section className="evolution-story" aria-labelledby="evolution-story-title">
             <div className="story-head"><div><h2 id="evolution-story-title">Current population · lineages</h2><p>Live lineage data: who is here now. Historical outcomes and selection live in the journal above.</p></div><dl><div><dt>Living lineages</dt><dd>{lineage.livingLineages}</dd></div><div><dt>Effective diversity</dt><dd>{lineage.effectiveDiversity.toFixed(2)}</dd></div></dl></div>
             <div className="story-grid">
