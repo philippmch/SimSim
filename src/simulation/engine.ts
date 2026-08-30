@@ -5,7 +5,7 @@ import { advanceFoodBudget,createEnvironment,effectiveFoodRegrowthRate,enforceAd
 import { decide,type Decision } from './behavior'
 import { proposeMotion } from './motion'
 import {defaultConfig,MAX_FOOD,MAX_HISTORY_POINTS,MAX_POPULATION,sanitizeConfig} from './config'
-import {perceiveCanonical} from './perception'
+import {perceiveCanonical,reactionWindowFor} from './perception'
 import {collectAttackClaims,resolveAttackClaims} from './predation'
 import {advanceResourceDynamics,consumeResourceStock} from './resourceDynamics'
 import {settleLifecycle} from './lifecycle'
@@ -137,6 +137,20 @@ export function getSelectionTakeaway(ledger:GenerationLedger|undefined){
   return`Generation ${ledger.generation}: ${subject} were ${magnitude} ${signal!.direction} on average than the evaluated cohort.${ledger.birthsAdmitted?'':' No offspring were born.'}`
 }
 
+/**
+ * Decide which parts of a creature's decision cycle need refreshing this tick.
+ *
+ * Realistic perception intentionally holds both the sampled local view and the
+ * resulting decision inside a reaction window. Inspected creatures are the
+ * exception: their view is refreshed continuously so the inspector stays
+ * useful even while their action is held. A newly inspected creature has no
+ * captured summary yet, so it also needs one decision pass immediately.
+ */
+export function scheduleDecision(perceptionMode:Config['perceptionMode'],currentReactionWindow:number,reactionWindow:number,inspected:boolean,hasDecisionSummary:boolean){
+  const shouldDecide=perceptionMode==='perfect'||currentReactionWindow!==reactionWindow||(inspected&&!hasDecisionSummary)
+  return{perceive:inspected||shouldDecide,decide:shouldDecide}
+}
+
 export function tick(world:World,dt:number,boundaryConfig?:Config){
   for(const creature of world.creatures)if(creature.individualId!==world.inspectedIndividualId){delete creature.decisionSummary;delete creature.perceptionDiagnostics}
   const advanced=world.config.ecologyMode==='energy-regrowth'
@@ -146,9 +160,16 @@ export function tick(world:World,dt:number,boundaryConfig?:Config){
   const decisions=new Map<number,Decision>()
   const reactionWindows=new Map<number,number>()
   const diagnostics=new Map<number,ReturnType<typeof perceiveCanonical>['diagnostics']>()
-  for(const c of snapshots){const seen=perceiveCanonical(c,snapshots,canonicalFood,world.environment.obstacles,world.config,world.generation,world.tickIndex,world.dayTime),window=seen.diagnostics.reactionWindow,react=world.config.perceptionMode==='perfect'||c.reactionWindow!==window
+  const reactionWindow=reactionWindowFor(world.config.reactionTime,world.tickIndex,world.dayTime)
+  for(const c of snapshots){
+    const inspected=c.individualId===world.inspectedIndividualId,schedule=scheduleDecision(world.config.perceptionMode,c.reactionWindow,reactionWindow,inspected,Boolean(c.decisionSummary))
     const held:Decision={id:c.id,targetX:c.targetX,targetY:c.targetY,targetId:c.targetId,targetType:c.targetType??'explore',mode:c.mode,memory:{...c.memory},commitUntil:c.commitUntil,wanderAngle:c.wanderAngle,wanderTurn:c.wanderTurn,summary:c.decisionSummary}
-    decisions.set(c.id,react?decide(c,seen.creatures,seen.food,world.config,world.dayTime,world.tickIndex,c.individualId===world.inspectedIndividualId):held);reactionWindows.set(c.id,window);if(c.individualId===world.inspectedIndividualId)diagnostics.set(c.id,seen.diagnostics)}
+    reactionWindows.set(c.id,reactionWindow)
+    if(!schedule.perceive){decisions.set(c.id,held);continue}
+    const seen=perceiveCanonical(c,snapshots,canonicalFood,world.environment.obstacles,world.config,world.generation,world.tickIndex,world.dayTime)
+    decisions.set(c.id,schedule.decide?decide(c,seen.creatures,seen.food,world.config,world.dayTime,world.tickIndex,inspected):held)
+    if(inspected)diagnostics.set(c.id,seen.diagnostics)
+  }
   const motions=new Map(snapshots.map(c=>[c.id,proposeMotion(c,decisions.get(c.id)!,world.config,world.environment.obstacles,dt)]))
   const byId=new Map(world.creatures.map(c=>[c.id,c]))
   for(const s of snapshots){const c=byId.get(s.id)!,d=decisions.get(s.id)!,m=motions.get(s.id)!

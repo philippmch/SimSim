@@ -1,11 +1,53 @@
 import { describe, expect, it } from 'vitest'
-import { buildInheritanceSummary, createWorld, defaultConfig, finishGeneration, getStats, runGeneration, setInspectedIndividual, SIMULATION_TIMESTEP, tick } from './engine'
+import { buildInheritanceSummary, createWorld, defaultConfig, finishGeneration, getStats, runGeneration, scheduleDecision, setInspectedIndividual, SIMULATION_TIMESTEP, tick } from './engine'
 import {CLASSIC_MODES, MAX_POPULATION} from './config'
 import type { BiologicalTrait } from './types'
 
 const traitValues=(speed:number,size:number,sense:number,aggression:number,caution:number,exploration:number):Record<BiologicalTrait,number>=>({speed,size,sense,aggression,caution,exploration})
 
 describe('selection simulation', () => {
+  it('schedules perception and decisions for every reaction branch',()=>{
+    expect(scheduleDecision('perfect',4,4,false,false)).toEqual({perceive:true,decide:true})
+    expect(scheduleDecision('realistic',3,3,false,false)).toEqual({perceive:false,decide:false})
+    expect(scheduleDecision('realistic',3,4,false,false)).toEqual({perceive:true,decide:true})
+    expect(scheduleDecision('realistic',3,3,true,true)).toEqual({perceive:true,decide:false})
+    expect(scheduleDecision('realistic',3,3,true,false)).toEqual({perceive:true,decide:true})
+    expect(scheduleDecision('realistic',3,4,true,true)).toEqual({perceive:true,decide:true})
+  })
+
+  it('captures a newly inspected decision and refreshes its held-window diagnostics',()=>{
+    const w=createWorld({...defaultConfig,initialPopulation:2,foodPerDay:0,perceptionMode:'realistic',reactionTime:1,fieldOfView:360,detectionFalloff:0,obstacleCount:0})
+    const [selected]=w.creatures
+    Object.assign(selected,{x:.5,y:.5,homeX:.05,homeY:.05,angle:0,sense:.4})
+    w.food=[{id:900,x:.7,y:.5,patchId:null,energy:22}]
+    tick(w,SIMULATION_TIMESTEP)
+    expect(selected.reactionWindow).toBe(0)
+    expect(selected.decisionSummary).toBeUndefined()
+    setInspectedIndividual(w,selected.individualId)
+    tick(w,SIMULATION_TIMESTEP)
+    const summary=selected.decisionSummary,firstDiagnostics=selected.perceptionDiagnostics
+    expect(summary).toBeDefined()
+    expect(firstDiagnostics).toMatchObject({mode:'realistic',reactionWindow:0,food:{total:1,detected:1}})
+    w.food=[]
+    tick(w,SIMULATION_TIMESTEP)
+    expect(selected.reactionWindow).toBe(0)
+    expect(selected.decisionSummary).toBe(summary)
+    expect(selected.perceptionDiagnostics).toMatchObject({mode:'realistic',reactionWindow:0,food:{total:0,detected:0}})
+    expect(selected.perceptionDiagnostics).not.toBe(firstDiagnostics)
+  })
+
+  it('holds an uninspected decision until the reaction window changes',()=>{
+    const w=createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0,perceptionMode:'realistic',reactionTime:1,obstacleCount:0})
+    const [creature]=w.creatures
+    creature.targetType='explore';creature.targetId=null;creature.mode='exploring'
+    tick(w,SIMULATION_TIMESTEP)
+    const held={targetType:creature.targetType,targetId:creature.targetId,targetX:creature.targetX,targetY:creature.targetY,mode:creature.mode}
+    w.food=[{id:901,x:.9,y:.9,patchId:null,energy:22}]
+    tick(w,SIMULATION_TIMESTEP)
+    expect(creature.reactionWindow).toBe(0)
+    expect({targetType:creature.targetType,targetId:creature.targetId,targetX:creature.targetX,targetY:creature.targetY,mode:creature.mode}).toEqual(held)
+  })
+
   it('is deterministic for a seed and configuration', () => {
     const config={...defaultConfig,seed:99,initialPopulation:16,foodPerDay:14}
     const a=createWorld(config), b=createWorld(config)
