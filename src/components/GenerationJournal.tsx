@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { getSelectionTakeaway, MAX_WORLD_EVENTS } from '../simulation/engine'
 import { END_CAUSES } from '../simulation/types'
 import type { BiologicalTrait, EndCause, GenerationLedger, SelectionSummary, WorldEvent } from '../simulation/types'
@@ -177,8 +177,9 @@ export const getJournalReview=deriveGenerationReview
 export interface GenerationJournalProps {
   ledgers:readonly GenerationLedger[]
   events:readonly WorldEvent[]
-  /** Increment this when a run is restarted so a stale pin cannot leak into the new run. */
-  resetKey?:number|string
+  /** Null follows the newest completed generation; a number pins a historical review. */
+  requestedGeneration:number|null
+  onRequestedGenerationChange:(generation:number|null)=>void
 }
 
 const formatNumber=(value:number)=>Number.isInteger(value)?String(value):value.toFixed(2)
@@ -198,8 +199,7 @@ export function formatAdaptivePair(first:number,second:number):[string,string]{
 
 const formatSignedEffect=(value:number)=>`${value>=0?'+':''}${value.toFixed(1)}`
 
-export function GenerationJournal({ledgers,events,resetKey}:GenerationJournalProps){
-  const [requestedGeneration,setRequestedGeneration]=useState<number|null>(null)
+export function GenerationJournal({ledgers,events,requestedGeneration,onRequestedGenerationChange}:GenerationJournalProps){
   const previousLatestGeneration=useRef<number|null>(null)
   const selection=useMemo(()=>resolveJournalSelection(ledgers,requestedGeneration),[ledgers,requestedGeneration])
   const selectedLedger=selection.entries.find(ledger=>ledger.generation===selection.selectedGeneration)
@@ -208,20 +208,18 @@ export function GenerationJournal({ledgers,events,resetKey}:GenerationJournalPro
   const eventReview=deriveJournalEvents(events,selection.selectedGeneration)
   const latestGeneration=selection.entries.at(-1)?.generation??null
 
-  useEffect(()=>{setRequestedGeneration(null)},[resetKey])
   useEffect(()=>{
     const previous=previousLatestGeneration.current
     previousLatestGeneration.current=latestGeneration
-    if(previous!==null&&latestGeneration!==null&&latestGeneration<previous)setRequestedGeneration(null)
-  },[latestGeneration])
+    if(previous!==null&&latestGeneration!==null&&latestGeneration<previous&&requestedGeneration!==null)onRequestedGenerationChange(null)
+  },[latestGeneration,onRequestedGenerationChange,requestedGeneration])
   useEffect(()=>{
-    if(requestedGeneration!==null&&selection.selectedGeneration!==requestedGeneration)setRequestedGeneration(selection.selectedGeneration)
-    else if(!selection.entries.length&&requestedGeneration!==null)setRequestedGeneration(null)
-  },[requestedGeneration,selection.entries.length,selection.selectedGeneration])
+    if(requestedGeneration!==null&&selection.selectedGeneration!==requestedGeneration)onRequestedGenerationChange(selection.selectedGeneration)
+  },[onRequestedGenerationChange,requestedGeneration,selection.entries.length,selection.selectedGeneration])
 
-  const chooseGeneration=(value:string)=>setRequestedGeneration(value===''?null:Number(value))
-  const pinCurrent=()=>setRequestedGeneration(pinCurrentGeneration(ledgers,requestedGeneration))
-  const followLatest=()=>setRequestedGeneration(null)
+  const chooseGeneration=(value:string)=>onRequestedGenerationChange(value===''?null:Number(value))
+  const pinCurrent=()=>onRequestedGenerationChange(pinCurrentGeneration(ledgers,requestedGeneration))
+  const followLatest=()=>onRequestedGenerationChange(null)
 
   return <section className="evolution-story generation-journal" aria-labelledby="generation-journal-title">
     <div className="story-head">
@@ -247,7 +245,7 @@ export function GenerationJournal({ledgers,events,resetKey}:GenerationJournalPro
       </div>
       <div className="journal-takeaway"><strong>Selection takeaway</strong><span>{review.takeaway}</span></div>
       {pressureFingerprints.length>0&&<div className="event-story journal-events pressure-patterns"><h3>Outcome trait patterns</h3><p className="journal-kicker">Compared with the evaluated cohort; associations are descriptive, not proof of cause.</p><ul>{pressureFingerprints.map(fingerprint=>{const comparison=fingerprint.comparison,means=comparison?formatAdaptivePair(comparison.outcomeMean,comparison.baselineMean):null;return <li key={fingerprint.cause}><span>{fingerprint.label} · n={fingerprint.count}</span>{comparison&&means?<strong>{comparison.traitLabel}: {means[0]} vs cohort {means[1]} ({comparison.direction})</strong>:<strong>Trait comparison unavailable.</strong>}<span>{fingerprint.interpretation}</span></li>})}</ul></div>}
-      <div className="event-story journal-events"><h3>Ecosystem events · generation {review.generation}</h3>{eventReview.events.length?<>{eventReview.status==='partial'&&<p className="journal-kicker">Showing retained events; earlier events from this generation may no longer be available.</p>}<ul>{eventReview.events.map((event,index)=><li key={`${event.generation}-${event.day}-${event.kind}-${index}`}><span>Day {event.day.toFixed(2)}</span><strong>{event.summary}</strong></li>)}</ul></>:<p className="journal-kicker">{eventReview.status==='unknown'?'No shocks retained for this generation.':'No shocks occurred in this generation.'}</p>}</div>
+      <div className="event-story journal-events"><h3>Ecosystem events · generation {review.generation}</h3>{eventReview.events.length?<>{eventReview.status==='partial'&&<p className="journal-kicker">Showing retained events; earlier events from this generation may no longer be available.</p>}<ul>{eventReview.events.map((event,index)=><li key={`${event.generation}-${event.day}-${event.kind}-${index}`}><span>Day {event.day.toFixed(2)}</span><strong>{event.summary}</strong></li>)}</ul></>:<p className="journal-kicker">{eventReview.status==='unknown'?'Event history is unavailable for this generation.':'No shocks occurred in this generation.'}</p>}</div>
     </>}
   </section>
 }

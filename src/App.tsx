@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { ArenaCanvas, CREATURE_STATE_METADATA } from './components/ArenaCanvas'
 import type { CreatureState } from './components/ArenaCanvas'
-import { BehaviorHistory, Histogram, HistoryChart, summarizeDistribution } from './components/Charts'
+import { BehaviorHistory, buildHistoryTimeline, Histogram, HistoryChart, summarizeDistribution } from './components/Charts'
 import { GenerationJournal } from './components/GenerationJournal'
 import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
 import { defaultConfig,MAX_FOOD,MAX_POPULATION, sanitizeConfig } from './simulation/config'
@@ -47,7 +47,7 @@ function App(){
   const [runtimeMode,setRuntimeMode]=useState<'worker'|'fallback'>('worker')
   const [distributionTrait,setDistributionTrait]=useState<BiologicalTrait>('speed')
   const [selectedIndividualId,setSelectedIndividualId]=useState<number|null>(null)
-  const [journalResetKey,setJournalResetKey]=useState(0)
+  const [requestedGeneration,setRequestedGeneration]=useState<number|null>(null)
   const dirty=JSON.stringify(draft)!==JSON.stringify(world.config)
   const living=world.creatures.filter(c=>c.alive).length
   const extinct=world.creatures.length===0
@@ -65,7 +65,7 @@ function App(){
   const closeSettings=useCallback(()=>setSettingsOpen(false),[])
   const closeExperiment=useCallback(()=>{setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
   const replayExperiment=useCallback((config:Config)=>{setDraft(sanitizeConfig(config));setActionStatus('Control seed staged. Choose Apply & restart to replay it live.');setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
-  const reset=useCallback(()=>{const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);setJournalResetKey(key=>key+1);persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}controllerRef.current?.send({type:'reset',config:clean});setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
+  const reset=useCallback(()=>{const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);setRequestedGeneration(null);persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}controllerRef.current?.send({type:'reset',config:clean});setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
   const step=()=>{setPlaying(false);controllerRef.current?.send({type:'finish'})}
   const selectIndividual=(individualId:number|null)=>{setSelectedIndividualId(individualId);controllerRef.current?.send({type:'inspect',individualId})}
   const intervene=(kind:InterventionKind)=>{controllerRef.current?.send({type:'intervene',kind});setActionStatus(kind==='resource-bloom'?'Resource bloom released.':kind==='drought'?'Drought applied.':'Founder migration released.')}
@@ -104,8 +104,9 @@ function App(){
   useEffect(()=>{if(extinct)setPlaying(false)},[extinct])
   useEffect(()=>{if(selectedIndividualId!==null&&!world.creatures.some(creature=>creature.alive&&creature.individualId===selectedIndividualId)){setSelectedIndividualId(null);controllerRef.current?.send({type:'inspect',individualId:null})}},[world,selectedIndividualId])
 
-  const historyStart=world.history.at(-40)?.generation??0
-  const historyEnd=world.history.at(-1)?.generation??0
+  const historyTimeline=buildHistoryTimeline(world.ledger,world.history,world.events)
+  const historyStart=historyTimeline[0]?.generation??0
+  const historyEnd=historyTimeline.at(-1)?.generation??0
   return <div className="app-shell">
     <header className="topbar" aria-hidden={experimentOpen||(settingsOpen&&isNarrow)||undefined}>
       <div className="brand"><div className="mark" aria-hidden="true">∿</div><div><h1>Evolution Field Lab</h1><p>Shape an ecosystem. Watch selection unfold.</p></div></div>
@@ -160,7 +161,7 @@ function App(){
           </div>
           <div className="mode-line activity-line" aria-label={`What creatures are doing now. ${living} living creatures total.`}><strong>What creatures are doing now</strong>{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/><b>{stateCounts[state]}</b> {metadata.label.toLowerCase()}</span>)}</div>
           <div className="ecology-line" aria-label="Current model and energy statistics"><strong>{world.config.ecologyMode==='energy-regrowth'?'Ecological model':'Classic model'}</strong><span>{world.config.perceptionMode} perception</span><span>{world.config.predationMode} predation</span><span>mean energy <b>{stats.avgEnergy.toFixed(1)}</b></span><span>mean age <b>{stats.avgAge.toFixed(1)}</b></span><span>{world.dayFoodProduced} food added today</span>{world.dayFoodRemoved>0&&<span>{world.dayFoodRemoved} removed by drought</span>}</div>
-          <GenerationJournal ledgers={world.ledger} events={world.events} resetKey={journalResetKey}/>
+          <GenerationJournal ledgers={world.ledger} events={world.events} requestedGeneration={requestedGeneration} onRequestedGenerationChange={setRequestedGeneration}/>
           <section className="evolution-story" aria-labelledby="evolution-story-title">
             <div className="story-head"><div><h2 id="evolution-story-title">Current population · lineages</h2><p>Live lineage data: who is here now. Historical outcomes and selection live in the journal above.</p></div><dl><div><dt>Living lineages</dt><dd>{lineage.livingLineages}</dd></div><div><dt>Effective diversity</dt><dd>{lineage.effectiveDiversity.toFixed(2)}</dd></div></dl></div>
             <div className="story-grid">
@@ -171,8 +172,8 @@ function App(){
           </section>
           <div className="insights">
             <div className="chart-card histogram-card"><div className="card-head"><div><h2>Current trait distribution</h2><p>Mean {distribution.mean.toFixed(2)} · median {distribution.median.toFixed(2)} · IQR {distribution.iqr.toFixed(2)} · SD {distribution.sd.toFixed(2)}</p></div><label className="metric-select">Metric <select value={distributionTrait} onChange={e=>setDistributionTrait(e.target.value as BiologicalTrait)}>{(['speed','size','sense','aggression','caution','exploration']as BiologicalTrait[]).map(trait=><option key={trait}>{trait}</option>)}</select></label></div><Histogram world={world} trait={distributionTrait}/></div>
-            <div className="chart-card history-card"><div className="card-head"><div><h2>Generational history</h2><p>Separate scales keep unlike measures honest</p></div>{world.history.length>1&&<span>Gen {historyStart}–{historyEnd}</span>}</div><HistoryChart world={world}/></div>
-            <div className="chart-card behavior-history-card"><div className="card-head"><div><h2>Behavior history</h2><p>Inherited tendencies, each on a 0–1 scale</p></div>{world.history.length>1&&<span>Gen {historyStart}–{historyEnd}</span>}</div><BehaviorHistory world={world}/></div>
+            <div className="chart-card history-card"><div className="card-head"><div><h2>Generational history</h2><p>Outcomes → next population; each row has its own scale</p></div>{historyTimeline.length>0&&<span>Gen {historyStart}–{historyEnd}</span>}</div><HistoryChart world={world} requestedGeneration={requestedGeneration} onSelectGeneration={setRequestedGeneration}/></div>
+            <div className="chart-card behavior-history-card"><div className="card-head"><div><h2>Behavior history</h2><p>Inherited tendencies in each next population, on a 0–1 scale</p></div>{historyTimeline.length>0&&<span>Gen {historyStart}–{historyEnd}</span>}</div><BehaviorHistory world={world} requestedGeneration={requestedGeneration}/></div>
           </div>
         </section>
       </section>

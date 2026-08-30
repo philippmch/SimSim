@@ -1,4 +1,5 @@
-import type { BiologicalTrait,World } from '../simulation/types'
+import { END_CAUSES } from '../simulation/types'
+import type { BiologicalTrait,EndCause,GenerationLedger,HistoryPoint,World,WorldEvent } from '../simulation/types'
 import { speedColor } from './ArenaCanvas'
 
 export const SPEED_HISTOGRAM_DOMAIN = {min:.3,max:2.8} as const
@@ -25,6 +26,60 @@ export function buildSpeedHistogram(values:number[],bins=12){
   }))
 }
 
+export const MAX_TIMELINE_ENTRIES=40
+
+export interface HistoryTimelineEntry {
+  generation:number
+  point:HistoryPoint|null
+  nextPopulation:number|null
+  nextMeanEnergy:number|null
+  nextMeanAge:number|null
+  births:number
+  outcomes:Record<EndCause,number>
+  retainedEvents:number
+}
+
+const timelineOutcomes=(ledger:GenerationLedger):Record<EndCause,number>=>Object.fromEntries(END_CAUSES.map(cause=>[cause,ledger.outcomes[cause]??0])) as Record<EndCause,number>
+
+/** Join retained generation ledgers to history by generation, not by array position. */
+export function buildHistoryTimeline(ledgers:readonly GenerationLedger[],history:readonly HistoryPoint[],events:readonly WorldEvent[],limit=MAX_TIMELINE_ENTRIES):HistoryTimelineEntry[]{
+  const bounded=Math.max(0,Math.floor(limit)),recent=bounded?ledgers.slice(-bounded):[]
+  return recent.map(ledger=>{
+    const point=history.find(candidate=>candidate.generation===ledger.generation)??null
+    return{generation:ledger.generation,point,nextPopulation:point?.population??null,nextMeanEnergy:point?.avgEnergy??null,nextMeanAge:point?.avgAge??null,births:ledger.birthsAdmitted,outcomes:timelineOutcomes(ledger),retainedEvents:events.filter(event=>event.generation===ledger.generation).length}
+  })
+}
+
+/** Resolve a shared scrubber value to the nearest retained generation. */
+export function resolveTimelineGeneration(entries:readonly HistoryTimelineEntry[],requestedGeneration:number|null){
+  if(!entries.length)return null
+  if(requestedGeneration===null)return entries.at(-1)!.generation
+  if(entries.some(entry=>entry.generation===requestedGeneration))return requestedGeneration
+  if(requestedGeneration<=entries[0].generation)return entries[0].generation
+  if(requestedGeneration>=entries.at(-1)!.generation)return entries.at(-1)!.generation
+  return entries.reduce((closest,entry)=>Math.abs(entry.generation-requestedGeneration)<Math.abs(closest.generation-requestedGeneration)?entry:closest).generation
+}
+
+const TIMELINE_OUTCOME_LABELS:Record<EndCause,string>={survived:'survived',hunted:'hunted',energy:'energy depleted',unfed:'returned unfed',late:'returned late',aged:'old age'}
+const timelineValue=(value:number|null)=>value===null||!Number.isFinite(value)?'unavailable':Number.isInteger(value)?String(value):value.toFixed(2).replace(/\.?0+$/,'')
+
+/** Concise text shared by the visible timeline summary and its range's aria-valuetext. */
+export function formatTimelineSummary(entry:HistoryTimelineEntry){
+  const outcomes=END_CAUSES.filter(cause=>entry.outcomes[cause]>0).map(cause=>`${entry.outcomes[cause]} ${TIMELINE_OUTCOME_LABELS[cause]}`).join(', ')
+  const events=entry.retainedEvents>0?`; ${entry.retainedEvents} retained ${entry.retainedEvents===1?'event':'events'}`:''
+  return`Generation ${entry.generation}: next population ${timelineValue(entry.nextPopulation)}, mean energy ${timelineValue(entry.nextMeanEnergy)}, mean age ${timelineValue(entry.nextMeanAge)}, ${entry.births} births${outcomes?`; outcomes ${outcomes}`:''}${events}`
+}
+
+export interface ChartCoordinate {x:number;y:number}
+
+/** Convert a finite history value to SVG coordinates without ever emitting NaN. */
+export function historyCoordinate(value:number|null,min:number,max:number,index:number,count:number,width=320,height=34,pad=3):ChartCoordinate|null{
+  if(value===null||!Number.isFinite(value)||!Number.isFinite(min)||!Number.isFinite(max)||!Number.isFinite(index)||count<1||width<=pad*2||height<=pad*2)return null
+  const range=max-min,normalized=range>0?Math.max(0,Math.min(1,(value-min)/range)):.5
+  const denominator=Math.max(1,count-1),x=count===1?width/2:pad+Math.max(0,Math.min(denominator,index))/denominator*(width-pad*2),y=height-pad-normalized*(height-pad*2)
+  return Number.isFinite(x)&&Number.isFinite(y)?{x,y}:null
+}
+
 export function Histogram({world,trait='speed'}:{world:World;trait?:BiologicalTrait}){
   const values=world.creatures.filter(c=>c.alive).map(c=>c[trait]), bins=trait==='speed'?buildSpeedHistogram(values):buildHistogram(values,traitDomains[trait])
   const peak=Math.max(1,...bins.map(bin=>bin.count))
@@ -35,60 +90,55 @@ export function Histogram({world,trait='speed'}:{world:World;trait?:BiologicalTr
   </div><table className="sr-only"><caption>{trait} distribution data</caption><thead><tr><th>Range</th><th>Creatures</th></tr></thead><tbody>{bins.map((bin,i)=><tr key={i}><td>{bin.lower.toFixed(2)} to {bin.upper.toFixed(2)}</td><td>{bin.count}</td></tr>)}</tbody></table></>
 }
 
-export function HistoryChart({world}:{world:World}){
-  const points=world.history.slice(-40)
-  if(points.length<2)return <div className="chart-empty">Complete one generation to begin the timeline.</div>
-  const popMax=Math.max(1,...points.map(p=>p.population))
-  const series:{label:string;short:string;values:(number|null)[];sdValues?:(number|null)[];min:number;max:number;decimals:number;className:string}[]=[
-    {label:'Population',short:'creatures',values:points.map(p=>p.population),min:0,max:popMax,decimals:0,className:'population-line'},
-    {label:'Speed',short:'mean',values:points.map(p=>p.avgSpeed),sdValues:points.map(p=>p.sdSpeed),min:.3,max:2.8,decimals:2,className:'speed-line'},
-    {label:'Size',short:'mean',values:points.map(p=>p.avgSize),sdValues:points.map(p=>p.sdSize),min:.3,max:2.8,decimals:2,className:'size-line'},
-    {label:'Sense',short:'mean',values:points.map(p=>p.avgSense),sdValues:points.map(p=>p.sdSense),min:.035,max:.6,decimals:2,className:'sense-line'},
-  ]
-  const w=320,h=34,pad=3
-  const path=(vals:(number|null)[],min:number,max:number)=>{
-    let drawing=false
-    return vals.map((v,i)=>{
-      if(v===null){drawing=false;return ''}
-      const command=drawing?'L':'M';drawing=true
-      return `${command} ${pad+i/(vals.length-1)*(w-pad*2)} ${h-pad-(v-min)/(max-min)*(h-pad*2)}`
-    }).join(' ')
-  }
-  const start=points[0].generation,end=points.at(-1)!.generation
-  return <><div className="history-facets" role="group" aria-label={`Evolution history from generation ${start} to ${end}. Each row uses its own labeled scale.`}>
-    {series.map(s=>{
-      const current=s.values.at(-1)??null
-      const sd=s.sdValues?.at(-1)??null,currentLabel=current===null?'No population':`${current.toFixed(s.decimals)} ${s.short}${sd===null?'':` · ±1 SD ${sd.toFixed(s.decimals)}`}`
-      const lower=s.sdValues?.map((spread,i)=>spread===null||s.values[i]===null?null:Math.max(s.min,s.values[i]!-spread))
-      const upper=s.sdValues?.map((spread,i)=>spread===null||s.values[i]===null?null:Math.min(s.max,s.values[i]!+spread))
-      return <div className="history-facet" key={s.label}>
-        <div className="facet-label"><strong>{s.label}</strong><span>{currentLabel}</span></div>
-        <svg viewBox={`0 0 ${w} ${h}`} role="img" aria-label={`${s.label}, ${current===null?'unavailable because the population is empty':`currently mean ${current.toFixed(s.decimals)}${sd===null?'':`, standard deviation ${sd.toFixed(s.decimals)}`}`}, shown from ${s.min.toFixed(s.decimals)} to ${s.max.toFixed(s.decimals)}.`}>
-          <path className="facet-grid" d={`M ${pad} ${h-pad} H ${w-pad}`}/>
-          {lower&&<path className="spread-line" d={path(lower,s.min,s.max)}/>}
-          {upper&&<path className="spread-line" d={path(upper,s.min,s.max)}/>}
-          <path className={s.className} d={path(s.values,s.min,s.max)}/>
-        </svg>
-        <small>{s.min.toFixed(s.decimals)}–{s.max.toFixed(s.decimals)}</small>
-      </div>
-    })}
-  </div><table className="sr-only"><caption>Generational trait history data</caption><thead><tr><th>Generation</th><th>Population</th><th>Speed mean</th><th>Speed SD</th><th>Size mean</th><th>Size SD</th><th>Sense mean</th><th>Sense SD</th></tr></thead><tbody>{points.map(p=><tr key={p.generation}><td>{p.generation}</td><td>{p.population}</td><td>{p.avgSpeed??'Unavailable'}</td><td>{p.sdSpeed??'Unavailable'}</td><td>{p.avgSize??'Unavailable'}</td><td>{p.sdSize??'Unavailable'}</td><td>{p.avgSense??'Unavailable'}</td><td>{p.sdSense??'Unavailable'}</td></tr>)}</tbody></table></>
+export interface HistoryChartProps {
+  world:World
+  requestedGeneration:number|null
+  onSelectGeneration:(generation:number)=>void
 }
 
-export function BehaviorHistory({world}:{world:World}){
-  const points=world.history.slice(-40)
-  if(points.length<2)return <div className="chart-empty behavior-empty">Complete one generation to begin the behavior timeline.</div>
-  const series=[
-    {label:'Aggression',values:points.map(p=>p.avgAggression),sdValues:points.map(p=>p.sdAggression),className:'aggression-line'},
-    {label:'Caution',values:points.map(p=>p.avgCaution),sdValues:points.map(p=>p.sdCaution),className:'caution-line'},
-    {label:'Exploration',values:points.map(p=>p.avgExploration),sdValues:points.map(p=>p.sdExploration),className:'exploration-line'},
+export function HistoryChart({world,requestedGeneration,onSelectGeneration}:HistoryChartProps){
+  const entries=buildHistoryTimeline(world.ledger,world.history,world.events),selectedGeneration=resolveTimelineGeneration(entries,requestedGeneration),selectedIndex=Math.max(0,entries.findIndex(entry=>entry.generation===selectedGeneration)),w=320,h=34,pad=3
+  if(!entries.length)return <div className="chart-empty">Complete one generation to begin the timeline.</div>
+  const populations=entries.map(entry=>entry.nextPopulation).filter((value):value is number=>value!==null&&Number.isFinite(value)),popMax=Math.max(1,...populations)
+  const series:{label:string;short:string;values:(number|null)[];sdValues?:(number|null)[];min:number;max:number;decimals:number;className:string}[]=[
+    {label:'Population',short:'creatures',values:entries.map(entry=>entry.nextPopulation),min:0,max:popMax,decimals:0,className:'population-line'},
+    {label:'Speed',short:'mean',values:entries.map(entry=>entry.point?.avgSpeed??null),sdValues:entries.map(entry=>entry.point?.sdSpeed??null),min:.3,max:2.8,decimals:2,className:'speed-line'},
+    {label:'Size',short:'mean',values:entries.map(entry=>entry.point?.avgSize??null),sdValues:entries.map(entry=>entry.point?.sdSize??null),min:.3,max:2.8,decimals:2,className:'size-line'},
+    {label:'Sense',short:'mean',values:entries.map(entry=>entry.point?.avgSense??null),sdValues:entries.map(entry=>entry.point?.sdSense??null),min:.035,max:.6,decimals:2,className:'sense-line'},
   ]
-  const w=320,h=34,pad=3
-  const path=(values:(number|null)[])=>{let drawing=false;return values.map((v,i)=>{if(v===null){drawing=false;return ''}const cmd=drawing?'L':'M';drawing=true;return`${cmd} ${pad+i/(values.length-1)*(w-pad*2)} ${h-pad-v*(h-pad*2)}`}).join(' ')}
-  return <><div className="history-facets behavior-facets" role="group" aria-label="Behavior gene history. Aggression, caution, and exploration are each shown on a zero to one scale.">
-    {series.map(s=>{const current=s.values.at(-1)??null,sd=s.sdValues.at(-1)??null,lower=s.values.map((value,i)=>value===null||s.sdValues[i]===null?null:Math.max(0,value-s.sdValues[i]!)),upper=s.values.map((value,i)=>value===null||s.sdValues[i]===null?null:Math.min(1,value+s.sdValues[i]!));return <div className="history-facet" key={s.label}>
-      <div className="facet-label"><strong>{s.label}</strong><span>{current===null?'No population':`${current.toFixed(2)} mean · ±1 SD ${sd?.toFixed(2)}`}</span></div>
-      <svg viewBox={`0 0 ${w} ${h}`} role="img" aria-label={`${s.label}, ${current===null?'unavailable':`currently mean ${current.toFixed(2)}, standard deviation ${sd?.toFixed(2)}`}, scale zero to one.`}><path className="facet-grid" d={`M ${pad} ${h-pad} H ${w-pad}`}/><path className="spread-line" d={path(lower)}/><path className="spread-line" d={path(upper)}/><path className={s.className} d={path(s.values)}/></svg><small>0.00–1.00</small>
+  const path=(vals:(number|null)[],min:number,max:number)=>{let drawing=false;return vals.map((value,index)=>{const point=historyCoordinate(value,min,max,index,vals.length,w,h,pad);if(!point){drawing=false;return ''}const command=drawing?'L':'M';drawing=true;return`${command} ${point.x} ${point.y}`}).join(' ')}
+  const start=entries[0].generation,end=entries.at(-1)!.generation,selectedX=historyCoordinate(0,0,1,selectedIndex,entries.length,w,h,pad)!.x,selectedEntry=entries[selectedIndex]
+  return <><div className="history-scrubber journal-controls" aria-label="History generation selector">
+    <label className="metric-select" htmlFor="history-generation">Inspect generation <input id="history-generation" type="range" min={0} max={Math.max(0,entries.length-1)} step={1} value={selectedIndex} disabled={entries.length<2} aria-valuetext={formatTimelineSummary(selectedEntry)} onChange={event=>{const entry=entries[Number(event.target.value)];if(entry)onSelectGeneration(entry.generation)}}/></label>
+    <output className="journal-equation">{formatTimelineSummary(selectedEntry)} · {requestedGeneration===null?'Following latest completed generation':`Pinned to generation ${selectedEntry.generation}`}</output>
+  </div><div className="history-facets" role="group" aria-label={`Evolution history from generation ${start} to ${end}. Selected generation ${selectedEntry.generation}. Each row uses its own labeled scale.`}>
+    {series.map(s=>{
+      const current=s.values[selectedIndex]??null,sd=s.sdValues?.[selectedIndex]??null,currentLabel=current===null?'Unavailable':`${current.toFixed(s.decimals)} ${s.short}${sd===null?'':` · ±1 SD ${sd.toFixed(s.decimals)}`}`,lower=s.sdValues?.map((spread,index)=>spread===null||s.values[index]===null?null:Math.max(s.min,s.values[index]!-spread)),upper=s.sdValues?.map((spread,index)=>spread===null||s.values[index]===null?null:Math.min(s.max,s.values[index]!+spread)),marker=historyCoordinate(current,s.min,s.max,selectedIndex,entries.length,w,h,pad)
+      return <div className="history-facet" key={s.label}>
+        <div className="facet-label"><strong>{s.label}</strong><span>Gen {selectedEntry.generation} · {currentLabel}</span></div>
+        <svg viewBox={`0 0 ${w} ${h}`} role="img" aria-label={`${s.label}, selected generation ${selectedEntry.generation}, ${current===null?'unavailable':`mean ${current.toFixed(s.decimals)}${sd===null?'':`, standard deviation ${sd.toFixed(s.decimals)}`}`}, shown from ${s.min.toFixed(s.decimals)} to ${s.max.toFixed(s.decimals)}.`}>
+          <path className="facet-grid" d={`M ${pad} ${h-pad} H ${w-pad}`}/><line className="history-cursor" x1={selectedX} x2={selectedX} y1={pad} y2={h-pad}/>
+          {lower&&<path className="spread-line" d={path(lower,s.min,s.max)}/>} {upper&&<path className="spread-line" d={path(upper,s.min,s.max)}/>} <path className={s.className} d={path(s.values,s.min,s.max)}/>{marker&&<circle className="history-point" cx={marker.x} cy={marker.y} r="3"/>}
+        </svg><small>{s.min.toFixed(s.decimals)}–{s.max.toFixed(s.decimals)}</small>
+      </div>
+    })}
+  </div><table className="sr-only"><caption>Generational trait history data</caption><thead><tr><th>Generation</th><th>Population</th><th>Speed mean</th><th>Speed SD</th><th>Size mean</th><th>Size SD</th><th>Sense mean</th><th>Sense SD</th></tr></thead><tbody>{entries.map(entry=><tr key={entry.generation}><td>{entry.generation}</td><td>{entry.nextPopulation??'Unavailable'}</td><td>{entry.point?.avgSpeed??'Unavailable'}</td><td>{entry.point?.sdSpeed??'Unavailable'}</td><td>{entry.point?.avgSize??'Unavailable'}</td><td>{entry.point?.sdSize??'Unavailable'}</td><td>{entry.point?.avgSense??'Unavailable'}</td><td>{entry.point?.sdSense??'Unavailable'}</td></tr>)}</tbody></table></>
+}
+
+export function BehaviorHistory({world,requestedGeneration}:{world:World;requestedGeneration:number|null}){
+  const entries=buildHistoryTimeline(world.ledger,world.history,world.events),selectedGeneration=resolveTimelineGeneration(entries,requestedGeneration),selectedIndex=Math.max(0,entries.findIndex(entry=>entry.generation===selectedGeneration)),w=320,h=34,pad=3
+  if(!entries.length)return <div className="chart-empty behavior-empty">Complete one generation to begin the behavior timeline.</div>
+  const series=[
+    {label:'Aggression',values:entries.map(entry=>entry.point?.avgAggression??null),sdValues:entries.map(entry=>entry.point?.sdAggression??null),className:'aggression-line'},
+    {label:'Caution',values:entries.map(entry=>entry.point?.avgCaution??null),sdValues:entries.map(entry=>entry.point?.sdCaution??null),className:'caution-line'},
+    {label:'Exploration',values:entries.map(entry=>entry.point?.avgExploration??null),sdValues:entries.map(entry=>entry.point?.sdExploration??null),className:'exploration-line'},
+  ]
+  const path=(values:(number|null)[])=>{let drawing=false;return values.map((value,index)=>{const point=historyCoordinate(value,0,1,index,values.length,w,h,pad);if(!point){drawing=false;return ''}const command=drawing?'L':'M';drawing=true;return`${command} ${point.x} ${point.y}`}).join(' ')}
+  const start=entries[0].generation,end=entries.at(-1)!.generation,selectedX=historyCoordinate(0,0,1,selectedIndex,entries.length,w,h,pad)!.x,selectedEntry=entries[selectedIndex]
+  return <><div className="history-facets behavior-facets" role="group" aria-label={`Behavior gene history from generation ${start} to ${end}. Selected generation ${selectedEntry.generation}. Aggression, caution, and exploration are each shown on a zero to one scale.`}>
+    {series.map(s=>{const current=s.values[selectedIndex]??null,sd=s.sdValues[selectedIndex]??null,lower=s.values.map((value,index)=>value===null||s.sdValues[index]===null?null:Math.max(0,value-s.sdValues[index]!)),upper=s.values.map((value,index)=>value===null||s.sdValues[index]===null?null:Math.min(1,value+s.sdValues[index]!)),marker=historyCoordinate(current,0,1,selectedIndex,entries.length,w,h,pad);return <div className="history-facet" key={s.label}>
+      <div className="facet-label"><strong>{s.label}</strong><span>Gen {selectedEntry.generation} · {current===null?'Unavailable':`${current.toFixed(2)} mean · ±1 SD ${sd?.toFixed(2)??'unavailable'}`}</span></div>
+      <svg viewBox={`0 0 ${w} ${h}`} role="img" aria-label={`${s.label}, selected generation ${selectedEntry.generation}, ${current===null?'unavailable':`mean ${current.toFixed(2)}, standard deviation ${sd?.toFixed(2)??'unavailable'}`}, scale zero to one.`}><path className="facet-grid" d={`M ${pad} ${h-pad} H ${w-pad}`}/><line className="history-cursor" x1={selectedX} x2={selectedX} y1={pad} y2={h-pad}/><path className="spread-line" d={path(lower)}/><path className="spread-line" d={path(upper)}/><path className={s.className} d={path(s.values)}/>{marker&&<circle className="history-point" cx={marker.x} cy={marker.y} r="3"/>}</svg><small>0.00–1.00</small>
     </div>})}
-  </div><table className="sr-only"><caption>Behavior gene history data</caption><thead><tr><th>Generation</th><th>Aggression mean</th><th>Aggression SD</th><th>Caution mean</th><th>Caution SD</th><th>Exploration mean</th><th>Exploration SD</th></tr></thead><tbody>{points.map(p=><tr key={p.generation}><td>{p.generation}</td><td>{p.avgAggression??'Unavailable'}</td><td>{p.sdAggression??'Unavailable'}</td><td>{p.avgCaution??'Unavailable'}</td><td>{p.sdCaution??'Unavailable'}</td><td>{p.avgExploration??'Unavailable'}</td><td>{p.sdExploration??'Unavailable'}</td></tr>)}</tbody></table></>
+  </div><table className="sr-only"><caption>Behavior gene history data</caption><thead><tr><th>Generation</th><th>Aggression mean</th><th>Aggression SD</th><th>Caution mean</th><th>Caution SD</th><th>Exploration mean</th><th>Exploration SD</th></tr></thead><tbody>{entries.map(entry=><tr key={entry.generation}><td>{entry.generation}</td><td>{entry.point?.avgAggression??'Unavailable'}</td><td>{entry.point?.sdAggression??'Unavailable'}</td><td>{entry.point?.avgCaution??'Unavailable'}</td><td>{entry.point?.sdCaution??'Unavailable'}</td><td>{entry.point?.avgExploration??'Unavailable'}</td><td>{entry.point?.sdExploration??'Unavailable'}</td></tr>)}</tbody></table></>
 }
