@@ -3,6 +3,14 @@ import { speedColor } from './ArenaCanvas'
 
 export const SPEED_HISTOGRAM_DOMAIN = {min:.3,max:2.8} as const
 const traitDomains:Record<BiologicalTrait,{min:number;max:number}>={speed:{min:.3,max:2.8},size:{min:.3,max:2.8},sense:{min:.035,max:.6},aggression:{min:0,max:1},caution:{min:0,max:1},exploration:{min:0,max:1}}
+type NonSpeedTrait=Exclude<BiologicalTrait,'speed'>
+const traitHueRamps:Record<NonSpeedTrait,{start:number;end:number}>={size:{start:20,end:4},sense:{start:198,end:168},aggression:{start:-12,end:14},caution:{start:236,end:202},exploration:{start:94,end:136}}
+const clampUnit=(value:number)=>Math.max(0,Math.min(1,value))
+export function traitColor(trait:BiologicalTrait,value:number){
+  if(trait==='speed')return speedColor(value)
+  const domain=traitDomains[trait],normalized=clampUnit((value-domain.min)/(domain.max-domain.min)),ramp=traitHueRamps[trait],hue=(ramp.start+(ramp.end-ramp.start)*normalized+360)%360
+  return `hsl(${hue} 58% ${38+normalized*18}%)`
+}
 export function summarizeDistribution(values:number[]){if(!values.length)return{mean:0,median:0,q1:0,q3:0,iqr:0,sd:0};const sorted=[...values].sort((a,b)=>a-b),quantile=(p:number)=>{const index=(sorted.length-1)*p,low=Math.floor(index),fraction=index-low;return sorted[low]+(sorted[Math.min(low+1,sorted.length-1)]-sorted[low])*fraction},mean=values.reduce((a,b)=>a+b,0)/values.length,sd=Math.sqrt(values.reduce((sum,v)=>sum+(v-mean)**2,0)/values.length),q1=quantile(.25),q3=quantile(.75);return{mean,median:quantile(.5),q1,q3,iqr:q3-q1,sd}}
 function buildHistogram(values:number[],domain:{min:number;max:number},count=12){const counts=Array(count).fill(0)as number[];values.forEach(v=>counts[Math.max(0,Math.min(count-1,Math.floor((v-domain.min)/(domain.max-domain.min)*count)))]++);return counts.map((value,i)=>({count:value,lower:domain.min+i/count*(domain.max-domain.min),upper:domain.min+(i+1)/count*(domain.max-domain.min)}))}
 
@@ -22,7 +30,7 @@ export function Histogram({world,trait='speed'}:{world:World;trait?:BiologicalTr
   const peak=Math.max(1,...bins.map(bin=>bin.count))
   const low=values.length?Math.min(...values).toFixed(2):'0.00', high=values.length?Math.max(...values).toFixed(2):'0.00'
   return <><div className="histogram" role="img" aria-label={`${trait} distribution for ${values.length} living creatures, ranging from ${low} to ${high}.`}>
-    {bins.map((bin,i)=><span key={i} style={{height:`${Math.max(bin.count?5:1,bin.count/peak*100)}%`,background:speedColor((bin.lower+bin.upper)/2)}} title={`${bin.lower.toFixed(2)}–${bin.upper.toFixed(2)}: ${bin.count}`} />)}
+    {bins.map((bin,i)=><span key={i} style={{height:`${Math.max(bin.count?5:1,bin.count/peak*100)}%`,background:traitColor(trait,(bin.lower+bin.upper)/2)}} title={`${bin.lower.toFixed(2)}–${bin.upper.toFixed(2)}: ${bin.count}`} />)}
     <i className="axis-label left">low</i><i className="axis-label right">high</i>
   </div><table className="sr-only"><caption>{trait} distribution data</caption><thead><tr><th>Range</th><th>Creatures</th></tr></thead><tbody>{bins.map((bin,i)=><tr key={i}><td>{bin.lower.toFixed(2)} to {bin.upper.toFixed(2)}</td><td>{bin.count}</td></tr>)}</tbody></table></>
 }
