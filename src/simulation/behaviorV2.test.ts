@@ -47,8 +47,10 @@ describe('two-phase ecology',()=>{
 })
 
 describe('motion',()=>{
+  const decision=(c:Creature,targetX:number,targetY:number)=>({id:c.id,targetX,targetY,targetId:null,targetType:'explore' as const,mode:'exploring' as const,memory:c.memory,commitUntil:0,wanderAngle:0,wanderTurn:0})
+
   it('bounds acceleration and turning while preserving momentum',()=>{
-    const w=world(1),c=w.creatures[0],d={id:c.id,targetX:c.x-1,targetY:c.y,targetId:null,targetType:'explore' as const,mode:'exploring' as const,memory:c.memory,commitUntil:0,wanderAngle:0,wanderTurn:0}
+    const w=world(1),c=w.creatures[0],d=decision(c,c.x-1,c.y)
     c.angle=0;c.vx=.01
     const m=proposeMotion(c,d,w.config,[],.1)
     expect(Math.abs(m.angle-c.angle)).toBeLessThanOrEqual(w.config.turnRate*.1+1e-12)
@@ -58,7 +60,7 @@ describe('motion',()=>{
   it('prevents obstacle penetration and bounds escape',()=>{
     const w=world(1),c=w.creatures[0],o={id:77,x:.5,y:.5,radius:.1}
     Object.assign(c,{x:.39,y:.5,vx:.08,vy:0,angle:0})
-    const d={id:c.id,targetX:.6,targetY:.5,targetId:null,targetType:'explore' as const,mode:'exploring' as const,memory:c.memory,commitUntil:0,wanderAngle:0,wanderTurn:0}
+    const d=decision(c,.6,.5)
     const m=proposeMotion(c,d,w.config,[o],.5)
     expect(Math.hypot(m.x-o.x,m.y-o.y)).toBeGreaterThanOrEqual(o.radius+.01*c.size-1e-9)
     Object.assign(c,{x:.987,y:.5,vx:.1,vy:0});const edge=proposeMotion(c,d,w.config,[],.5)
@@ -67,10 +69,75 @@ describe('motion',()=>{
   it('resolves overlapping max-size clearances independently of obstacle order',()=>{
     const w=world(1),c=w.creatures[0];Object.assign(c,{x:.55,y:.5,size:2.8,vx:0,vy:0,angle:0})
     const obstacles=[{id:2,x:.65,y:.5,radius:.08},{id:1,x:.45,y:.5,radius:.08}]
-    const d={id:c.id,targetX:.55,targetY:.5,targetId:null,targetType:'explore' as const,mode:'exploring' as const,memory:c.memory,commitUntil:0,wanderAngle:0,wanderTurn:0}
+    const d=decision(c,.55,.5)
     const forward=proposeMotion(c,d,w.config,obstacles,.025),reversed=proposeMotion(c,d,w.config,[...obstacles].reverse(),.025)
     expect(forward).toEqual(reversed)
     for(const o of obstacles)expect(Math.hypot(forward.x-o.x,forward.y-o.y)).toBeGreaterThanOrEqual(o.radius+.01*c.size-1e-8)
+  })
+  it('rounds a rock when the target is directly behind it',()=>{
+    const w=world(1),c=w.creatures[0],o={id:77,x:.5,y:.5,radius:.1},d=decision(c,.7,.5)
+    Object.assign(c,{x:.32,y:.5,homeX:.05,homeY:.05,speed:2.8,size:1,angle:0,vx:0,vy:0})
+    const clearance=o.radius+.01*c.size;let minimum=Infinity,previousDistance=Math.hypot(c.x-d.targetX,c.y-d.targetY),progress=0
+    for(let tick=0;tick<2000;tick++){
+      const m=proposeMotion(c,d,w.config,[o],.025);minimum=Math.min(minimum,Math.hypot(m.x-o.x,m.y-o.y))
+      const distance=Math.hypot(m.x-d.targetX,m.y-d.targetY);if(distance<previousDistance)progress++
+      Object.assign(c,{x:m.x,y:m.y,vx:m.vx,vy:m.vy,angle:m.angle});previousDistance=distance
+      if(distance<.025)break
+    }
+    expect(progress).toBeGreaterThan(40)
+    expect(Math.hypot(c.x-d.targetX,c.y-d.targetY)).toBeLessThan(.05)
+    expect(minimum).toBeGreaterThanOrEqual(clearance-1e-8)
+  })
+  it('keeps detours order-independent and mirrors the tangent tie consistently',()=>{
+    const w=world(1),c=w.creatures[0],d=decision(c,.7,.46),obstacles=[{id:77,x:.5,y:.5,radius:.1},{id:78,x:.25,y:.8,radius:.05}]
+    Object.assign(c,{x:.4,y:.46,homeX:.05,homeY:.05,speed:2.8,size:1,angle:0,vx:0,vy:0})
+    const forward=proposeMotion(c,d,w.config,obstacles,.1),reversed=proposeMotion({...c},d,w.config,[...obstacles].reverse(),.1)
+    expect(reversed).toEqual(forward)
+    expect(Math.abs(forward.y-.46)).toBeGreaterThan(0)
+    const mirrored={...c,y:.5-(c.y-.5),angle:-c.angle,vy:-c.vy},mirroredDecision=decision(mirrored,.7,.54)
+    const mirroredMotion=proposeMotion(mirrored,mirroredDecision,w.config,[{...obstacles[0],y:.5}],.1)
+    expect(mirroredMotion.x).toBeCloseTo(forward.x,12)
+    expect(mirroredMotion.y).toBeCloseTo(1-forward.y,12)
+    const tied={...c,y:.5},tiedDecision=decision(tied,.7,.5),tieA=proposeMotion(tied,tiedDecision,w.config,[obstacles[0]],.1),tieB=proposeMotion({...tied},tiedDecision,w.config,[{...obstacles[0]}],.1)
+    expect(tieA).toEqual(tieB)
+    expect(Math.abs(tieA.y-.5)).toBeGreaterThan(0)
+  })
+  it('leaves no-obstacle motion numerically unchanged',()=>{
+    const w=world(1),c=w.creatures[0],d=decision(c,.8,.2)
+    Object.assign(c,{x:.36,y:.71,homeX:.05,homeY:.05,angle:-.7,vx:.012,vy:-.008,size:1.4,speed:1.7})
+    const expectedAngle=c.angle+Math.max(-w.config.turnRate*.13/Math.sqrt(Math.max(.35,c.size)),Math.min(w.config.turnRate*.13/Math.sqrt(Math.max(.35,c.size)),((Math.atan2(d.targetY-c.y,d.targetX-c.x)-c.angle+Math.PI*3)%(Math.PI*2))-Math.PI))
+    const m=proposeMotion(c,d,w.config,[],.13)
+    expect(m.angle).toBe(expectedAngle)
+    expect(m.x).toBe(c.x+m.vx*.13)
+    expect(m.y).toBe(c.y+m.vy*.13)
+  })
+  it('keeps a chained overlapping detour bounded and clear',()=>{
+    const w=world(1),c=w.creatures[0],d=decision(c,.82,.5),obstacles=[{id:1,x:.45,y:.5,radius:.09},{id:2,x:.58,y:.5,radius:.09},{id:3,x:.71,y:.5,radius:.09}]
+    Object.assign(c,{x:.3,y:.5,homeX:.05,homeY:.05,speed:2.8,size:1.8,angle:0,vx:0,vy:0})
+    const clearance=.01*c.size
+    for(let tick=0;tick<1200;tick++){
+      const m=proposeMotion(c,d,w.config,obstacles,.05)
+      for(const o of obstacles)expect(Math.hypot(m.x-o.x,m.y-o.y)).toBeGreaterThanOrEqual(o.radius+clearance-1e-8)
+      expect(m.x).toBeGreaterThanOrEqual(.012);expect(m.x).toBeLessThanOrEqual(.988);expect(m.y).toBeGreaterThanOrEqual(.012);expect(m.y).toBeLessThanOrEqual(.988)
+      Object.assign(c,{x:m.x,y:m.y,vx:m.vx,vy:m.vy,angle:m.angle})
+      if(Math.hypot(c.x-d.targetX,c.y-d.targetY)<.03)break
+    }
+    expect(Math.hypot(c.x-d.targetX,c.y-d.targetY)).toBeLessThan(.08)
+  })
+  it('stress-checks direct and diagonal routes around one obstacle',()=>{
+    const cases=[[.32,.5,.7,.5],[.5,.32,.5,.7],[.32,.32,.7,.7],[.68,.5,.3,.5],[.32,.68,.68,.32]] as const
+    for(const [startX,startY,targetX,targetY] of cases){
+      const w=world(1),c=w.creatures[0],o={id:17,x:.5,y:.5,radius:.1},d=decision(c,targetX,targetY)
+      Object.assign(c,{x:startX,y:startY,homeX:.05,homeY:.05,speed:2.8,size:1,angle:Math.atan2(targetY-startY,targetX-startX),vx:0,vy:0})
+      const clearance=o.radius+.01*c.size
+      for(let tick=0;tick<2400;tick++){
+        const m=proposeMotion(c,d,w.config,[o],.025)
+        expect(Math.hypot(m.x-o.x,m.y-o.y)).toBeGreaterThanOrEqual(clearance-1e-8)
+        Object.assign(c,{x:m.x,y:m.y,vx:m.vx,vy:m.vy,angle:m.angle})
+        if(Math.hypot(c.x-targetX,c.y-targetY)<.04)break
+      }
+      expect(Math.hypot(c.x-targetX,c.y-targetY),`${startX},${startY} -> ${targetX},${targetY}`).toBeLessThan(.08)
+    }
   })
 })
 
