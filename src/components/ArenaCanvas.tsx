@@ -47,8 +47,17 @@ export function arenaLineageRingAlpha(): number {
   return 1
 }
 
-export function formatArenaFocusDescription(focus: ArenaFocus): string {
-  return focus === 'all' ? 'All creatures are shown.' : `Focus: ${ARENA_FOCUS_LABELS[focus]}; other creatures are dimmed.`
+export function formatArenaFocusDescription(focus: ArenaFocus, matchingCount?: number, livingCount?: number, selectedNonMatch=false): string {
+  const counted=Number.isFinite(matchingCount)&&Number.isFinite(livingCount)
+  if(focus==='all')return counted?`All living creatures are shown (${Math.max(0,Math.trunc(livingCount!))}).`:'All creatures are shown.'
+  if(!counted)return`Focus: ${ARENA_FOCUS_LABELS[focus]}; other creatures are dimmed.`
+  const total=Math.max(0,Math.trunc(livingCount!)),matching=Math.min(total,Math.max(0,Math.trunc(matchingCount!))),kept=selectedNonMatch&&matching<total?1:0,dimmed=total-matching-kept
+  const summary=`Focus: ${ARENA_FOCUS_LABELS[focus]}; ${matching} ${matching===1?'creature matches':'creatures match'} and ${dimmed} ${dimmed===1?'other is':'others are'} dimmed.`
+  return kept?`${summary} The selected creature stays highlighted.`:summary
+}
+
+export function formatArenaFocusOption(focus: ArenaFocus, count: number): string {
+  return `${ARENA_FOCUS_LABELS[focus]} (${Math.max(0, Math.trunc(count))})`
 }
 
 export function showArenaQuickStart(completedGenerations: number): boolean {
@@ -101,6 +110,8 @@ export interface ArenaAccessibleDescriptionInput {
   hasSelectedCreature: boolean
   selectedIsHunting?: boolean
   focus?: ArenaFocus
+  focusCount?: number
+  selectedOutsideFocus?: boolean
 }
 
 export function formatArenaOverlayDescription(
@@ -122,7 +133,7 @@ export function formatArenaAccessibleDescription(input: ArenaAccessibleDescripti
     ? `${input.foodCount} food items distributed across ${input.patchCount} resource patches`
     : `${input.foodCount} food remaining from a ${Math.round(input.foodBudget)}-item generation pulse across ${input.patchCount} patches`
   const overlayDescription = formatArenaOverlayDescription(input.ecologyMode, input.hasSelectedCreature, input.selectedIsHunting)
-  const focusDescription = formatArenaFocusDescription(input.focus ?? 'all')
+  const focusDescription = formatArenaFocusDescription(input.focus ?? 'all',input.focusCount,input.livingCreatures,input.selectedOutsideFocus)
   const selectionHint = input.hasSelectedCreature
     ? ''
     : 'Select a creature to reveal its focus, sight, target, memory, and same-lineage overlays.'
@@ -225,7 +236,8 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect,arenaF
   const stateCounts:Record<CreatureState,number>={safe:0,exploring:0,foraging:0,hunting:0,fleeing:0,returning:0}
   for(const creature of livingCreatures)stateCounts[creature.home?'safe':creature.mode]++
   const stateSummary=(Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]).map(([state,metadata])=>`${stateCounts[state]} ${metadata.label.toLowerCase()}`).join(', ')
-  const accessibleDescription=formatArenaAccessibleDescription({generation:world.generation,livingCreatures:livingCreatures.length,stateSummary,foodCount:world.food.length,patchCount:world.environment.patches.length,foodBudget:world.environment.foodBudget,obstacleCount:world.environment.obstacles.length,ecologyMode:world.config.ecologyMode,hasSelectedCreature:Boolean(selected),selectedIsHunting:selected?.mode==='hunting',focus:arenaFocus})
+  const selectedState=selected?(selected.home?'safe':selected.mode):null
+  const accessibleDescription=formatArenaAccessibleDescription({generation:world.generation,livingCreatures:livingCreatures.length,stateSummary,foodCount:world.food.length,patchCount:world.environment.patches.length,foodBudget:world.environment.foodBudget,obstacleCount:world.environment.obstacles.length,ecologyMode:world.config.ecologyMode,hasSelectedCreature:Boolean(selected),selectedIsHunting:selected?.mode==='hunting',focus:arenaFocus,focusCount:arenaFocus==='all'?livingCreatures.length:stateCounts[arenaFocus],selectedOutsideFocus:arenaFocus!=='all'&&selectedState!==null&&selectedState!==arenaFocus})
   return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={accessibleDescription}>
     Natural selection simulation arena. Live counts are available in the statistics region.
   </canvas><label className="creature-picker">Inspect <select value={selectedIndividualId??''} onChange={e=>onSelect(e.target.value?Number(e.target.value):null)}><option value="">No creature selected</option>{livingCreatures.sort((a,b)=>a.individualId-b.individualId).map(c=><option key={c.individualId} value={c.individualId}>Individual {c.individualId}, lineage {c.lineageId}, {CREATURE_STATE_METADATA[c.home?'safe':c.mode].label}</option>)}</select></label></>

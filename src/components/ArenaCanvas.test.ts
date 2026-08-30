@@ -13,6 +13,7 @@ import {
   formatArenaAccessibleDescription,
   formatArenaDayProgress,
   formatArenaFocusDescription,
+  formatArenaFocusOption,
   formatArenaOverlayDescription,
   formatSelectedTarget,
   showArenaQuickStart,
@@ -48,6 +49,8 @@ describe('arena clarity helpers', () => {
     expect(arenaCreatureAlpha('hunting', 'hunting')).toBe(1)
     expect(arenaCreatureAlpha('hunting', 'foraging')).toBe(ARENA_FOCUS_DIM_ALPHA)
     expect(arenaCreatureAlpha('hunting', 'foraging', true)).toBe(1)
+    expect(formatArenaFocusOption('hunting', 4)).toBe('Hunting prey (4)')
+    expect(formatArenaFocusOption('all', -3)).toBe('All creatures (0)')
   })
 
   it('keeps same-lineage relationship rings readable around dimmed bodies', () => {
@@ -56,12 +59,17 @@ describe('arena clarity helpers', () => {
   })
 
   it('describes whether action focus is dimming the rest of the arena', () => {
-    const all = formatArenaAccessibleDescription(descriptionInput({ focus: 'all' }))
-    expect(all).toContain(formatArenaFocusDescription('all'))
+    const all = formatArenaAccessibleDescription(descriptionInput({ focus: 'all', focusCount: 7, livingCreatures: 7 }))
+    expect(all).toContain(formatArenaFocusDescription('all', 7, 7))
     expect(all).not.toContain('dimmed')
+    expect(formatArenaFocusDescription('all',1,1)).toBe('All living creatures are shown (1).')
+    expect(formatArenaFocusDescription('all',0,0)).toBe('All living creatures are shown (0).')
 
-    const hunting = formatArenaAccessibleDescription(descriptionInput({ focus: 'hunting' }))
-    expect(hunting).toContain('Focus: Hunting prey; other creatures are dimmed.')
+    const hunting = formatArenaAccessibleDescription(descriptionInput({ focus: 'hunting', focusCount: 2, livingCreatures: 7 }))
+    expect(hunting).toContain('Focus: Hunting prey; 2 creatures match and 5 others are dimmed.')
+    expect(formatArenaFocusDescription('foraging',1,7)).toContain('1 creature matches and 6 others are dimmed.')
+    const selectedOutside = formatArenaAccessibleDescription(descriptionInput({focus:'hunting',focusCount:2,livingCreatures:7,hasSelectedCreature:true,selectedOutsideFocus:true}))
+    expect(selectedOutside).toContain('2 creatures match and 4 others are dimmed. The selected creature stays highlighted.')
   })
 
   it('gives extinction status precedence and formats day progress consistently', () => {
