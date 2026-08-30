@@ -1,15 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import {
+  ARENA_COLOR_SCHEME_QUERY,
+  ARENA_DARK_PALETTE,
   ARENA_FOCUS_DIM_ALPHA,
   ARENA_FOCUS_LABELS,
   ARENA_FOCUS_OPTIONS,
+  ARENA_LIGHT_PALETTE,
   ARENA_HUNT_CONTACT_KEY,
   ARENA_PATCH_STOCK_KEY,
   ARENA_QUICK_START,
   ARENA_SELECTED_OVERLAY_KEY,
+  arenaCanvasPalette,
+  listenToArenaColorScheme,
+  type ArenaColorSchemeQuery,
   arenaPlaybackStatus,
   arenaCreatureAlpha,
   arenaLineageRingAlpha,
+  CREATURE_STATE_METADATA,
   formatArenaAccessibleDescription,
   formatArenaDayProgress,
   formatArenaFocusDescription,
@@ -59,7 +66,88 @@ const observedWorld = (): World => {
 
 const observedContext = (world: World, selectedWasActive = true): NextActionContext => ({ selectedIndividualId: world.inspectedIndividualId, selectedWasActive })
 
+describe('arena color scheme lifecycle', () => {
+  it('syncs the modern listener immediately, redraws on changes, and cleans it up', () => {
+    let matches = true
+    let registered: (() => void) | undefined
+    const calls: string[] = []
+    const query: ArenaColorSchemeQuery = {
+      get matches() { return matches },
+      addEventListener: (_type, listener) => { calls.push('add'); registered = listener },
+      removeEventListener: (_type, listener) => {
+        expect(listener).toBe(registered)
+        calls.push('remove')
+        registered = undefined
+      },
+    }
+    const changes: boolean[] = []
+    const emit = () => registered?.()
+    const cleanup = listenToArenaColorScheme(query, false, darkMode => changes.push(darkMode))
+
+    expect(changes).toEqual([true])
+    expect(calls).toEqual(['add'])
+    matches = false
+    emit()
+    expect(changes).toEqual([true, false])
+    cleanup()
+    expect(calls).toEqual(['add', 'remove'])
+    matches = true
+    emit()
+    expect(changes).toEqual([true, false])
+  })
+
+  it('falls back to legacy listeners and synchronizes the mount gap', () => {
+    let matches = false
+    let registered: (() => void) | undefined
+    const calls: string[] = []
+    const query: ArenaColorSchemeQuery = {
+      get matches() { return matches },
+      addListener: listener => { calls.push('add'); registered = listener },
+      removeListener: listener => {
+        expect(listener).toBe(registered)
+        calls.push('remove')
+        registered = undefined
+      },
+    }
+    const changes: boolean[] = []
+    const emit = () => registered?.()
+    const cleanup = listenToArenaColorScheme(query, true, darkMode => changes.push(darkMode))
+
+    expect(changes).toEqual([false])
+    expect(calls).toEqual(['add'])
+    matches = true
+    emit()
+    expect(changes).toEqual([false, true])
+    cleanup()
+    expect(calls).toEqual(['add', 'remove'])
+    matches = false
+    emit()
+    expect(changes).toEqual([false, true])
+  })
+})
+
 describe('arena clarity helpers', () => {
+  it('keeps the light canvas palette stable and provides a legible dark palette', () => {
+    expect(ARENA_COLOR_SCHEME_QUERY).toBe('(prefers-color-scheme: dark)')
+    expect(arenaCanvasPalette(false)).toBe(ARENA_LIGHT_PALETTE)
+    expect(arenaCanvasPalette(true)).toBe(ARENA_DARK_PALETTE)
+    expect(ARENA_LIGHT_PALETTE.fieldStart).toBe('#e8eee4')
+    expect(ARENA_LIGHT_PALETTE.fieldEnd).toBe('#dce7d8')
+    expect(ARENA_LIGHT_PALETTE.fieldGrid).toBe('rgba(37,75,62,.22)')
+    expect(ARENA_LIGHT_PALETTE.patchHaloEnd).toBe('rgba(183,190,88,0)')
+    expect(ARENA_LIGHT_PALETTE.creatureBodyEnd).toBe('#304b35')
+    expect(ARENA_LIGHT_PALETTE.creatureEdge).toBe('rgba(12,29,23,.82)')
+    expect(ARENA_DARK_PALETTE.fieldStart).toBe('#14251e')
+    expect(ARENA_DARK_PALETTE.fieldEnd).toBe('#1c3428')
+    expect(ARENA_DARK_PALETTE.patchHaloEnd).toBe('rgba(205,216,100,0)')
+    expect(ARENA_DARK_PALETTE.fieldStart).not.toBe(ARENA_LIGHT_PALETTE.fieldStart)
+    expect(ARENA_DARK_PALETTE.obstacleStart).not.toBe(ARENA_DARK_PALETTE.fieldStart)
+    expect(ARENA_DARK_PALETTE.foodStart).not.toBe(ARENA_DARK_PALETTE.fieldStart)
+    expect(ARENA_DARK_PALETTE.creatureEye).not.toBe(ARENA_DARK_PALETTE.creatureBodyEnd)
+    expect(CREATURE_STATE_METADATA.safe.color).toBe('#f8fafc')
+    expect(CREATURE_STATE_METADATA.hunting.color).toBe('#fb7185')
+  })
+
   it('offers stable action focus labels and keeps the selected creature visible', () => {
     expect(ARENA_FOCUS_OPTIONS.map(option => option.label)).toEqual([
       'All creatures',
