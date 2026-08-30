@@ -1,7 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { ARENA_FOCUS_OPTIONS, ARENA_HUNT_CONTACT_KEY, ARENA_PATCH_STOCK_KEY, ARENA_QUICK_START, ARENA_SELECTED_OVERLAY_KEY, ArenaCanvas, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress, formatArenaFocusDescription, formatSelectedTarget, showArenaQuickStart } from './components/ArenaCanvas'
 import type { CreatureState } from './components/ArenaCanvas'
-import { BehaviorHistory, buildHistoryTimeline, Histogram, HistoryChart, summarizeDistribution } from './components/Charts'
 import { GenerationAccounting } from './components/GenerationAccounting'
 import { GenerationForecast } from './components/GenerationForecast'
 import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
@@ -13,6 +12,7 @@ import type { BiologicalTrait,Config,InterventionKind, World } from './simulatio
 
 const ExperimentPanel=lazy(()=>import('./components/ExperimentPanel').then(module=>({default:module.ExperimentPanel})))
 const GenerationJournal=lazy(()=>import('./components/GenerationJournal'))
+const InsightsPanel=lazy(()=>import('./components/InsightsPanel'))
 const creatureStates=Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]
 
 const copyConfig=(c:Config):Config=>({...c})
@@ -47,7 +47,6 @@ function App(){
   const importRef=useRef<HTMLInputElement>(null)
   const [actionStatus,setActionStatus]=useState('')
   const [runtimeMode,setRuntimeMode]=useState<'worker'|'fallback'>('worker')
-  const [distributionTrait,setDistributionTrait]=useState<BiologicalTrait>('speed')
   const [selectedIndividualId,setSelectedIndividualId]=useState<number|null>(null)
   const [arenaFocus,setArenaFocus]=useState<'all'|CreatureState>('all')
   const [requestedGeneration,setRequestedGeneration]=useState<number|null>(null)
@@ -63,7 +62,6 @@ function App(){
   const stateCounts:Record<CreatureState,number>={safe:living-activeModeTotal,...modes}
   const lineage=getLineageAnalytics(world)
   const selected=world.creatures.find(c=>c.individualId===selectedIndividualId&&c.alive)
-  const distribution=summarizeDistribution(world.creatures.filter(c=>c.alive).map(c=>c[distributionTrait]))
   const arenaStatus=arenaPlaybackStatus(playing,extinct)
   const arenaDayLabel=formatArenaDayProgress(world.dayTime,world.config.dayLength,arenaStatus)
   const dayProgress=Math.max(0,Math.min(100,Math.round(world.dayTime/world.config.dayLength*100)))
@@ -110,9 +108,6 @@ function App(){
   useEffect(()=>{if(extinct)setPlaying(false)},[extinct])
   useEffect(()=>{if(selectedIndividualId!==null&&!world.creatures.some(creature=>creature.alive&&creature.individualId===selectedIndividualId)){setSelectedIndividualId(null);controllerRef.current?.send({type:'inspect',individualId:null})}},[world,selectedIndividualId])
 
-  const historyTimeline=buildHistoryTimeline(world.ledger,world.history,world.events)
-  const historyStart=historyTimeline[0]?.generation??0
-  const historyEnd=historyTimeline.at(-1)?.generation??0
   return <div className="app-shell">
     <header className="topbar" aria-hidden={experimentOpen||(settingsOpen&&isNarrow)||undefined}>
       <div className="brand"><div className="mark" aria-hidden="true">∿</div><div><h1>Evolution Field Lab</h1><p>Shape an ecosystem. Watch selection unfold.</p></div></div>
@@ -179,11 +174,7 @@ function App(){
               <div><h3>Live vs historical</h3><p>This panel describes the current population. Choose a completed generation above to inspect its outcomes, resource balance, births, attacks, selection, and shocks.</p></div>
             </div>
           </section>
-          <div className="insights">
-            <div className="chart-card histogram-card"><div className="card-head"><div><h2>Current trait distribution</h2><p>Mean {distribution.mean.toFixed(2)} · median {distribution.median.toFixed(2)} · IQR {distribution.iqr.toFixed(2)} · SD {distribution.sd.toFixed(2)}</p></div><label className="metric-select">Metric <select value={distributionTrait} onChange={e=>setDistributionTrait(e.target.value as BiologicalTrait)}>{(['speed','size','sense','aggression','caution','exploration']as BiologicalTrait[]).map(trait=><option key={trait}>{trait}</option>)}</select></label></div><Histogram world={world} trait={distributionTrait}/></div>
-            <div className="chart-card history-card"><div className="card-head"><div><h2>Generational history</h2><p>Outcomes → next population; each row has its own scale</p></div>{historyTimeline.length>0&&<span>Gen {historyStart}–{historyEnd}</span>}</div><HistoryChart world={world} requestedGeneration={requestedGeneration} onSelectGeneration={setRequestedGeneration}/></div>
-            <div className="chart-card behavior-history-card"><div className="card-head"><div><h2>Behavior history</h2><p>Inherited tendencies in each next population, on a 0–1 scale</p></div>{historyTimeline.length>0&&<span>Gen {historyStart}–{historyEnd}</span>}</div><BehaviorHistory world={world} requestedGeneration={requestedGeneration}/></div>
-          </div>
+          <Suspense fallback={<section className="evolution-story generation-journal" aria-busy="true"><p className="journal-empty" role="status">Opening insights…</p></section>}><InsightsPanel world={world} requestedGeneration={requestedGeneration} onSelectGeneration={setRequestedGeneration}/></Suspense>
         </section>
       </section>
       {settingsOpen&&isNarrow&&<div className="settings-backdrop" aria-hidden="true" onMouseDown={closeSettings}/>}
