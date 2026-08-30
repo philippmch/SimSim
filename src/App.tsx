@@ -107,7 +107,7 @@ function App(){
   const historyStart=world.history.at(-40)?.generation??0
   const historyEnd=world.history.at(-1)?.generation??0
   return <div className="app-shell">
-    <header className="topbar" aria-hidden={experimentOpen||undefined}>
+    <header className="topbar" aria-hidden={experimentOpen||(settingsOpen&&isNarrow)||undefined}>
       <div className="brand"><div className="mark" aria-hidden="true">∿</div><div><h1>Evolution Field Lab</h1><p>Shape an ecosystem. Watch selection unfold.</p></div></div>
       <div className="top-actions"><button ref={experimentToggleRef} className="experiment-toggle" onClick={()=>{setPlaying(false);setSettingsOpen(false);setExperimentOpen(true)}} aria-haspopup="dialog"><span aria-hidden="true">◫</span> Experiment lab</button><button ref={settingsToggleRef} className="settings-toggle" onClick={()=>setSettingsOpen(v=>!v)} aria-expanded={settingsOpen} aria-controls="settings" aria-haspopup={isNarrow?'dialog':undefined}>
         <span aria-hidden="true">⚙</span> <span>Parameters</span>{dirty&&<><b aria-hidden="true">•</b><span className="sr-only">Unapplied parameter changes</span></>}
@@ -117,7 +117,7 @@ function App(){
       <section className="simulation-panel" aria-label="Simulation" aria-hidden={settingsOpen&&isNarrow||undefined}>
         <div className="arena-wrap">
           <ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual}/>
-          <div className="arena-badge">GENERATION {world.generation}<small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} food · ${world.environment.patches.reduce((sum,patch)=>sum+patch.stock,0)} patch stock`:`${world.food.length} / ${Math.round(world.environment.foodBudget)} seasonal food`}</small></div>
+          <div className="arena-badge">GENERATION {world.generation}<small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} food across ${world.environment.patches.length} resource patches`:`${world.food.length} / ${Math.round(world.environment.foodBudget)} seasonal food`}</small></div>
           <div className="arena-keys">
             <div className="state-key" role="group" aria-label="Creature action outline key"><strong>Outline = action · body color = speed</strong>{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/>{metadata.label}</span>)}</div>
             <div className="legend"><span>Body color = speed</span><i/><small>slower</small><small>faster</small></div>
