@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { ArenaCanvas, CREATURE_STATE_METADATA } from './components/ArenaCanvas'
+import { ARENA_PATCH_STOCK_KEY, ARENA_SELECTED_OVERLAY_KEY, ArenaCanvas, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress } from './components/ArenaCanvas'
 import type { CreatureState } from './components/ArenaCanvas'
 import { BehaviorHistory, buildHistoryTimeline, Histogram, HistoryChart, summarizeDistribution } from './components/Charts'
 import { GenerationJournal } from './components/GenerationJournal'
@@ -61,6 +61,9 @@ function App(){
   const lineage=getLineageAnalytics(world)
   const selected=world.creatures.find(c=>c.individualId===selectedIndividualId&&c.alive)
   const distribution=summarizeDistribution(world.creatures.filter(c=>c.alive).map(c=>c[distributionTrait]))
+  const arenaStatus=arenaPlaybackStatus(playing,extinct)
+  const arenaDayLabel=formatArenaDayProgress(world.dayTime,world.config.dayLength,arenaStatus)
+  const dayProgress=Math.max(0,Math.min(100,Math.round(world.dayTime/world.config.dayLength*100)))
   const update=<K extends keyof Config>(key:K,value:Config[K])=>setDraft(c=>({...c,[key]:value}))
   const closeSettings=useCallback(()=>setSettingsOpen(false),[])
   const closeExperiment=useCallback(()=>{setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
@@ -118,9 +121,9 @@ function App(){
       <section className="simulation-panel" aria-label="Simulation" aria-hidden={settingsOpen&&isNarrow||undefined}>
         <div className="arena-wrap">
           <ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual}/>
-          <div className="arena-badge">GENERATION {world.generation}<small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} food across ${world.environment.patches.length} resource patches`:`${world.food.length} / ${Math.round(world.environment.foodBudget)} seasonal food`}</small></div>
+          <div className="arena-badge"><strong>{arenaDayLabel}</strong><small>Generation {world.generation}</small><small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} food across ${world.environment.patches.length} resource patches`:`${world.food.length} / ${Math.round(world.environment.foodBudget)} seasonal food`}</small></div>
           <div className="arena-keys">
-            <div className="state-key" role="group" aria-label="Creature action outline key"><strong>Outline = action · body color = speed</strong>{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/>{metadata.label}</span>)}</div>
+            <div className="state-key" role="group" aria-label="Creature action and overlay key"><strong>Outline = action · body color = speed</strong>{world.config.ecologyMode==='energy-regrowth'&&<strong>{ARENA_PATCH_STOCK_KEY}</strong>}{selected&&<strong>{ARENA_SELECTED_OVERLAY_KEY}</strong>}{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/>{metadata.label}</span>)}</div>
             <div className="legend"><span>Body color = speed</span><i/><small>slower</small><small>faster</small></div>
           </div>
           {extinct&&<div className="extinct" role="status"><strong>Population extinct</strong><span>Use Founder migration to rescue this run, or adjust the parameters and restart.</span></div>}
@@ -134,7 +137,7 @@ function App(){
         <div className="transport" role="group" aria-label="Playback controls">
           <button className="play" disabled={extinct} onClick={()=>setPlaying(v=>!v)} aria-label={extinct?'Playback unavailable: population extinct':playing?'Pause simulation':'Play simulation'}>{playing?'Ⅱ':'▶'}</button>
           <button onClick={step} disabled={extinct} aria-label="Pause and finish the current generation">Finish generation</button>
-          <div className="day-progress" role="progressbar" aria-label="Current generation progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(world.dayTime/world.config.dayLength*100)}><i style={{width:`${world.dayTime/world.config.dayLength*100}%`}}/></div>
+          <div className="day-progress" role="progressbar" aria-label="Current generation progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={dayProgress} aria-valuetext={arenaDayLabel}><i style={{width:`${dayProgress}%`}}/></div>
           <label className="speed-select">Playback speed <select value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value={.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option><option value={4}>4×</option></select></label>
           <button className="reset" onClick={reset}>{dirty?'Apply & restart':'Restart run'}</button>
         </div>

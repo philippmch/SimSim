@@ -6,6 +6,54 @@ interface Props { world: World; revision: number;selectedIndividualId:number|nul
 
 export type CreatureState = 'safe'|Mode
 
+export type ArenaPlaybackStatus = 'Running'|'Paused'|'Extinct'
+
+export const ARENA_PATCH_STOCK_KEY = 'Patch arcs = current food stock.'
+export const ARENA_SELECTED_OVERLAY_KEY = 'Selected: gold ring = focus; gold area = sight; dash = target; colored rings = memory; dotted rings = kin.'
+
+export function arenaPlaybackStatus(playing: boolean, extinct: boolean): ArenaPlaybackStatus {
+  return extinct ? 'Extinct' : playing ? 'Running' : 'Paused'
+}
+
+export function formatArenaDayProgress(dayTime: number, dayLength: number, status: ArenaPlaybackStatus): string {
+  const current = Number.isFinite(dayTime) ? Math.max(0, dayTime) : 0
+  const duration = Number.isFinite(dayLength) ? Math.max(.1, dayLength) : .1
+  return `Day ${current.toFixed(1)} / ${duration.toFixed(1)} · ${status}`
+}
+
+export interface ArenaAccessibleDescriptionInput {
+  generation: number
+  livingCreatures: number
+  stateSummary: string
+  foodCount: number
+  patchCount: number
+  foodBudget: number
+  obstacleCount: number
+  ecologyMode: World['config']['ecologyMode']
+  hasSelectedCreature: boolean
+}
+
+export function formatArenaOverlayDescription(
+  ecologyMode: World['config']['ecologyMode'],
+  hasSelectedCreature: boolean,
+): string {
+  const descriptions: string[] = []
+  if (ecologyMode === 'energy-regrowth') descriptions.push(ARENA_PATCH_STOCK_KEY)
+  if (hasSelectedCreature) descriptions.push(ARENA_SELECTED_OVERLAY_KEY)
+  return descriptions.join(' ')
+}
+
+export function formatArenaAccessibleDescription(input: ArenaAccessibleDescriptionInput): string {
+  const resourceLabel = input.ecologyMode === 'energy-regrowth'
+    ? `${input.foodCount} food items distributed across ${input.patchCount} resource patches`
+    : `${input.foodCount} food remaining from a ${Math.round(input.foodBudget)}-item generation pulse across ${input.patchCount} patches`
+  const overlayDescription = formatArenaOverlayDescription(input.ecologyMode, input.hasSelectedCreature)
+  const selectionHint = input.hasSelectedCreature
+    ? ''
+    : 'Select a creature to reveal its focus, sight, target, memory, and same-lineage overlays.'
+  return `Simulation arena, generation ${input.generation}, ${input.livingCreatures} living creatures: ${input.stateSummary}. ${resourceLabel}. ${input.obstacleCount} obstacles. ${overlayDescription ? `${overlayDescription} ` : ''}${selectionHint} Creature body color shows speed and the bright body outline shows its current action. Click a creature or use the inspector list to select it.`
+}
+
 export const CREATURE_STATE_METADATA = {
   safe:{label:'Safe at home',color:'#f8fafc'},
   exploring:{label:'Exploring',color:'#38bdf8'},
@@ -95,11 +143,12 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect}:Props
   useEffect(()=>{const canvas=ref.current;if(!canvas||typeof ResizeObserver==='undefined')return;const observer=new ResizeObserver(()=>drawRef.current());observer.observe(canvas);return()=>observer.disconnect()},[])
   const chooseAt=(event:React.MouseEvent<HTMLCanvasElement>)=>{const canvas=ref.current;if(!canvas)return;const rect=canvas.getBoundingClientRect(),pad=Math.max(20,Math.min(rect.width,rect.height)*.055),x=(event.clientX-rect.left-pad)/(rect.width-pad*2),y=(event.clientY-rect.top-pad)/(rect.height-pad*2);let best:World['creatures'][number]|undefined,bestD=.05;for(const c of world.creatures.filter(c=>c.alive)){const d=Math.hypot(c.x-x,c.y-y);if(d<bestD){best=c;bestD=d}}onSelect(best?.individualId??null)}
   const livingCreatures=world.creatures.filter(c=>c.alive)
+  const selected=world.creatures.find(creature=>creature.individualId===selectedIndividualId&&creature.alive)
   const stateCounts:Record<CreatureState,number>={safe:0,exploring:0,foraging:0,hunting:0,fleeing:0,returning:0}
   for(const creature of livingCreatures)stateCounts[creature.home?'safe':creature.mode]++
   const stateSummary=(Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]).map(([state,metadata])=>`${stateCounts[state]} ${metadata.label.toLowerCase()}`).join(', ')
-  const resourceLabel=world.config.ecologyMode==='energy-regrowth'?`${world.food.length} food items distributed across ${world.environment.patches.length} resource patches`:`${world.food.length} food remaining from a ${Math.round(world.environment.foodBudget)}-item generation pulse across ${world.environment.patches.length} patches`
-  return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={`Simulation arena, generation ${world.generation}, ${livingCreatures.length} living creatures: ${stateSummary}. ${resourceLabel}. ${world.environment.obstacles.length} obstacles. Creature body color shows speed and the bright body outline shows its current action. Click a creature or use the inspector list to select it.`}>
+  const accessibleDescription=formatArenaAccessibleDescription({generation:world.generation,livingCreatures:livingCreatures.length,stateSummary,foodCount:world.food.length,patchCount:world.environment.patches.length,foodBudget:world.environment.foodBudget,obstacleCount:world.environment.obstacles.length,ecologyMode:world.config.ecologyMode,hasSelectedCreature:Boolean(selected)})
+  return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={accessibleDescription}>
     Natural selection simulation arena. Live counts are available in the statistics region.
   </canvas><label className="creature-picker">Inspect <select value={selectedIndividualId??''} onChange={e=>onSelect(e.target.value?Number(e.target.value):null)}><option value="">No creature selected</option>{livingCreatures.sort((a,b)=>a.individualId-b.individualId).map(c=><option key={c.individualId} value={c.individualId}>Individual {c.individualId}, lineage {c.lineageId}, {CREATURE_STATE_METADATA[c.home?'safe':c.mode].label}</option>)}</select></label></>
 }
