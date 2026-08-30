@@ -3,6 +3,7 @@ import { ARENA_PATCH_STOCK_KEY, ARENA_SELECTED_OVERLAY_KEY, ArenaCanvas, arenaPl
 import type { CreatureState } from './components/ArenaCanvas'
 import { BehaviorHistory, buildHistoryTimeline, Histogram, HistoryChart, summarizeDistribution } from './components/Charts'
 import { GenerationAccounting } from './components/GenerationAccounting'
+import { GenerationForecast } from './components/GenerationForecast'
 import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
 import { defaultConfig,MAX_FOOD,MAX_POPULATION, sanitizeConfig } from './simulation/config'
 import { createController } from './simulation/controller'
@@ -165,6 +166,7 @@ function App(){
           </div>
           <div className="mode-line activity-line" aria-label={`What creatures are doing now. ${living} living creatures total.`}><strong>What creatures are doing now</strong>{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/><b>{stateCounts[state]}</b> {metadata.label.toLowerCase()}</span>)}</div>
           <div className="ecology-line" aria-label="Current model and energy statistics"><strong>{world.config.ecologyMode==='energy-regrowth'?'Ecological model':'Classic model'}</strong><span>{world.config.perceptionMode} perception</span><span>{world.config.predationMode} predation</span><span>mean energy <b>{stats.avgEnergy.toFixed(1)}</b></span><span>mean age <b>{stats.avgAge.toFixed(1)}</b></span></div>
+          <GenerationForecast world={world}/>
           <GenerationAccounting world={world}/>
           <Suspense fallback={<section className="evolution-story generation-journal" aria-busy="true"><p className="journal-empty" role="status">Opening generation journal…</p></section>}><GenerationJournal ledgers={world.ledger} events={world.events} requestedGeneration={requestedGeneration} onRequestedGenerationChange={setRequestedGeneration}/></Suspense>
           <section className="evolution-story" aria-labelledby="evolution-story-title">
