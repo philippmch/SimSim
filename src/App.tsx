@@ -278,7 +278,7 @@ function App(){
           </details>}
         </fieldset>
         <fieldset><legend>Selection pressures</legend>
-          <NumberControl label="Predator size ratio" value={draft.predatorRatio} min={1.05} max={2} step={.05} unit="×" onChange={v=>update('predatorRatio',v)}/>
+          <NumberControl label={draft.predationMode==='contest'?'Contest size benchmark':'Predator size ratio'} value={draft.predatorRatio} min={1.05} max={2} step={.05} unit="×" onChange={v=>update('predatorRatio',v)}/>
           <NumberControl label="Movement energy cost" value={draft.moveEnergyFactor} min={.1} max={2} step={.05} onChange={v=>update('moveEnergyFactor',v)}/>
           <NumberControl label="Sensing energy cost" value={draft.senseEnergyFactor} min={.05} max={1.5} step={.05} onChange={v=>update('senseEnergyFactor',v)}/>
           {draft.predationMode==='contest'&&<details className="rule-tuning"><summary>Attack contest tuning</summary>
@@ -289,7 +289,7 @@ function App(){
             <NumberControl label="Evasion weight" value={draft.evasionWeight} min={0} max={3} step={.05} onChange={v=>update('evasionWeight',v)}/>
           </details>}
         </fieldset>
-        <details><summary>Rules of this ecosystem</summary><p>{draft.ecologyMode==='classic'?'One food brought home survives; two also produces one mutated offspring.':'Creatures survive by returning home with energy, retain part of it, pay to reproduce, age, and forage from patches that regrow during the generation.'} {draft.perceptionMode==='realistic'?'They react at intervals and can miss targets outside their view or behind obstacles.':'They sense every target inside their radius.'} {draft.predationMode==='contest'?'Eligible hunts are probabilistic contests shaped by size, speed, energy, aggression, and caution.':`Larger creatures instantly catch animals at least ${draft.predatorRatio.toFixed(2)}× smaller.`}</p></details>
+        <details><summary>Rules of this ecosystem</summary><p>{draft.ecologyMode==='classic'?'One food brought home survives; two also produces one mutated offspring.':'Creatures survive by returning home with energy, retain part of it, pay to reproduce, age, and forage from patches that regrow during the generation.'} {draft.perceptionMode==='realistic'?'They react at intervals and can miss targets outside their view or behind obstacles.':'They sense every target inside their radius.'} {draft.predationMode==='contest'?`Hunters at least as large as their prey may attempt a contest. The ${draft.predatorRatio.toFixed(2)}× size benchmark sets the reference; raising it makes attacks harder. Speed, energy, aggression, and caution also shape the result.`:`Larger creatures instantly catch animals at least ${draft.predatorRatio.toFixed(2)}× smaller.`}</p></details>
         <button className="apply" onClick={()=>{reset();closeSettings()}} disabled={!dirty}>{dirty?'Apply parameters & restart':'No staged changes'}</button>
       </aside>
     </main>
