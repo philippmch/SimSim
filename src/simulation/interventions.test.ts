@@ -80,12 +80,12 @@ describe('selection takeaway',()=>{
   })
 
   it('reports only the stronger cohort when signals conflict',()=>{
-    expect(getSelectionTakeaway(selectionLedger(1.03,.92))).toBe('Generation 3: parents of newborns were noticeably slower on average than the starting population.')
+    expect(getSelectionTakeaway(selectionLedger(1.03,.92))).toBe('Generation 3: parents of newborns were noticeably slower on average than the evaluated cohort.')
   })
 
   it('avoids overclaiming weak shifts and explains missing cohorts',()=>{
-    expect(getSelectionTakeaway(selectionLedger(1.01,1.01,0))).toBe('Generation 3: trait averages stayed close to the starting population; no single trait stood out. No offspring were born.')
-    expect(getSelectionTakeaway(selectionLedger(1.08,null,0))).toBe('Generation 3: survivors were noticeably faster on average than the starting population. No offspring were born.')
+    expect(getSelectionTakeaway(selectionLedger(1.01,1.01,0))).toBe('Generation 3: trait averages stayed close to the evaluated cohort; no single trait stood out. No offspring were born.')
+    expect(getSelectionTakeaway(selectionLedger(1.08,null,0))).toBe('Generation 3: survivors were noticeably faster on average than the evaluated cohort. No offspring were born.')
     expect(getSelectionTakeaway(selectionLedger(null,null,0,0))).toBe('Generation 3 ended with no survivors, so there is no trait shift to compare.')
     expect(getSelectionTakeaway(undefined)).toBe('Finish a generation to see which traits stood out.')
   })

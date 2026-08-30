@@ -16,7 +16,7 @@ function edgePoint(world:World){const edge=Math.floor(random(world)*4),p=.04+ran
   return edge===0?{x:p,y:.025}:edge===1?{x:.975,y:p}:edge===2?{x:p,y:.975}:{x:.025,y:p}}
 const emptyMemory=()=>({foodX:null,foodY:null,foodUntil:0,threatX:null,threatY:null,threatUntil:0})
 const traitKeys:BiologicalTrait[]=['speed','size','sense','aggression','caution','exploration']
-const MAX_WORLD_EVENTS=60
+export const MAX_WORLD_EVENTS=60
 const traitRanges:Record<BiologicalTrait,number>={speed:2.5,size:2.5,sense:.565,aggression:1,caution:1,exploration:1}
 const traitDirections:Record<BiologicalTrait,readonly [string,string]>={speed:['slower','faster'],size:['smaller','larger'],sense:['narrower-sensing','broader-sensing'],aggression:['less aggressive','more aggressive'],caution:['less cautious','more cautious'],exploration:['less exploratory','more exploratory']}
 export function summarizeValues(values:number[]){if(!values.length)return{mean:null,variance:null,sd:null};const mean=values.reduce((a,b)=>a+b,0)/values.length,variance=values.reduce((sum,value)=>sum+(value-mean)**2,0)/values.length;return{mean,variance,sd:Math.sqrt(variance)}}
@@ -118,7 +118,7 @@ export function getSelectionTakeaway(ledger:GenerationLedger|undefined){
   if(!ledger)return'Finish a generation to see which traits stood out.'
   if(ledger.outcomes.survived===0)return`Generation ${ledger.generation} ended with no survivors, so there is no trait shift to compare.`
   const survivor=strongestSelectionSignal(ledger,'survivor'),reproducer=ledger.birthsAdmitted?strongestSelectionSignal(ledger,'reproducer'):null
-  if(!survivor&&!reproducer)return`Generation ${ledger.generation}: trait averages stayed close to the starting population; no single trait stood out.${ledger.birthsAdmitted?'':' No offspring were born.'}`
+  if(!survivor&&!reproducer)return`Generation ${ledger.generation}: trait averages stayed close to the evaluated cohort; no single trait stood out.${ledger.birthsAdmitted?'':' No offspring were born.'}`
   if(survivor&&reproducer&&survivor.trait===reproducer.trait&&Math.sign(survivor.effect)===Math.sign(reproducer.effect)){
     const direction=survivor.direction[0].toUpperCase()+survivor.direction.slice(1)
     return`Generation ${ledger.generation}: ${direction} creatures stood out among both survivors and parents of newborns.`
@@ -126,7 +126,7 @@ export function getSelectionTakeaway(ledger:GenerationLedger|undefined){
   const signal=!survivor?reproducer:!reproducer?survivor:Math.abs(survivor.effect)>=Math.abs(reproducer.effect)?survivor:reproducer
   const magnitude=Math.abs(signal!.effect)<.5?'slightly':Math.abs(signal!.effect)<1?'noticeably':'substantially'
   const subject=signal!.cohort==='survivor'?'survivors':'parents of newborns'
-  return`Generation ${ledger.generation}: ${subject} were ${magnitude} ${signal!.direction} on average than the starting population.${ledger.birthsAdmitted?'':' No offspring were born.'}`
+  return`Generation ${ledger.generation}: ${subject} were ${magnitude} ${signal!.direction} on average than the evaluated cohort.${ledger.birthsAdmitted?'':' No offspring were born.'}`
 }
 
 export function tick(world:World,dt:number,boundaryConfig?:Config){

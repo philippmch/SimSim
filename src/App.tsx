@@ -2,7 +2,8 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { ArenaCanvas, CREATURE_STATE_METADATA } from './components/ArenaCanvas'
 import type { CreatureState } from './components/ArenaCanvas'
 import { BehaviorHistory, Histogram, HistoryChart, summarizeDistribution } from './components/Charts'
-import { createWorld, getLineageAnalytics, getModeCounts, getSelectionTakeaway, getStats } from './simulation/engine'
+import { GenerationJournal } from './components/GenerationJournal'
+import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
 import { defaultConfig,MAX_FOOD,MAX_POPULATION, sanitizeConfig } from './simulation/config'
 import { createController } from './simulation/controller'
 import type { SimulationController } from './simulation/controller'
@@ -46,6 +47,7 @@ function App(){
   const [runtimeMode,setRuntimeMode]=useState<'worker'|'fallback'>('worker')
   const [distributionTrait,setDistributionTrait]=useState<BiologicalTrait>('speed')
   const [selectedIndividualId,setSelectedIndividualId]=useState<number|null>(null)
+  const [journalResetKey,setJournalResetKey]=useState(0)
   const dirty=JSON.stringify(draft)!==JSON.stringify(world.config)
   const living=world.creatures.filter(c=>c.alive).length
   const extinct=world.creatures.length===0
@@ -57,14 +59,13 @@ function App(){
   const activeModeTotal=Object.values(modes).reduce((sum,count)=>sum+count,0)
   const stateCounts:Record<CreatureState,number>={safe:living-activeModeTotal,...modes}
   const lineage=getLineageAnalytics(world)
-  const lastLedger=world.ledger.at(-1)
   const selected=world.creatures.find(c=>c.individualId===selectedIndividualId&&c.alive)
   const distribution=summarizeDistribution(world.creatures.filter(c=>c.alive).map(c=>c[distributionTrait]))
   const update=<K extends keyof Config>(key:K,value:Config[K])=>setDraft(c=>({...c,[key]:value}))
   const closeSettings=useCallback(()=>setSettingsOpen(false),[])
   const closeExperiment=useCallback(()=>{setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
   const replayExperiment=useCallback((config:Config)=>{setDraft(sanitizeConfig(config));setActionStatus('Control seed staged. Choose Apply & restart to replay it live.');setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
-  const reset=useCallback(()=>{const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}controllerRef.current?.send({type:'reset',config:clean});setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
+  const reset=useCallback(()=>{const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);setJournalResetKey(key=>key+1);persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}controllerRef.current?.send({type:'reset',config:clean});setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
   const step=()=>{setPlaying(false);controllerRef.current?.send({type:'finish'})}
   const selectIndividual=(individualId:number|null)=>{setSelectedIndividualId(individualId);controllerRef.current?.send({type:'inspect',individualId})}
   const intervene=(kind:InterventionKind)=>{controllerRef.current?.send({type:'intervene',kind});setActionStatus(kind==='resource-bloom'?'Resource bloom released.':kind==='drought'?'Drought applied.':'Founder migration released.')}
@@ -159,18 +160,13 @@ function App(){
           </div>
           <div className="mode-line activity-line" aria-label={`What creatures are doing now. ${living} living creatures total.`}><strong>What creatures are doing now</strong>{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/><b>{stateCounts[state]}</b> {metadata.label.toLowerCase()}</span>)}</div>
           <div className="ecology-line" aria-label="Current model and energy statistics"><strong>{world.config.ecologyMode==='energy-regrowth'?'Ecological model':'Classic model'}</strong><span>{world.config.perceptionMode} perception</span><span>{world.config.predationMode} predation</span><span>mean energy <b>{stats.avgEnergy.toFixed(1)}</b></span><span>mean age <b>{stats.avgAge.toFixed(1)}</b></span><span>{world.dayFoodProduced} food added today</span>{world.dayFoodRemoved>0&&<span>{world.dayFoodRemoved} removed by drought</span>}</div>
-          <div className="outcome-line" role="status">
-            <strong>Previous generation</strong>
-            {world.generation===1?<span>No outcome yet</span>:<>
-              <span><b>{world.lastReport.survived}</b> survived</span><span><b>{world.lastReport.born}</b> born</span><span><b>{world.lastReport.hunted}</b> hunted</span><span><b>{world.lastReport.energy}</b> energy</span>{world.lastReport.aged>0&&<span><b>{world.lastReport.aged}</b> aged</span>}<span><b>{world.lastReport.unfed}</b> unfed</span><span><b>{world.lastReport.late}</b> late</span>{lastLedger&&<span><b>{lastLedger.attackSuccesses}/{lastLedger.attackAttempts}</b> attacks won</span>}{world.lastReport.capped>0&&<span><b>{world.lastReport.capped}</b> births capped</span>}
-            </>}
-          </div>
+          <GenerationJournal ledgers={world.ledger} events={world.events} resetKey={journalResetKey}/>
           <section className="evolution-story" aria-labelledby="evolution-story-title">
-            <div className="story-head"><div><h2 id="evolution-story-title">Evolution story</h2><p>Who remains, and which traits selection favored most recently.</p></div><dl><div><dt>Living lineages</dt><dd>{lineage.livingLineages}</dd></div><div><dt>Effective diversity</dt><dd>{lineage.effectiveDiversity.toFixed(2)}</dd></div></dl></div>
+            <div className="story-head"><div><h2 id="evolution-story-title">Current population · lineages</h2><p>Live lineage data: who is here now. Historical outcomes and selection live in the journal above.</p></div><dl><div><dt>Living lineages</dt><dd>{lineage.livingLineages}</dd></div><div><dt>Effective diversity</dt><dd>{lineage.effectiveDiversity.toFixed(2)}</dd></div></dl></div>
             <div className="story-grid">
               <div><h3>Leading lineages</h3>{lineage.topLineages.length?<ol>{lineage.topLineages.map(item=><li key={item.lineageId}><span>Lineage {item.lineageId}</span><b>{item.count}</b><small>{Math.round(item.share*100)}%</small><i style={{width:`${item.share*100}%`}}/></li>)}</ol>:<p>No living lineages.</p>}</div>
-              <div><h3>{lineage.latestGeneration===null?'Selection shifts':'Selection shifts · generation '+lineage.latestGeneration}</h3><p>{getSelectionTakeaway(lastLedger)}</p>{lineage.latestGeneration!==null&&<ul>{lineage.selectionShifts.map(shift=><li key={shift.trait}><strong>{shift.trait}</strong><span>survivors {shift.survivor===null?'—':`${shift.survivor>=0?'+':''}${shift.survivor.toFixed(3)}`}</span><span>newborn parents {shift.reproducer===null?'—':`${shift.reproducer>=0?'+':''}${shift.reproducer.toFixed(3)}`}</span></li>)}</ul>}</div>
-              <div className="event-story"><h3>Latest ecosystem events</h3>{world.events.length?<ul>{world.events.slice(-3).reverse().map((event,index)=><li key={`${event.generation}-${event.day}-${event.kind}-${index}`}><span>Gen {event.generation} · day {event.day.toFixed(1)}</span><strong>{event.summary}</strong></li>)}</ul>:<p>Use a live shock to begin an intervention timeline.</p>}</div>
+              <div><h3>How to read this</h3><p>Each bar is the share of the living population carrying that lineage. Effective diversity is higher when several lineages remain common.</p></div>
+              <div><h3>Live vs historical</h3><p>This panel describes the current population. Choose a completed generation above to inspect its outcomes, resource balance, births, attacks, selection, and shocks.</p></div>
             </div>
           </section>
           <div className="insights">
