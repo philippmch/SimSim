@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { BiologicalTrait, GenerationLedger, InheritanceTraitSummary, SelectionSummary, TraitMoments, WorldEvent } from '../simulation/types'
-import { clampJournalGeneration, deriveGenerationInterpretation, deriveGenerationReview, deriveInheritanceAudit, deriveJournalEvents, derivePressureFingerprints, filterJournalEvents, formatAdaptivePair, getJournalEventStatus, getRecentGenerationLedgers, MAX_JOURNAL_ENTRIES, pinCurrentGeneration, resolveJournalSelection } from './GenerationJournal'
+import { clampJournalGeneration, deriveGenerationInterpretation, deriveGenerationReview, deriveInheritanceAudit, deriveJournalEvents, derivePressureFingerprints, filterJournalEvents, formatAdaptivePair, formatAttackAttemptLabel, formatAttackBasisNote, getJournalEventStatus, getRecentGenerationLedgers, MAX_JOURNAL_ENTRIES, pinCurrentGeneration, resolveJournalSelection } from './GenerationJournal'
 
 const moments=(mean:number|null)=>({mean,variance:mean===null?null:0,sd:mean===null?null:0})
 const selection=(mean:number|null)=>({speed:moments(mean),size:moments(mean),sense:moments(mean),aggression:moments(mean),caution:moments(mean),exploration:moments(mean)})
@@ -11,7 +11,7 @@ const makeLedger=(generation:number,overrides:Partial<GenerationLedger>={}):Gene
   generation,startPopulation:5,
   outcomes:{survived:3,hunted:1,energy:0,unfed:1,late:0,aged:0},
   foodAtStart:12,foodProduced:5,foodRemoved:3,foodConsumed:4,foodRemaining:10,
-  preyConsumed:2,attackAttempts:4,attackSuccesses:2,attackFailures:2,
+  preyConsumed:1,attackAttempts:2,attackSuccesses:1,attackFailures:0,attackContested:1,attackAttemptBasis:'claims',
   birthsEligible:2,birthsAdmitted:1,birthsCapped:1,
   selection:{start:selection(1),survivor:selection(1.1),reproducer:selection(1.2)},
   selectionByOutcome:{survived:selection(1),hunted:selection(1),energy:selection(null),unfed:selection(1),late:selection(null),aged:selection(null)},
@@ -93,9 +93,32 @@ describe('generation journal helpers',()=>{
     expect(review.outcomes.map(outcome=>outcome.label)).toEqual(['Survived','Hunted','Energy depleted','Returned without enough food','Missed return deadline','Old age'])
     expect(review.outcomes.reduce((sum,outcome)=>sum+outcome.count,0)).toBe(review.evaluatedPopulation)
     expect(review.resource).toMatchObject({start:12,produced:5,removed:3,consumed:4,remaining:10,expected:10,reconciled:true})
-    expect(review.attacks).toEqual({attempts:4,wins:2,failures:2,preyConsumed:2})
+    expect(review.attacks).toEqual({attempts:2,attemptBasis:'claims',wins:1,failures:0,contested:1,preyConsumed:1})
     expect(review.births).toEqual({eligible:2,admitted:1,capped:1})
     expect(review.takeaway).toContain('Generation 7')
+  })
+
+  it('carries exact contested same-prey claims from a new ledger',()=>{
+    const review=deriveGenerationReview(makeLedger(26,{attackAttempts:4,attackContested:3}))!
+    expect(review.attacks).toMatchObject({attempts:4,attemptBasis:'claims',wins:1,failures:0,contested:3})
+    expect(formatAttackAttemptLabel(review.attacks.attemptBasis)).toBe('Attack attempts (total claims)')
+    expect(formatAttackBasisNote(review.attacks.attemptBasis)).toContain('including contested same-prey claims')
+  })
+
+  it('labels admitted contest attempts separately from excluded claims',()=>{
+    const review=deriveGenerationReview(makeLedger(28,{attackAttemptBasis:'admitted',attackAttempts:2,attackSuccesses:1,attackFailures:1,attackContested:1}))!
+    expect(review.attacks).toMatchObject({attempts:2,attemptBasis:'admitted',wins:1,failures:1,contested:1})
+    expect(formatAttackAttemptLabel(review.attacks.attemptBasis)).toBe('Attack attempts (admitted/resolved)')
+    expect(formatAttackBasisNote(review.attacks.attemptBasis)).toContain('excluded')
+  })
+
+  it('marks contested same-prey claims unavailable for a legacy ledger',()=>{
+    const legacy=makeLedger(27)
+    delete (legacy as Partial<GenerationLedger>).attackContested
+    delete (legacy as Partial<GenerationLedger>).attackAttemptBasis
+    expect(deriveGenerationReview(legacy)?.attacks).toMatchObject({attemptBasis:null,contested:null})
+    expect(formatAttackAttemptLabel(null)).toBe('Attack attempts (basis unavailable)')
+    expect(formatAttackBasisNote(null)).toContain('basis unavailable for this legacy ledger')
   })
 
   it('makes extinction and no-birth reviews explicit',()=>{

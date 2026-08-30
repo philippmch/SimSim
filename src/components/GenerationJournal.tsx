@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { getSelectionTakeaway, MAX_WORLD_EVENTS } from '../simulation/engine'
 import { END_CAUSES } from '../simulation/types'
-import type { BiologicalTrait, EndCause, GenerationLedger, InheritanceTraitSummary, SelectionSummary, WorldEvent } from '../simulation/types'
+import type { AttackAttemptBasis, BiologicalTrait, EndCause, GenerationLedger, InheritanceTraitSummary, SelectionSummary, WorldEvent } from '../simulation/types'
 
 export const MAX_JOURNAL_ENTRIES = 40
 
@@ -49,7 +49,7 @@ export interface GenerationReview {
   outcomes:{cause:EndCause;label:string;count:number}[]
   survivors:number
   resource:{start:number;produced:number;removed:number;consumed:number;remaining:number;expected:number;reconciled:boolean}
-  attacks:{attempts:number;wins:number;failures:number;preyConsumed:number}
+  attacks:{attempts:number;attemptBasis:AttackAttemptBasis|null;wins:number;failures:number;contested:number|null;preyConsumed:number}
   births:{eligible:number;admitted:number;capped:number}
   takeaway:string
 }
@@ -61,6 +61,18 @@ export interface InheritanceAuditReview {
   offspringCount:number
   changedTraitValues:number
   traits:Record<BiologicalTrait,InheritanceTraitSummary>
+}
+
+export function formatAttackAttemptLabel(basis: AttackAttemptBasis | null): string {
+  return basis === 'claims' ? 'Attack attempts (total claims)' : basis === 'admitted' ? 'Attack attempts (admitted/resolved)' : 'Attack attempts (basis unavailable)'
+}
+
+export function formatAttackBasisNote(basis: AttackAttemptBasis | null): string {
+  return basis === 'claims'
+    ? 'Threshold mode counts every claim, including contested same-prey claims.'
+    : basis === 'admitted'
+      ? 'Contest mode counts admitted/resolved attempts; contested same-prey claims are excluded.'
+      : 'Attempt basis unavailable for this legacy ledger; this count cannot be classified as total claims or admitted/resolved attempts.'
 }
 
 /** Keep the journal small and ordered exactly as the retained ledger is ordered. */
@@ -180,7 +192,7 @@ export function deriveGenerationReview(ledger:GenerationLedger|undefined):Genera
     outcomes:JOURNAL_OUTCOME_KEYS.map(cause=>({cause,label:OUTCOME_LABELS[cause],count:ledger.outcomes[cause]??0})),
     survivors:ledger.outcomes.survived,
     resource:{...resource,reconciled:resource.expected===resource.remaining},
-    attacks:{attempts:ledger.attackAttempts,wins:ledger.attackSuccesses,failures:ledger.attackFailures,preyConsumed:ledger.preyConsumed},
+    attacks:{attempts:ledger.attackAttempts,attemptBasis:ledger.attackAttemptBasis??null,wins:ledger.attackSuccesses,failures:ledger.attackFailures,contested:ledger.attackContested??null,preyConsumed:ledger.preyConsumed},
     births:{eligible:ledger.birthsEligible,admitted:ledger.birthsAdmitted,capped:ledger.birthsCapped},
     takeaway:getSelectionTakeaway(ledger),
   }
@@ -296,7 +308,7 @@ export function GenerationJournal({ledgers,events,requestedGeneration,onRequeste
       <div className="story-grid journal-grid">
         <div><h3>Population outcomes</h3><p className="journal-kicker">Evaluated cohort: <strong>{review.evaluatedPopulation}</strong> creatures at settlement · each has one result</p><p className="journal-equation"><strong>{review.evaluatedPopulation}</strong> evaluated → <strong>{review.survivors}</strong> survived + <strong>{review.births.admitted}</strong> newborns = <strong>{review.nextPopulation}</strong> next population ({review.populationChange===0?'no net change':`${review.populationChange>0?'+':''}${review.populationChange}`})</p><div className="utility-breakdown"><table><tbody>{review.outcomes.map(outcome=><tr key={outcome.cause}><th scope="row">{outcome.label}</th><td>{outcome.count}</td></tr>)}</tbody></table></div></div>
         <div><h3>Resource balance</h3><p className="journal-equation"><strong>{formatNumber(review.resource.start)}</strong> start + <strong>{formatNumber(review.resource.produced)}</strong> produced − <strong>{formatNumber(review.resource.removed)}</strong> drought removed − <strong>{formatNumber(review.resource.consumed)}</strong> consumed = <strong>{formatNumber(review.resource.remaining)}</strong> remaining</p><p className={review.resource.reconciled?'journal-check':'journal-warning'} role="status">{review.resource.reconciled?'✓ Resource count reconciles.':`Check resource count: expected ${formatNumber(review.resource.expected)}.`}</p><p className="journal-kicker">Survivors: <strong>{review.survivors}</strong></p></div>
-        <div><h3>Attacks &amp; births</h3><div className="utility-breakdown"><table><tbody><tr><th scope="row">Attack attempts</th><td>{review.attacks.attempts}</td></tr><tr><th scope="row">Wins / failures</th><td>{review.attacks.wins} / {review.attacks.failures}</td></tr><tr><th scope="row">Prey consumed</th><td>{review.attacks.preyConsumed}</td></tr><tr><th scope="row">Eligible parents → admitted births</th><td>{review.births.eligible} → {review.births.admitted}</td></tr><tr><th scope="row">Births capped</th><td>{review.births.capped}</td></tr><tr><th scope="row">Parents of newborns</th><td>{review.births.admitted}</td></tr></tbody></table></div></div>
+        <div><h3>Attacks &amp; births</h3><p className="journal-kicker">{formatAttackBasisNote(review.attacks.attemptBasis)}</p><div className="utility-breakdown"><table><tbody><tr><th scope="row">{formatAttackAttemptLabel(review.attacks.attemptBasis)}</th><td>{review.attacks.attempts}</td></tr><tr><th scope="row">Wins / failures</th><td>{review.attacks.wins} / {review.attacks.failures}</td></tr><tr><th scope="row">Contested same-prey claims</th><td>{review.attacks.contested===null?'Unavailable':review.attacks.contested}</td></tr><tr><th scope="row">Prey consumed</th><td>{review.attacks.preyConsumed}</td></tr><tr><th scope="row">Eligible parents → admitted births</th><td>{review.births.eligible} → {review.births.admitted}</td></tr><tr><th scope="row">Births capped</th><td>{review.births.capped}</td></tr><tr><th scope="row">Parents of newborns</th><td>{review.births.admitted}</td></tr></tbody></table></div></div>
       </div>
       <div className="journal-takeaway"><strong>Recorded outcome summary</strong><span>{deriveGenerationInterpretation(review)}</span></div>
       <div className="event-story journal-events pressure-patterns"><h3>How offspring inherited traits</h3><p className="journal-kicker">One admitted parent produces one same-lineage offspring. Newborns copy all six traits, then enabled traits may mutate independently.{inheritance.status==='available'?' Rows show parent mean → newborn mean.':''}</p>{inheritance.status==='available'?<><p className="journal-equation"><strong>Generation {review.generation} → {review.generation+1}</strong> · {inheritance.offspringCount} newborns · <strong>{inheritance.changedTraitValues}</strong> final trait values changed out of {inheritance.offspringCount*JOURNAL_TRAITS.length}</p><ul className="story-grid">{JOURNAL_TRAITS.map(trait=>{const summary=inheritance.traits[trait],means=formatAdaptivePair(summary.parentMean!,summary.offspringMean!);return <li key={trait}><span>{TRAIT_LABELS[trait][0].toUpperCase()+TRAIT_LABELS[trait].slice(1)}</span><strong>{means[0]} → {means[1]} · {summary.changedCount} of {inheritance.offspringCount} changed</strong></li>})}</ul></>:inheritance.status==='no-births'?<p className="journal-kicker">Generation {review.generation} → {review.generation+1}: no parent→offspring comparison; no admitted parent produced a newborn.</p>:<p className="journal-kicker">Generation {review.generation} → {review.generation+1}: this retained record has {review.births.admitted} births, but its parent→offspring trait comparison is unavailable.</p>}{inheritance.status==='available'&&<p className="journal-kicker">Changed means the final clamped value differed from the matched parent; this is not a mutation-attempt count. A zero here does not imply mutation was disabled.</p>}</div>
