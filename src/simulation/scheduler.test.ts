@@ -1,2 +1,104 @@
-import{describe,expect,it}from'vitest';import{MAX_TICKS_PER_PULSE,scheduledTicks}from'./scheduler';import{SIMULATION_TIMESTEP}from'./engine'
-describe('bounded scheduler',()=>{it('preserves fixed-step remainder and caps a stalled pulse',()=>{const normal=scheduledTicks(.05,1);expect(normal.count).toBe(2);expect(normal.remainder).toBeCloseTo(0);const stalled=scheduledTicks(10,4);expect(stalled.count).toBe(MAX_TICKS_PER_PULSE);expect(stalled.remainder).toBeGreaterThan(SIMULATION_TIMESTEP)})})
+import {describe,expect,it} from 'vitest'
+import {createWorld,defaultConfig,setInspectedIndividual,SIMULATION_TIMESTEP} from './engine'
+import {MAX_TICKS_PER_PULSE,advanceToNextAction,nextActionMaxTicks,scheduledTicks} from './scheduler'
+
+describe('bounded scheduler',()=>{
+  it('preserves fixed-step remainder and caps a stalled pulse',()=>{
+    const normal=scheduledTicks(.05,1)
+    expect(normal.count).toBe(2)
+    expect(normal.remainder).toBeCloseTo(0)
+    const stalled=scheduledTicks(10,4)
+    expect(stalled.count).toBe(MAX_TICKS_PER_PULSE)
+    expect(stalled.remainder).toBeGreaterThan(SIMULATION_TIMESTEP)
+  })
+
+  it('captures an initial realistic reaction window with one tick',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0,reactionTime:.15})
+    const creature=world.creatures[0]
+    expect(creature.reactionWindow).toBe(-1)
+    const result=advanceToNextAction(world)
+    expect(result).toEqual({ticks:1,stop:'beat'})
+    expect(creature.reactionWindow).toBe(0)
+    expect(world.tickIndex).toBe(1)
+  })
+
+  it('advances a held realistic decision to the next reaction window',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0,reactionTime:.15})
+    const creature=world.creatures[0]
+    advanceToNextAction(world)
+    const before=world.tickIndex
+    const result=advanceToNextAction(world)
+    expect(result.stop).toBe('beat')
+    expect(result.ticks).toBeGreaterThan(0)
+    expect(result.ticks).toBeLessThanOrEqual(nextActionMaxTicks(world.config.reactionTime))
+    expect(world.tickIndex-before).toBe(result.ticks)
+    expect(creature.reactionWindow).toBe(1)
+  })
+
+  it('advances exactly one fixed tick for perfect perception',()=>{
+    const world=createWorld({...defaultConfig,perceptionMode:'perfect',initialPopulation:1,foodPerDay:0})
+    const result=advanceToNextAction(world)
+    expect(result).toEqual({ticks:1,stop:'beat'})
+    expect(world.tickIndex).toBe(1)
+  })
+
+  it('advances exactly one fixed tick for zero reaction time',()=>{
+    const world=createWorld({...defaultConfig,perceptionMode:'realistic',reactionTime:0,initialPopulation:1,foodPerDay:0})
+    const result=advanceToNextAction(world)
+    expect(result).toEqual({ticks:1,stop:'beat'})
+    expect(world.tickIndex).toBe(1)
+  })
+
+  it('stops at a generation boundary instead of entering the next window',()=>{
+    const world=createWorld({...defaultConfig,perceptionMode:'realistic',reactionTime:.15,initialPopulation:1,foodPerDay:0})
+    const creature=world.creatures[0]
+    creature.reactionWindow=0
+    world.dayTime=world.config.dayLength-SIMULATION_TIMESTEP
+    const generation=world.generation
+    const result=advanceToNextAction(world)
+    expect(result).toEqual({ticks:1,stop:'generation-boundary'})
+    expect(world.generation).toBe(generation+1)
+    expect(world.dayTime).toBe(0)
+  })
+
+  it('honors the strict bound when the requested window cannot be reached',()=>{
+    const reactionTime=5
+    const world=createWorld({...defaultConfig,perceptionMode:'realistic',reactionTime,initialPopulation:1,foodPerDay:0,dayLength:60})
+    world.creatures[0].reactionWindow=10_000
+    const result=advanceToNextAction(world)
+    expect(result).toEqual({ticks:nextActionMaxTicks(reactionTime),stop:'bounded'})
+    expect(result.ticks).toBe(Math.ceil(reactionTime/SIMULATION_TIMESTEP)+2)
+  })
+
+  it('returns without looping when there are no active or living creatures',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0})
+    world.creatures[0].home=true
+    const before=structuredClone(world)
+    expect(advanceToNextAction(world)).toEqual({ticks:0,stop:'no-active'})
+    expect(world).toEqual(before)
+    world.creatures[0].alive=false
+    expect(advanceToNextAction(world)).toEqual({ticks:0,stop:'no-active'})
+    world.creatures=[]
+    expect(advanceToNextAction(world)).toEqual({ticks:0,stop:'no-active'})
+  })
+
+  it('refreshes deterministic selected decision and perception telemetry at each beat',()=>{
+    const config={...defaultConfig,initialPopulation:2,foodPerDay:1,reactionTime:.15,fieldOfView:360,detectionFalloff:0,obstacleCount:0}
+    const first=createWorld(config),second=createWorld(config)
+    const selected=first.creatures[0],selectedCopy=second.creatures[0]
+    setInspectedIndividual(first,selected.individualId)
+    setInspectedIndividual(second,selectedCopy.individualId)
+    const firstBeat=advanceToNextAction(first),secondBeat=advanceToNextAction(second)
+    expect(firstBeat).toEqual(secondBeat)
+    expect(selected.decisionSummary).toBeDefined()
+    expect(selected.perceptionDiagnostics).toMatchObject({mode:'realistic',reactionWindow:0})
+    const heldDecision=structuredClone(selected.decisionSummary)
+    const nextBeat=advanceToNextAction(first)
+    advanceToNextAction(second)
+    expect(nextBeat.stop).toBe('beat')
+    expect(selected.perceptionDiagnostics).toMatchObject({mode:'realistic',reactionWindow:1})
+    expect(selected.decisionSummary).toEqual(selectedCopy.decisionSummary)
+    expect(selected.perceptionDiagnostics).toEqual(selectedCopy.perceptionDiagnostics)
+    expect(selected.decisionSummary).not.toBe(heldDecision)
+  })
+})

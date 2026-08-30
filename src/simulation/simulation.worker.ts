@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 import {applyIntervention,createWorld,runGeneration,setInspectedIndividual} from './engine'
-import {runScheduled,scheduledTicks} from './scheduler'
+import {advanceToNextAction,runScheduled,scheduledTicks} from './scheduler'
 import type {WorkerCommand,WorkerEvent} from './protocol'
 import type {World} from './types'
 let world:World|undefined,playing=false,speed=1,last=performance.now(),remainder=0,epoch=0,lastCommandId=0
@@ -10,6 +10,7 @@ self.onmessage=(event:MessageEvent<WorkerCommand>)=>{try{const command=event.dat
   if(command.type==='init'||command.type==='reset'){epoch=command.epoch??epoch+1;lastCommandId=0;world=createWorld(command.config);playing=false;remainder=0;emit({type:'snapshot',world,epoch,lastCommandId})}
   else if(command.type==='play'){playing=true;last=performance.now()}
   else if(command.type==='pause')playing=false
+  else if(command.type==='step'&&world){playing=false;last=performance.now();remainder=0;const stepResult=advanceToNextAction(world);emit({type:'snapshot',world,epoch,lastCommandId,stepId:command.stepId,stepResult})}
   else if(command.type==='speed')speed=Math.max(.5,Math.min(4,command.speed))
   else if(command.type==='inspect'&&world){setInspectedIndividual(world,command.individualId);emit({type:'snapshot',world,epoch,lastCommandId})}
   else if(command.type==='intervene'&&world){applyIntervention(world,command.kind);lastCommandId=Math.max(lastCommandId,command.commandId??0);emit({type:'snapshot',world,epoch,lastCommandId})}

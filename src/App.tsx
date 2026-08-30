@@ -6,7 +6,7 @@ import { GenerationForecast } from './components/GenerationForecast'
 import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
 import { defaultConfig,MAX_FOOD,MAX_POPULATION, sanitizeConfig } from './simulation/config'
 import { createController } from './simulation/controller'
-import type { SimulationController } from './simulation/controller'
+import type { SimulationController,SimulationSnapshotMeta } from './simulation/controller'
 import { experimentUrl,exportExperiment,importExperiment,loadInitialConfig,MAX_EXPERIMENT_TEXT,persistExperiment } from './simulation/share'
 import type { BiologicalTrait,Config,InterventionKind, World } from './simulation/types'
 
@@ -16,6 +16,15 @@ const InsightsPanel=lazy(()=>import('./components/InsightsPanel'))
 const creatureStates=Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]
 
 const copyConfig=(c:Config):Config=>({...c})
+
+function formatStepCompletion(world:World,meta:SimulationSnapshotMeta){
+  const result=meta.stepResult
+  if(!result)return''
+  if(result.stop==='generation-boundary')return`Generation ${world.generation} started.`
+  if(result.stop==='no-active')return'No active creatures remain.'
+  if(result.stop==='bounded')return'Reaction window bound reached.'
+  return'Next action beat reached.'
+}
 
 function NumberControl({label,value,min,max,step,onChange,unit}:{label:string,value:number,min:number,max:number,step:number,onChange:(n:number)=>void,unit?:string}){
   const id=label.toLowerCase().replace(/\W/g,'-')
@@ -46,6 +55,9 @@ function App(){
   const settingsCloseRef=useRef<HTMLButtonElement>(null)
   const importRef=useRef<HTMLInputElement>(null)
   const [actionStatus,setActionStatus]=useState('')
+  const [stepPending,setStepPending]=useState(false)
+  const pendingStepRef=useRef<number|null>(null)
+  const nextStepIdRef=useRef(0)
   const [runtimeMode,setRuntimeMode]=useState<'worker'|'fallback'>('worker')
   const [selectedIndividualId,setSelectedIndividualId]=useState<number|null>(null)
   const [arenaFocus,setArenaFocus]=useState<'all'|CreatureState>('all')
@@ -53,6 +65,10 @@ function App(){
   const dirty=JSON.stringify(draft)!==JSON.stringify(world.config)
   const living=world.creatures.filter(c=>c.alive).length
   const extinct=world.creatures.length===0
+  const hasActiveCreatures=world.creatures.some(c=>c.alive&&!c.home)
+  const nextActionUnavailable=!hasActiveCreatures
+  const nextActionLabel=extinct?'Next action unavailable: population extinct':nextActionUnavailable?'Next action unavailable: no active living creatures':stepPending?'Next action pending':'Pause and advance to the next action beat'
+  const nextActionTitle=extinct?'Population extinct; no next action is available.':nextActionUnavailable?'No active living creatures can take a next action.':stepPending?'Waiting for the current action beat to finish.':'Advance to the next decision beat.'
   const playingRef=useRef(playing);playingRef.current=playing
   const extinctRef=useRef(extinct);extinctRef.current=extinct
   const resumeOnVisibleRef=useRef(false)
@@ -69,12 +85,16 @@ function App(){
   const closeSettings=useCallback(()=>setSettingsOpen(false),[])
   const closeExperiment=useCallback(()=>{setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
   const replayExperiment=useCallback((config:Config)=>{setDraft(sanitizeConfig(config));setActionStatus('Control seed staged. Choose Apply & restart to replay it live.');setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
-  const reset=useCallback(()=>{const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);setRequestedGeneration(null);persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}controllerRef.current?.send({type:'reset',config:clean});setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
-  const step=()=>{setPlaying(false);controllerRef.current?.send({type:'finish'})}
+  const reset=useCallback(()=>{pendingStepRef.current=null;setStepPending(false);const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);setRequestedGeneration(null);persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}controllerRef.current?.send({type:'reset',config:clean});setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
+  const finishGeneration=()=>{pendingStepRef.current=null;setStepPending(false);setPlaying(false);controllerRef.current?.send({type:'finish'})}
+  const nextAction=()=>{const controller=controllerRef.current;if(!controller||stepPending||pendingStepRef.current!==null)return;const stepId=++nextStepIdRef.current;pendingStepRef.current=stepId;setStepPending(true);setPlaying(false);setActionStatus('Playback paused.');controller.send({type:'step',stepId})}
   const selectIndividual=(individualId:number|null)=>{setSelectedIndividualId(individualId);controllerRef.current?.send({type:'inspect',individualId})}
   const intervene=(kind:InterventionKind)=>{controllerRef.current?.send({type:'intervene',kind});setActionStatus(kind==='resource-bloom'?'Resource bloom released.':kind==='drought'?'Drought applied.':'Founder migration released.')}
 
-  useEffect(()=>{const controller=createController(initialRef.current,w=>{setWorld(w);setRevision(n=>n+1)},()=>setRuntimeMode('fallback'));controllerRef.current=controller;setRuntimeMode(controller.mode);return()=>{controller.dispose();controllerRef.current=null}},[])
+  const handleSnapshot=useCallback((nextWorld:World,meta?:SimulationSnapshotMeta)=>{setWorld(nextWorld);setRevision(n=>n+1);if(pendingStepRef.current!==null&&meta?.stepResult&&meta.stepId===pendingStepRef.current){pendingStepRef.current=null;setStepPending(false);setActionStatus(formatStepCompletion(nextWorld,meta))}},[])
+  const handleFallback=useCallback(()=>{const interrupted=pendingStepRef.current!==null;pendingStepRef.current=null;setStepPending(false);if(interrupted)setActionStatus('Step interrupted; retry Next action.');setRuntimeMode('fallback')},[])
+
+  useEffect(()=>{const controller=createController(initialRef.current,handleSnapshot,handleFallback);controllerRef.current=controller;setRuntimeMode(controller.mode);return()=>{controller.dispose();controllerRef.current=null}},[handleSnapshot,handleFallback])
 
   useEffect(()=>{
     const query=window.matchMedia('(max-width: 1050px)')
@@ -135,7 +155,8 @@ function App(){
         </section>}
         <div className="transport" role="group" aria-label="Playback controls">
           <button className="play" disabled={extinct} onClick={()=>setPlaying(v=>!v)} aria-label={extinct?'Playback unavailable: population extinct':playing?'Pause simulation':'Play simulation'}>{playing?'Ⅱ':'▶'}</button>
-          <button onClick={step} disabled={extinct} aria-label="Pause and finish the current generation">Finish generation</button>
+          <button onClick={nextAction} disabled={nextActionUnavailable||stepPending} aria-label={nextActionLabel} title={nextActionTitle}>Next action</button>
+          <button onClick={finishGeneration} disabled={extinct} aria-label="Pause and finish the current generation">Finish generation</button>
           <div className="day-progress" role="progressbar" aria-label="Current generation progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={dayProgress} aria-valuetext={arenaDayLabel}><i style={{width:`${dayProgress}%`}}/></div>
           <label className="speed-select">Playback speed <select value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value={.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option><option value={4}>4×</option></select></label>
           <button className="reset" onClick={reset}>{dirty?'Apply & restart':'Restart run'}</button>

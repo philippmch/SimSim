@@ -72,4 +72,44 @@ describe('controller failover and ordering',()=>{
     expect(snapshots.at(-1)!.events.at(-1)).toMatchObject({kind:'resource-bloom'})
     controller.dispose()
   })
+  it('advances one deterministic next action in fallback mode',()=>{
+    const snapshots:ReturnType<typeof createWorld>[]=[]
+    const controller=fallbackController({...defaultConfig,seed:304,initialPopulation:1,foodPerDay:0},world=>snapshots.push(structuredClone(world)))
+    const before=snapshots.at(-1)!
+    controller.send({type:'step'})
+    const after=snapshots.at(-1)!
+    expect(after.tickIndex).toBe(before.tickIndex+1)
+    expect(after.dayTime).toBeCloseTo(before.dayTime+.025)
+    expect(after.creatures[0].reactionWindow).toBe(0)
+    controller.dispose()
+  })
+  it('forwards next action to the worker and keeps failover paused',()=>{
+    vi.useFakeTimers();vi.stubGlobal('Worker',FakeWorker as unknown as typeof Worker)
+    let observed=createWorld({...defaultConfig,seed:305,initialPopulation:1,foodPerDay:0}),receivedStepId:number|undefined
+    const controller=createController(observed.config,(world,meta)=>{observed=world;receivedStepId=meta?.stepId},()=>{}),worker=FakeWorker.instances[0]
+    const latest=createWorld({...defaultConfig,seed:305,initialPopulation:1,foodPerDay:0})
+    worker.emit({type:'snapshot',world:latest,epoch:1,lastCommandId:0})
+    controller.send({type:'play'})
+    controller.send({type:'step',stepId:1})
+    expect(worker.sent.at(-1)).toEqual({type:'step',stepId:1})
+    worker.emit({type:'snapshot',world:latest,epoch:1,lastCommandId:0,stepId:1,stepResult:{ticks:1,stop:'beat'}})
+    expect(receivedStepId).toBe(1)
+    worker.fail()
+    expect(controller.mode).toBe('fallback')
+    const before=observed.dayTime
+    vi.advanceTimersByTime(250)
+    expect(observed.dayTime).toBe(before)
+    controller.dispose()
+  })
+  it('invokes fallback before any worker step result when the worker fails',()=>{
+    vi.stubGlobal('Worker',FakeWorker as unknown as typeof Worker)
+    let fallbacks=0,stepResults=0
+    const controller=createController(defaultConfig,(_world,meta)=>{if(meta?.stepResult)stepResults++},()=>fallbacks++),worker=FakeWorker.instances[0]
+    controller.send({type:'step',stepId:9})
+    worker.fail()
+    expect(fallbacks).toBe(1)
+    expect(stepResults).toBe(0)
+    expect(controller.mode).toBe('fallback')
+    controller.dispose()
+  })
 })
