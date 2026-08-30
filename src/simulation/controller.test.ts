@@ -1,6 +1,6 @@
 import{afterEach,describe,expect,it,vi}from'vitest'
 import{controllerEventIsCurrent,createController,fallbackController}from'./controller'
-import{applyIntervention,createWorld,defaultConfig}from'./engine'
+import{applyIntervention,createWorld,defaultConfig,finishGeneration}from'./engine'
 import type{WorkerCommand,WorkerEvent}from'./protocol'
 
 class FakeWorker{
@@ -82,6 +82,84 @@ describe('controller failover and ordering',()=>{
     expect(after.dayTime).toBeCloseTo(before.dayTime+.025)
     expect(after.creatures[0].reactionWindow).toBe(0)
     controller.dispose()
+  })
+  it('detaches every fallback snapshot while preserving action metadata and prior state',()=>{
+    vi.useFakeTimers()
+    const source=createWorld({...defaultConfig,seed:306,initialPopulation:1,dayLength:5,foodPerDay:8})
+    finishGeneration(source)
+    source.events.push({generation:source.generation,day:0,kind:'resource-bloom',summary:'Seed event',count:1})
+    const snapshots:ReturnType<typeof createWorld>[]=[],metas:unknown[]=[]
+    const controller=fallbackController(source,(world,meta)=>{snapshots.push(world);metas.push(meta)})
+    const initial=snapshots[0],initialCreature=initial.creatures[0],initialFood=initial.food[0],initialPatch=initial.environment.patches[0],initialHistory=initial.history[0],initialEvent=initial.events[0],initialLedger=initial.ledger[0]
+    const initialValues={generation:initial.generation,dayTime:initial.dayTime,creatureSpeed:initialCreature?.speed,foodX:initialFood?.x,patchStock:initialPatch?.stock,historyPopulation:initialHistory?.population,eventSummary:initialEvent?.summary,ledgerPopulation:initialLedger?.startPopulation}
+
+    controller.send({type:'step',stepId:42})
+    const afterStep=snapshots.at(-1)!
+    expect(metas.at(-1)).toMatchObject({stepId:42,stepResult:{ticks:expect.any(Number),stop:expect.any(String)}})
+    controller.send({type:'inspect',individualId:afterStep.creatures[0]?.individualId??null})
+    controller.send({type:'intervene',kind:'resource-bloom'})
+    controller.send({type:'play'})
+    const beforeTimer=snapshots.length
+    vi.advanceTimersByTime(50)
+    expect(snapshots.length).toBeGreaterThan(beforeTimer)
+    controller.send({type:'pause'})
+    controller.send({type:'finish'})
+    controller.send({type:'reset',config:{...defaultConfig,seed:307,initialPopulation:1,dayLength:5,foodPerDay:8}})
+    expect(snapshots.length).toBeGreaterThan(6)
+
+    for(let index=0;index<snapshots.length-1;index++){
+      const previous=snapshots[index],next=snapshots[index+1]
+      expect(next).not.toBe(previous)
+      expect(next.config).not.toBe(previous.config)
+      expect(next.creatures).not.toBe(previous.creatures)
+      expect(next.food).not.toBe(previous.food)
+      expect(next.environment).not.toBe(previous.environment)
+      expect(next.environment.patches).not.toBe(previous.environment.patches)
+      expect(next.history).not.toBe(previous.history)
+      expect(next.events).not.toBe(previous.events)
+      expect(next.ledger).not.toBe(previous.ledger)
+      if(previous.creatures[0]&&next.creatures[0]){
+        expect(next.creatures[0]).not.toBe(previous.creatures[0])
+        expect(next.creatures[0].memory).not.toBe(previous.creatures[0].memory)
+      }
+      if(previous.food[0]&&next.food[0])expect(next.food[0]).not.toBe(previous.food[0])
+      if(previous.environment.patches[0]&&next.environment.patches[0])expect(next.environment.patches[0]).not.toBe(previous.environment.patches[0])
+      if(previous.history[0]&&next.history[0])expect(next.history[0]).not.toBe(previous.history[0])
+      if(previous.events[0]&&next.events[0])expect(next.events[0]).not.toBe(previous.events[0])
+      if(previous.ledger[0]&&next.ledger[0])expect(next.ledger[0]).not.toBe(previous.ledger[0])
+    }
+
+    expect(initial.generation).toBe(initialValues.generation)
+    expect(initial.dayTime).toBe(initialValues.dayTime)
+    expect(initialCreature?.speed).toBe(initialValues.creatureSpeed)
+    expect(initialFood?.x).toBe(initialValues.foodX)
+    expect(initialPatch?.stock).toBe(initialValues.patchStock)
+    expect(initialHistory?.population).toBe(initialValues.historyPopulation)
+    expect(initialEvent?.summary).toBe(initialValues.eventSummary)
+    expect(initialLedger?.startPopulation).toBe(initialValues.ledgerPopulation)
+    controller.dispose()
+  })
+  it('does not let a caller mutate fallback internals through a delivered snapshot',()=>{
+    const config={...defaultConfig,seed:308,initialPopulation:2,foodPerDay:8}
+    const subjectSnapshots:ReturnType<typeof createWorld>[]=[],controlSnapshots:ReturnType<typeof createWorld>[]=[]
+    const subject=fallbackController(config,world=>subjectSnapshots.push(world)),control=fallbackController(config,world=>controlSnapshots.push(world))
+    const delivered=subjectSnapshots[0]
+    delivered.config.seed=9999999
+    delivered.creatures[0].speed=999
+    delivered.creatures[0].memory.foodX=999
+    delivered.food[0].x=999
+    delivered.environment.patches[0].stock=999
+    delivered.history[0].population=999
+    delivered.events.push({generation:99,day:99,kind:'drought',summary:'Caller mutation',count:99})
+    delivered.ledger.push(delivered.ledger[0]??({} as never))
+    delivered.creatures.length=0
+    delivered.food.length=0
+    subject.send({type:'step',stepId:1})
+    control.send({type:'step',stepId:1})
+    expect(subjectSnapshots.at(-1)).toEqual(controlSnapshots.at(-1))
+    expect(subjectSnapshots.at(-1)!.config.seed).toBe(config.seed)
+    subject.dispose()
+    control.dispose()
   })
   it('forwards next action to the worker and keeps failover paused',()=>{
     vi.useFakeTimers();vi.stubGlobal('Worker',FakeWorker as unknown as typeof Worker)
