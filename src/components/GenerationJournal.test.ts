@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import type { GenerationLedger, WorldEvent } from '../simulation/types'
-import { clampJournalGeneration, deriveGenerationReview, deriveJournalEvents, filterJournalEvents, getJournalEventStatus, getRecentGenerationLedgers, MAX_JOURNAL_ENTRIES, pinCurrentGeneration, resolveJournalSelection } from './GenerationJournal'
+import type { BiologicalTrait, GenerationLedger, SelectionSummary, TraitMoments, WorldEvent } from '../simulation/types'
+import { clampJournalGeneration, deriveGenerationReview, deriveJournalEvents, derivePressureFingerprints, filterJournalEvents, formatAdaptivePair, getJournalEventStatus, getRecentGenerationLedgers, MAX_JOURNAL_ENTRIES, pinCurrentGeneration, resolveJournalSelection } from './GenerationJournal'
 
 const moments=(mean:number|null)=>({mean,variance:mean===null?null:0,sd:mean===null?null:0})
 const selection=(mean:number|null)=>({speed:moments(mean),size:moments(mean),sense:moments(mean),aggression:moments(mean),caution:moments(mean),exploration:moments(mean)})
+const traitKeys:readonly BiologicalTrait[]=['speed','size','sense','aggression','caution','exploration']
+const profile=(overrides:Partial<Record<BiologicalTrait,TraitMoments>>={},fallback=moments(1)):SelectionSummary=>Object.fromEntries(traitKeys.map(trait=>[trait,overrides[trait]??fallback])) as SelectionSummary
 const makeLedger=(generation:number,overrides:Partial<GenerationLedger>={}):GenerationLedger=>({
   generation,startPopulation:5,
   outcomes:{survived:3,hunted:1,energy:0,unfed:1,late:0,aged:0},
@@ -11,6 +13,7 @@ const makeLedger=(generation:number,overrides:Partial<GenerationLedger>={}):Gene
   preyConsumed:2,attackAttempts:4,attackSuccesses:2,attackFailures:2,
   birthsEligible:2,birthsAdmitted:1,birthsCapped:1,
   selection:{start:selection(1),survivor:selection(1.1),reproducer:selection(1.2)},
+  selectionByOutcome:{survived:selection(1),hunted:selection(1),energy:selection(null),unfed:selection(1),late:selection(null),aged:selection(null)},
   ...overrides,
 })
 
@@ -99,5 +102,48 @@ describe('generation journal helpers',()=>{
     expect(review.births).toEqual({eligible:0,admitted:0,capped:0})
     expect(review.takeaway).toContain('no survivors')
     expect(review.resource.reconciled).toBe(true)
+  })
+
+  it('finds one strong, descriptive outcome pattern against the evaluated cohort',()=>{
+    const baseline=profile({speed:{mean:1,variance:.04,sd:.2}})
+    const ledger=makeLedger(9,{outcomes:{survived:3,hunted:0,energy:0,unfed:0,late:0,aged:0},selection:{start:baseline,survivor:selection(1),reproducer:selection(1)},selectionByOutcome:{survived:profile({speed:{mean:1.2,variance:.04,sd:.2}}),hunted:selection(null),energy:selection(null),unfed:selection(null),late:selection(null),aged:selection(null)}})
+    const [fingerprint]=derivePressureFingerprints(ledger)
+    expect(fingerprint).toMatchObject({cause:'survived',label:'Survived',count:3,status:'pattern'})
+    expect(fingerprint.comparison).toMatchObject({trait:'speed',outcomeMean:1.2,baselineMean:1,direction:'faster'})
+    expect(fingerprint.comparison?.standardizedDelta).toBeCloseTo(1)
+    expect(fingerprint.interpretation).toContain('Possible pattern')
+    expect(fingerprint.interpretation).toContain('descriptive, not causal')
+    expect(fingerprint.interpretation).toContain('+1.0 baseline SD')
+  })
+
+  it('keeps close but distinct means legible beyond the default two decimals',()=>{
+    expect(formatAdaptivePair(1.004,1.001)).toEqual(['1.004','1.001'])
+    expect(formatAdaptivePair(.49,.51)).toEqual(['0.49','0.51'])
+    expect(formatAdaptivePair(1.2,1.2)).toEqual(['1.20','1.20'])
+  })
+
+  it('distinguishes a weak signal, too few observations, and unavailable spread',()=>{
+    const baseline=profile({speed:{mean:1,variance:.04,sd:.2}})
+    const weak=makeLedger(10,{outcomes:{survived:3,hunted:0,energy:0,unfed:0,late:0,aged:0},selection:{start:baseline,survivor:selection(1),reproducer:selection(1)},selectionByOutcome:{survived:profile({speed:{mean:1.05,variance:.04,sd:.2}}),hunted:selection(null),energy:selection(null),unfed:selection(null),late:selection(null),aged:selection(null)}})
+    expect(derivePressureFingerprints(weak)[0]).toMatchObject({status:'no-standout'})
+    expect(derivePressureFingerprints(weak)[0].comparison?.standardizedDelta).toBeCloseTo(.25)
+
+    const few=makeLedger(11,{outcomes:{survived:2,hunted:0,energy:0,unfed:0,late:0,aged:0},selection:{start:baseline,survivor:selection(1),reproducer:selection(1)},selectionByOutcome:{survived:profile({speed:{mean:1.5,variance:.04,sd:.2}}),hunted:selection(null),energy:selection(null),unfed:selection(null),late:selection(null),aged:selection(null)}})
+    expect(derivePressureFingerprints(few)[0].status).toBe('too-few')
+
+    const noSpread=makeLedger(12,{outcomes:{survived:3,hunted:0,energy:0,unfed:0,late:0,aged:0},selection:{start:profile({speed:{mean:1,variance:0,sd:0}}),survivor:selection(1),reproducer:selection(1)},selectionByOutcome:{survived:profile({speed:{mean:1.5,variance:.04,sd:.2}}),hunted:selection(null),energy:selection(null),unfed:selection(null),late:selection(null),aged:selection(null)}})
+    expect(derivePressureFingerprints(noSpread)[0]).toMatchObject({status:'baseline-unavailable',comparison:{outcomeMean:1.5,baselineMean:1,standardizedDelta:null}})
+    const missingSpread=makeLedger(12,{outcomes:{survived:3,hunted:0,energy:0,unfed:0,late:0,aged:0},selection:{start:profile({speed:{mean:1,variance:null,sd:null}}),survivor:selection(1),reproducer:selection(1)},selectionByOutcome:{survived:profile({speed:{mean:1.5,variance:.04,sd:.2}}),hunted:selection(null),energy:selection(null),unfed:selection(null),late:selection(null),aged:selection(null)}})
+    expect(derivePressureFingerprints(missingSpread)[0].status).toBe('baseline-unavailable')
+  })
+
+  it('omits empty outcomes and stays honest when old runtime data lacks profiles',()=>{
+    const empty=makeLedger(13,{outcomes:{survived:0,hunted:0,energy:0,unfed:0,late:0,aged:0}})
+    expect(derivePressureFingerprints(empty)).toEqual([])
+    const old=makeLedger(14)
+    const oldRuntime=old as unknown as {selectionByOutcome?:GenerationLedger['selectionByOutcome']}
+    delete oldRuntime.selectionByOutcome
+    expect(derivePressureFingerprints(old)[0]).toMatchObject({cause:'survived',status:'unavailable',comparison:null})
+    expect(derivePressureFingerprints(old)[0].interpretation).toContain('unavailable')
   })
 })

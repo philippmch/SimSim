@@ -3,8 +3,8 @@ import{applyIntervention,createWorld,finishGeneration,getLineageAnalytics,getSel
 import{defaultConfig,MAX_FOOD,MAX_POPULATION}from'./config'
 import type{GenerationLedger,SelectionSummary}from'./types'
 
-const summary=(mean:number):SelectionSummary=>Object.fromEntries(['speed','size','sense','aggression','caution','exploration'].map(trait=>[trait,{mean,variance:0,sd:0}]))as SelectionSummary
-const ledger=(start:number,survivor:number,reproducer:number):GenerationLedger=>({generation:3,startPopulation:3,outcomes:{survived:3,hunted:0,energy:0,unfed:0,late:0,aged:0},foodAtStart:10,foodProduced:0,foodRemoved:0,foodConsumed:0,foodRemaining:10,preyConsumed:0,attackAttempts:0,attackSuccesses:0,attackFailures:0,birthsEligible:2,birthsAdmitted:2,birthsCapped:0,selection:{start:summary(start),survivor:summary(survivor),reproducer:summary(reproducer)}})
+const summary=(mean:number|null):SelectionSummary=>Object.fromEntries(['speed','size','sense','aggression','caution','exploration'].map(trait=>[trait,{mean,variance:mean===null?null:0,sd:mean===null?null:0}]))as SelectionSummary
+const ledger=(start:number,survivor:number,reproducer:number):GenerationLedger=>({generation:3,startPopulation:3,outcomes:{survived:3,hunted:0,energy:0,unfed:0,late:0,aged:0},foodAtStart:10,foodProduced:0,foodRemoved:0,foodConsumed:0,foodRemaining:10,preyConsumed:0,attackAttempts:0,attackSuccesses:0,attackFailures:0,birthsEligible:2,birthsAdmitted:2,birthsCapped:0,selection:{start:summary(start),survivor:summary(survivor),reproducer:summary(reproducer)},selectionByOutcome:{survived:summary(start),hunted:summary(null),energy:summary(null),unfed:summary(null),late:summary(null),aged:summary(null)}})
 
 describe('live interventions',()=>{
   it('replays the same command sequence deterministically',()=>{

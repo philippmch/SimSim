@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getSelectionTakeaway, MAX_WORLD_EVENTS } from '../simulation/engine'
-import type { EndCause, GenerationLedger, WorldEvent } from '../simulation/types'
+import { END_CAUSES } from '../simulation/types'
+import type { BiologicalTrait, EndCause, GenerationLedger, SelectionSummary, WorldEvent } from '../simulation/types'
 
 export const MAX_JOURNAL_ENTRIES = 40
 
@@ -13,7 +14,32 @@ const OUTCOME_LABELS:Record<EndCause,string>={
   aged:'Old age',
 }
 
-export const JOURNAL_OUTCOME_KEYS:readonly EndCause[]=['survived','hunted','energy','unfed','late','aged']
+export const JOURNAL_OUTCOME_KEYS:readonly EndCause[]=END_CAUSES
+
+const JOURNAL_TRAITS:readonly BiologicalTrait[]=['speed','size','sense','aggression','caution','exploration']
+const TRAIT_LABELS:Record<BiologicalTrait,string>={speed:'speed',size:'size',sense:'sensing',aggression:'aggression',caution:'caution',exploration:'exploration'}
+const TRAIT_DIRECTIONS:Record<BiologicalTrait,readonly [string,string]>={speed:['slower','faster'],size:['smaller','larger'],sense:['narrower sensing','broader sensing'],aggression:['less aggressive','more aggressive'],caution:['less cautious','more cautious'],exploration:['less exploratory','more exploratory']}
+
+export type PressureFingerprintStatus='pattern'|'too-few'|'baseline-unavailable'|'no-standout'|'unavailable'
+
+export interface PressureTraitComparison {
+  trait:BiologicalTrait
+  traitLabel:string
+  outcomeMean:number
+  baselineMean:number
+  delta:number
+  standardizedDelta:number|null
+  direction:string
+}
+
+export interface PressureFingerprint {
+  cause:EndCause
+  label:string
+  count:number
+  comparison:PressureTraitComparison|null
+  status:PressureFingerprintStatus
+  interpretation:string
+}
 
 export interface GenerationReview {
   generation:number
@@ -92,6 +118,37 @@ export function deriveJournalEvents(events:readonly WorldEvent[],generation:numb
   return{events:filterJournalEvents(events,generation),status:getJournalEventStatus(events,generation,retentionLimit)}
 }
 
+const finiteNumber=(value:unknown):value is number=>typeof value==='number'&&Number.isFinite(value)
+const unavailableFingerprint=(cause:EndCause,label:string,count:number):PressureFingerprint=>({cause,label,count,comparison:null,status:'unavailable',interpretation:'Pattern unavailable from this runtime data.'})
+
+/** Derive one cautious, outcome-specific trait comparison without making causal claims. */
+export function derivePressureFingerprints(ledger:GenerationLedger|undefined):PressureFingerprint[]{
+  if(!ledger)return[]
+  const profiles=(ledger as GenerationLedger & {selectionByOutcome?:Partial<Record<EndCause,SelectionSummary>>}).selectionByOutcome
+  return END_CAUSES.flatMap(cause=>{
+    const count=ledger.outcomes?.[cause]??0
+    if(count<=0)return[]
+    const label=OUTCOME_LABELS[cause],profile=profiles?.[cause]
+    if(!profile)return[unavailableFingerprint(cause,label,count)]
+    const candidates=JOURNAL_TRAITS.flatMap(trait=>{
+      const outcome=profile[trait],baseline=ledger.selection?.start?.[trait]
+      if(!outcome||!baseline||!finiteNumber(outcome.mean)||!finiteNumber(baseline.mean))return[]
+      const delta=outcome.mean-baseline.mean
+      const standardizedDelta=finiteNumber(baseline.sd)&&baseline.sd>0?delta/baseline.sd:null
+      return[{trait,traitLabel:TRAIT_LABELS[trait],outcomeMean:outcome.mean,baselineMean:baseline.mean,delta,standardizedDelta,direction:delta===0?'about the same':TRAIT_DIRECTIONS[trait][delta<0?0:1]}]
+    })
+    if(!candidates.length)return[unavailableFingerprint(cause,label,count)]
+    const standardized=candidates.filter(candidate=>candidate.standardizedDelta!==null)
+    const strongest=(standardized.length?standardized:candidates).reduce((best,candidate)=>{
+      const bestMagnitude=Math.abs(best.standardizedDelta??best.delta),candidateMagnitude=Math.abs(candidate.standardizedDelta??candidate.delta)
+      return candidateMagnitude>bestMagnitude?candidate:best
+    })
+    const status:PressureFingerprintStatus=count<3?'too-few':!standardized.length?'baseline-unavailable':Math.abs(strongest.standardizedDelta??0)>=.5?'pattern':'no-standout'
+    const interpretation=status==='pattern'?`Possible pattern — descriptive, not causal: this group was ${strongest.direction} on average (${formatSignedEffect(strongest.standardizedDelta??0)} baseline SD).`:status==='too-few'?'Too few observations to read a pattern.':status==='baseline-unavailable'?'Baseline spread unavailable, so this comparison cannot be standardized.':'No trait stood out (standardized difference < 0.5).'
+    return[{cause,label,count,comparison:strongest,status,interpretation}]
+  })
+}
+
 /** Convert a ledger into the plain-language review shown by the journal. */
 export function deriveGenerationReview(ledger:GenerationLedger|undefined):GenerationReview|null{
   if(!ledger)return null
@@ -126,12 +183,28 @@ export interface GenerationJournalProps {
 
 const formatNumber=(value:number)=>Number.isInteger(value)?String(value):value.toFixed(2)
 
+/** Format two finite means with the least shared decimal precision that keeps them distinct. */
+export function formatAdaptivePair(first:number,second:number):[string,string]{
+  if(first===second)return[formatNumber(first),formatNumber(second)]
+  const twoDecimals=[first.toFixed(2),second.toFixed(2)] as [string,string]
+  if(twoDecimals[0]!==twoDecimals[1])return twoDecimals
+  for(let decimals=3;decimals<=6;decimals++){
+    const format=(value:number)=>value.toFixed(decimals)
+    const formattedFirst=format(first),formattedSecond=format(second)
+    if(formattedFirst!==formattedSecond)return[formattedFirst,formattedSecond]
+  }
+  return[first.toFixed(6),second.toFixed(6)]
+}
+
+const formatSignedEffect=(value:number)=>`${value>=0?'+':''}${value.toFixed(1)}`
+
 export function GenerationJournal({ledgers,events,resetKey}:GenerationJournalProps){
   const [requestedGeneration,setRequestedGeneration]=useState<number|null>(null)
   const previousLatestGeneration=useRef<number|null>(null)
   const selection=useMemo(()=>resolveJournalSelection(ledgers,requestedGeneration),[ledgers,requestedGeneration])
   const selectedLedger=selection.entries.find(ledger=>ledger.generation===selection.selectedGeneration)
   const review=deriveGenerationReview(selectedLedger)
+  const pressureFingerprints=derivePressureFingerprints(selectedLedger)
   const eventReview=deriveJournalEvents(events,selection.selectedGeneration)
   const latestGeneration=selection.entries.at(-1)?.generation??null
 
@@ -173,6 +246,7 @@ export function GenerationJournal({ledgers,events,resetKey}:GenerationJournalPro
         <div><h3>Attacks &amp; births</h3><div className="utility-breakdown"><table><tbody><tr><th scope="row">Attack attempts</th><td>{review.attacks.attempts}</td></tr><tr><th scope="row">Wins / failures</th><td>{review.attacks.wins} / {review.attacks.failures}</td></tr><tr><th scope="row">Prey consumed</th><td>{review.attacks.preyConsumed}</td></tr><tr><th scope="row">Eligible parents → admitted births</th><td>{review.births.eligible} → {review.births.admitted}</td></tr><tr><th scope="row">Births capped</th><td>{review.births.capped}</td></tr><tr><th scope="row">Parents of newborns</th><td>{review.births.admitted}</td></tr></tbody></table></div></div>
       </div>
       <div className="journal-takeaway"><strong>Selection takeaway</strong><span>{review.takeaway}</span></div>
+      {pressureFingerprints.length>0&&<div className="event-story journal-events pressure-patterns"><h3>Outcome trait patterns</h3><p className="journal-kicker">Compared with the evaluated cohort; associations are descriptive, not proof of cause.</p><ul>{pressureFingerprints.map(fingerprint=>{const comparison=fingerprint.comparison,means=comparison?formatAdaptivePair(comparison.outcomeMean,comparison.baselineMean):null;return <li key={fingerprint.cause}><span>{fingerprint.label} · n={fingerprint.count}</span>{comparison&&means?<strong>{comparison.traitLabel}: {means[0]} vs cohort {means[1]} ({comparison.direction})</strong>:<strong>Trait comparison unavailable.</strong>}<span>{fingerprint.interpretation}</span></li>})}</ul></div>}
       <div className="event-story journal-events"><h3>Ecosystem events · generation {review.generation}</h3>{eventReview.events.length?<>{eventReview.status==='partial'&&<p className="journal-kicker">Showing retained events; earlier events from this generation may no longer be available.</p>}<ul>{eventReview.events.map((event,index)=><li key={`${event.generation}-${event.day}-${event.kind}-${index}`}><span>Day {event.day.toFixed(2)}</span><strong>{event.summary}</strong></li>)}</ul></>:<p className="journal-kicker">{eventReview.status==='unknown'?'No shocks retained for this generation.':'No shocks occurred in this generation.'}</p>}</div>
     </>}
   </section>

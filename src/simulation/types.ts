@@ -55,8 +55,9 @@ export interface HistoryPoint {
 export type BiologicalTrait='speed'|'size'|'sense'|'aggression'|'caution'|'exploration'
 export interface TraitMoments{mean:number|null;variance:number|null;sd:number|null}
 export type SelectionSummary=Record<BiologicalTrait,TraitMoments>
-export type EndCause='survived'|'hunted'|'energy'|'unfed'|'late'|'aged'
-export interface GenerationLedger{generation:number;startPopulation:number;outcomes:Record<EndCause,number>;foodAtStart:number;foodProduced:number;foodRemoved:number;foodConsumed:number;foodRemaining:number;preyConsumed:number;attackAttempts:number;attackSuccesses:number;attackFailures:number;birthsEligible:number;birthsAdmitted:number;birthsCapped:number;selection:{start:SelectionSummary;survivor:SelectionSummary;reproducer:SelectionSummary}}
+export const END_CAUSES=['survived','hunted','energy','unfed','late','aged'] as const
+export type EndCause=(typeof END_CAUSES)[number]
+export interface GenerationLedger{generation:number;startPopulation:number;outcomes:Record<EndCause,number>;foodAtStart:number;foodProduced:number;foodRemoved:number;foodConsumed:number;foodRemaining:number;preyConsumed:number;attackAttempts:number;attackSuccesses:number;attackFailures:number;birthsEligible:number;birthsAdmitted:number;birthsCapped:number;selection:{start:SelectionSummary;survivor:SelectionSummary;reproducer:SelectionSummary};selectionByOutcome:Record<EndCause,SelectionSummary>}
 export type InterventionKind='resource-bloom'|'drought'|'founder-migration'
 export interface WorldEvent{generation:number;day:number;kind:InterventionKind;summary:string;count:number}
 export interface LineageShare{lineageId:number;count:number;share:number}
