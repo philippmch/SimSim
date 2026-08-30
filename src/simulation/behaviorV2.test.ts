@@ -12,9 +12,9 @@ const food=(id:number,x:number,y:number)=>({id,x,y,patchId:null,energy:22})
 describe('two-phase ecology',()=>{
   it('is invariant to creature array permutation',()=>{
     const a=createWorld({...defaultConfig,seed:818,initialPopulation:10}),b=createWorld({...defaultConfig,seed:818,initialPopulation:10})
-    b.creatures.reverse();tick(a,SIMULATION_TIMESTEP);tick(b,SIMULATION_TIMESTEP)
-    const sorted=(items:Creature[])=>[...items].sort((x,y)=>x.id-y.id)
-    expect(sorted(a.creatures)).toEqual(sorted(b.creatures));expect(a.food).toEqual(b.food)
+    b.creatures.reverse();b.food.reverse();tick(a,SIMULATION_TIMESTEP);tick(b,SIMULATION_TIMESTEP)
+    const sorted=(items:Creature[])=>[...items].sort((x,y)=>x.id-y.id),sortedFood=(items:typeof a.food)=>[...items].sort((x,y)=>x.id-y.id)
+    expect(sorted(a.creatures)).toEqual(sorted(b.creatures));expect(sortedFood(a.food)).toEqual(sortedFood(b.food))
   })
   it('resolves contested food by distance then stable id',()=>{
     const w=world(2),[a,b]=w.creatures

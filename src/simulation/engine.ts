@@ -5,7 +5,7 @@ import { advanceFoodBudget,createEnvironment,effectiveFoodRegrowthRate,enforceAd
 import { decide,type Decision } from './behavior'
 import { proposeMotion } from './motion'
 import {defaultConfig,MAX_FOOD,MAX_HISTORY_POINTS,MAX_POPULATION,sanitizeConfig} from './config'
-import {perceive} from './perception'
+import {perceiveCanonical} from './perception'
 import {collectAttackClaims,resolveAttackClaims} from './predation'
 import {advanceResourceDynamics,consumeResourceStock} from './resourceDynamics'
 import {settleLifecycle} from './lifecycle'
@@ -142,10 +142,11 @@ export function tick(world:World,dt:number,boundaryConfig?:Config){
   const advanced=world.config.ecologyMode==='energy-regrowth'
   for(const c of world.creatures)if(c.alive&&!c.home&&(advanced?(c.returning||c.mode==='returning'):c.food>=1)&&distance(c,{x:c.homeX,y:c.homeY})<.025){c.home=true;c.mode='returning';c.vx=0;c.vy=0}
   const snapshots=world.creatures.filter(c=>c.alive&&!c.home).map(c=>({...c,memory:{...c.memory}})).sort((a,b)=>a.id-b.id)
+  const canonicalFood=snapshots.length?[...world.food].sort((a,b)=>a.id-b.id):[]
   const decisions=new Map<number,Decision>()
   const reactionWindows=new Map<number,number>()
-  const diagnostics=new Map<number,ReturnType<typeof perceive>['diagnostics']>()
-  for(const c of snapshots){const seen=perceive(c,snapshots,world.food,world.environment.obstacles,world.config,world.generation,world.tickIndex,world.dayTime),window=seen.diagnostics.reactionWindow,react=world.config.perceptionMode==='perfect'||c.reactionWindow!==window
+  const diagnostics=new Map<number,ReturnType<typeof perceiveCanonical>['diagnostics']>()
+  for(const c of snapshots){const seen=perceiveCanonical(c,snapshots,canonicalFood,world.environment.obstacles,world.config,world.generation,world.tickIndex,world.dayTime),window=seen.diagnostics.reactionWindow,react=world.config.perceptionMode==='perfect'||c.reactionWindow!==window
     const held:Decision={id:c.id,targetX:c.targetX,targetY:c.targetY,targetId:c.targetId,targetType:c.targetType??'explore',mode:c.mode,memory:{...c.memory},commitUntil:c.commitUntil,wanderAngle:c.wanderAngle,wanderTurn:c.wanderTurn,summary:c.decisionSummary}
     decisions.set(c.id,react?decide(c,seen.creatures,seen.food,world.config,world.dayTime,world.tickIndex,c.individualId===world.inspectedIndividualId):held);reactionWindows.set(c.id,window);if(c.individualId===world.inspectedIndividualId)diagnostics.set(c.id,seen.diagnostics)}
   const motions=new Map(snapshots.map(c=>[c.id,proposeMotion(c,decisions.get(c.id)!,world.config,world.environment.obstacles,dt)]))

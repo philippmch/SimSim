@@ -5,7 +5,7 @@ import {contestSuccessProbability} from './predation'
 export interface Decision {id:number;targetX:number;targetY:number;targetId:number|null;targetType:TargetType;mode:Mode;memory:Memory;commitUntil:number;wanderAngle:number;wanderTurn:number;summary?:DecisionSummary}
 type Candidate={type:TargetType;mode:Mode;x:number;y:number;id:number|null;score:number;urgent?:boolean}
 
-export function decide(c:Creature,active:Creature[],food:Food[],cfg:Config,time:number,tick:number,capture=false):Decision{
+export function decide(c:Creature,active:readonly Creature[],food:readonly Food[],cfg:Config,time:number,tick:number,capture=false):Decision{
   let nearestFood:Food|undefined,foodD=Infinity,nearestPrey:Creature|undefined,preyD=Infinity,nearestThreat:Creature|undefined,threatD=Infinity
   for(const f of food){const d=distance(c,f);if(d<=c.sense&&(d<foodD||(d===foodD&&f.id<(nearestFood?.id??Infinity)))){nearestFood=f;foodD=d}}
   for(const o of active){if(o.id===c.id)continue;const d=distance(c,o);if(d>c.sense)continue

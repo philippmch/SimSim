@@ -12,8 +12,8 @@ export interface PerceptionDiagnostics{
 }
 export interface PerceptionResult{
   /** Includes the observer when it was present in the creature input. */
-  creatures:Creature[]
-  food:Food[]
+  creatures:readonly Creature[]
+  food:readonly Food[]
   diagnostics:PerceptionDiagnostics
 }
 
@@ -47,21 +47,24 @@ function rejectReason(observer:Creature,target:{x:number;y:number},obstacles:rea
 }
 
 /**
- * Build the observer's local inputs without mutating inputs or consuming the
- * world's sequential RNG. Results are stable under source-array permutations.
+ * Build the observer's local inputs from canonical, stable-id-ordered arrays.
+ *
+ * The engine already has a two-phase creature snapshot and can share one
+ * ordered food snapshot across every observer in a tick. Keeping this core
+ * separate avoids repeating the defensive copy/sort work for each observer.
+ * Callers must not pass arrays whose order can change during this call.
  */
-export function perceive(observer:Creature,creatures:readonly Creature[],food:readonly Food[],obstacles:readonly Obstacle[],config:Config,generation:number,tickIndex:number,dayTime:number):PerceptionResult{
-  const sortedCreatures=stableById(creatures),sortedFood=stableById(food)
-  const otherCount=sortedCreatures.reduce((count,creature)=>count+(creature.id===observer.id?0:1),0)
+export function perceiveCanonical(observer:Creature,creatures:readonly Creature[],food:readonly Food[],obstacles:readonly Obstacle[],config:Config,generation:number,tickIndex:number,dayTime:number):PerceptionResult{
+  const otherCount=creatures.reduce((count,creature)=>count+(creature.id===observer.id?0:1),0)
   const reactionWindow=reactionWindowFor(config.reactionTime,tickIndex,dayTime)
-  const creatureCounts=emptyCounts(otherCount),foodCounts=emptyCounts(sortedFood.length)
+  const creatureCounts=emptyCounts(otherCount),foodCounts=emptyCounts(food.length)
   if(config.perceptionMode==='perfect'){
-    creatureCounts.detected=otherCount;foodCounts.detected=sortedFood.length
-    return{creatures:sortedCreatures,food:sortedFood,diagnostics:{mode:'perfect',reactionWindow,creatures:creatureCounts,food:foodCounts}}
+    creatureCounts.detected=otherCount;foodCounts.detected=food.length
+    return{creatures,food,diagnostics:{mode:'perfect',reactionWindow,creatures:creatureCounts,food:foodCounts}}
   }
 
   const visibleCreatures:Creature[]=[],visibleFood:Food[]=[]
-  for(const target of sortedCreatures){
+  for(const target of creatures){
     if(target.id===observer.id){visibleCreatures.push(target);continue}
     const rejected=rejectReason(observer,target,obstacles,config)
     if(rejected){creatureCounts[rejected]++;continue}
@@ -70,7 +73,7 @@ export function perceive(observer:Creature,creatures:readonly Creature[],food:re
     if(draw>=probability){creatureCounts.detection++;continue}
     creatureCounts.detected++;visibleCreatures.push(target)
   }
-  for(const target of sortedFood){
+  for(const target of food){
     const rejected=rejectReason(observer,target,obstacles,config)
     if(rejected){foodCounts[rejected]++;continue}
     const probability=detectionProbability(distance(observer,target),observer.sense,config.detectionFalloff)
@@ -79,4 +82,12 @@ export function perceive(observer:Creature,creatures:readonly Creature[],food:re
     foodCounts.detected++;visibleFood.push(target)
   }
   return{creatures:visibleCreatures,food:visibleFood,diagnostics:{mode:'realistic',reactionWindow,creatures:creatureCounts,food:foodCounts}}
+}
+
+/**
+ * Build the observer's local inputs without mutating inputs or consuming the
+ * world's sequential RNG. Results are stable under source-array permutations.
+ */
+export function perceive(observer:Creature,creatures:readonly Creature[],food:readonly Food[],obstacles:readonly Obstacle[],config:Config,generation:number,tickIndex:number,dayTime:number):PerceptionResult{
+  return perceiveCanonical(observer,stableById(creatures),stableById(food),obstacles,config,generation,tickIndex,dayTime)
 }
