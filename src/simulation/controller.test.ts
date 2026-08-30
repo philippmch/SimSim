@@ -9,7 +9,7 @@ class FakeWorker{
   constructor(){FakeWorker.instances.push(this)}postMessage(command:WorkerCommand){this.sent.push(command)}terminate(){this.terminated=true}
   emit(data:WorkerEvent){this.onmessage?.({data}as MessageEvent<WorkerEvent>)}fail(){this.onerror?.()}
 }
-afterEach(()=>{vi.unstubAllGlobals();FakeWorker.instances=[]})
+afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();FakeWorker.instances=[]})
 
 describe('controller failover and ordering',()=>{
   it('starts fallback from the latest world snapshot without resetting progress',()=>{const world=createWorld({...defaultConfig,seed:78});world.generation=7;world.dayTime=4.25;world.creatures[0].food=1;let observed=world;const controller=fallbackController(world,value=>{observed=value});expect(observed.generation).toBe(7);expect(observed.dayTime).toBe(4.25);expect(observed.creatures[0].food).toBe(1);expect(observed).not.toBe(world);controller.dispose()})
@@ -24,6 +24,18 @@ describe('controller failover and ordering',()=>{
     const current=createWorld(resetConfig);current.generation=4;worker.emit({type:'snapshot',world:current,epoch:2});expect(observed.generation).toBe(4)
     worker.fail();expect(fallbacks).toBe(1);expect(observed.generation).toBe(4);expect(observed.config.seed).toBe(202)
     worker.emit({type:'snapshot',world:stale,epoch:1});expect(observed.generation).toBe(4);controller.dispose()
+  })
+  it('keeps failover paused after resetting a previously playing worker',()=>{
+    vi.useFakeTimers();vi.stubGlobal('Worker',FakeWorker as unknown as typeof Worker)
+    const config={...defaultConfig,seed:404};let observed=createWorld(config)
+    const controller=createController(config,world=>{observed=world},()=>{}),worker=FakeWorker.instances[0]
+    controller.send({type:'play'})
+    const resetConfig={...config,seed:505};controller.send({type:'reset',config:resetConfig})
+    worker.fail()
+    expect(controller.mode).toBe('fallback')
+    vi.advanceTimersByTime(250)
+    expect(observed.dayTime).toBe(0)
+    controller.dispose()
   })
   it('tags intervention commands so worker snapshots can acknowledge them',()=>{
     vi.stubGlobal('Worker',FakeWorker as unknown as typeof Worker);const controller=createController(defaultConfig,()=>{},()=>{}),worker=FakeWorker.instances[0]
