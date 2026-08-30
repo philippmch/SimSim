@@ -56,10 +56,24 @@ export interface PredationResolution {
 
 export const attackContactRadius = (attacker: Pick<PredationParticipant, 'size'>) => .014 + .012 * attacker.size
 
+/**
+ * Shared size gate for every stage of the predation pipeline.
+ *
+ * Threshold mode keeps the legacy hard ratio. Contest mode is deliberately
+ * reachable for evenly matched animals: predatorRatio remains the relative
+ * advantage reference in contestSuccessProbability rather than an admission
+ * requirement.
+ */
+export function isPredationSizeEligible(attacker: Pick<PredationParticipant, 'size'>, prey: Pick<PredationParticipant, 'size'>, config: Config) {
+  if (!Number.isFinite(attacker.size) || !Number.isFinite(prey.size)) return false
+  const minimumRatio = config.predationMode === 'contest' ? 1 : config.predatorRatio
+  return attacker.size >= prey.size * minimumRatio
+}
+
 /** Eligibility is evaluated from the shared pre-attack state, preserving attack-chain semantics. */
 export function isEligiblePrey(attacker: PredationParticipant, prey: PredationParticipant, config: Config) {
   return attacker.id !== prey.id && attacker.alive !== false && attacker.home !== true && prey.alive !== false && prey.home !== true &&
-    Number.isFinite(attacker.size) && Number.isFinite(prey.size) && attacker.size >= prey.size * config.predatorRatio
+    isPredationSizeEligible(attacker, prey, config)
 }
 
 /** Uses the legacy strict contact inequality; touching the boundary is not contact. */

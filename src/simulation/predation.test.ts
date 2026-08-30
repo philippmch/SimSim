@@ -4,7 +4,7 @@ import { keyedRandom } from './random'
 import type { Config } from './types'
 import {
   attackContactRadius, collectAttackClaims, contestSuccessProbability, createAttackClaim,
-  resolveAttackClaims, THRESHOLD_PREY_ENERGY, type AttackClaim, type PredationParticipant,
+  isPredationSizeEligible, resolveAttackClaims, THRESHOLD_PREY_ENERGY, type AttackClaim, type PredationParticipant,
 } from './predation'
 
 const participant = (id: number, extra: Partial<PredationParticipant> = {}): PredationParticipant => ({
@@ -30,6 +30,23 @@ describe('threshold predation golden behavior', () => {
 })
 
 describe('contest policy', () => {
+  it('admits an equal-size in-contact contest while threshold keeps the hard ratio', () => {
+    const attacker = participant(1), prey = participant(2)
+    expect(isPredationSizeEligible(attacker, prey, contest)).toBe(true)
+    expect(isPredationSizeEligible(attacker, prey, threshold)).toBe(false)
+    expect(createAttackClaim(attacker, prey, contest)).not.toBeNull()
+    expect(createAttackClaim(attacker, prey, threshold)).toBeNull()
+    expect(resolveAttackClaims([createAttackClaim(attacker, prey, contest)!], contest, context).admitted).toHaveLength(1)
+  })
+
+  it('keeps equal-size contest admission deterministic under participant and claim permutation', () => {
+    const first = participant(1, { x: .49 }), second = participant(2, { x: .51 }), prey = participant(3)
+    const forward = collectAttackClaims([first, second], [prey], contest)
+    const reverse = collectAttackClaims([second, first], [prey], contest)
+    expect(reverse).toEqual(forward)
+    expect(resolveAttackClaims([...reverse].reverse(), contest, context)).toEqual(resolveAttackClaims(forward, contest, context))
+  })
+
   it('is monotonic in every modeled advantage and disadvantage', () => {
     const prey = participant(2, { caution: .4 })
     const baseline = participant(1, { size: 1.2, aggression: .4 })

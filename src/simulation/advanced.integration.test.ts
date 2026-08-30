@@ -18,7 +18,7 @@ describe('environment-modulated regrowth',()=>{
 })
 
 describe('integrated realistic perception and reaction',()=>{
-  it('records selected-only FOV/occlusion diagnostics and holds decisions inside a reaction window',()=>{const w=advanced({perceptionMode:'realistic',fieldOfView:90,detectionFalloff:0,reactionTime:.2}),[actor,behind]=w.creatures;Object.assign(actor,{x:.5,y:.5,angle:0,sense:.35});Object.assign(behind,{x:.4,y:.5});w.environment.obstacles=[{id:800,x:.6,y:.5,radius:.03}];w.food=[item(900,.7,.5)];w.inspectedIndividualId=actor.individualId
+  it('records selected-only FOV/occlusion diagnostics and holds decisions inside a reaction window',()=>{const w=advanced({perceptionMode:'realistic',predationMode:'threshold',fieldOfView:90,detectionFalloff:0,reactionTime:.2}),[actor,behind]=w.creatures;Object.assign(actor,{x:.5,y:.5,angle:0,sense:.35});Object.assign(behind,{x:.4,y:.5});w.environment.obstacles=[{id:800,x:.6,y:.5,radius:.03}];w.food=[item(900,.7,.5)];w.inspectedIndividualId=actor.individualId
     tick(w,SIMULATION_TIMESTEP);expect(actor.perceptionDiagnostics).toMatchObject({mode:'realistic',creatures:{fov:1},food:{occlusion:1}});expect(behind.perceptionDiagnostics).toBeUndefined();const held={type:actor.targetType,id:actor.targetId,x:actor.targetX,y:actor.targetY};w.environment.obstacles=[];w.config.fieldOfView=360;w.food=[item(901,actor.x+.1,actor.y)]
     tick(w,SIMULATION_TIMESTEP);expect({type:actor.targetType,id:actor.targetId,x:actor.targetX,y:actor.targetY}).toEqual(held);for(let i=0;i<7;i++)tick(w,SIMULATION_TIMESTEP);expect(actor.reactionWindow).toBe(1);expect(actor.targetType).toBe('food');expect(actor.targetId).toBe(901)})
 })
@@ -43,8 +43,8 @@ describe('integrated contest predation',()=>{
   it('records contested claims and the attempt basis for both predation modes',()=>{
     const run=(predationMode:'threshold'|'contest')=>{
       const world=advanced({initialPopulation:5,predationMode,perceptionMode:'realistic',reactionTime:5,fieldOfView:360,obstacleOcclusion:false,dayLength:5}),[first,second,third,contestedPrey,otherPrey]=world.creatures
-      Object.assign(first,{x:.3,y:.3,size:2,speed:2,energy:200,aggression:1,mode:'hunting',targetType:'prey',targetId:contestedPrey.id,targetX:contestedPrey.x,targetY:contestedPrey.y,reactionWindow:0,attackCooldownUntil:0})
-      Object.assign(second,{x:.3,y:.3,size:2,speed:2,energy:200,aggression:1,mode:'hunting',targetType:'prey',targetId:contestedPrey.id,targetX:contestedPrey.x,targetY:contestedPrey.y,reactionWindow:0,attackCooldownUntil:0})
+      Object.assign(first,{x:.275,y:.3,size:2,speed:2,energy:200,aggression:1,mode:'hunting',targetType:'prey',targetId:contestedPrey.id,targetX:contestedPrey.x,targetY:contestedPrey.y,reactionWindow:0,attackCooldownUntil:0})
+      Object.assign(second,{x:.325,y:.3,size:2,speed:2,energy:200,aggression:1,mode:'hunting',targetType:'prey',targetId:contestedPrey.id,targetX:contestedPrey.x,targetY:contestedPrey.y,reactionWindow:0,attackCooldownUntil:0})
       Object.assign(third,{x:.7,y:.7,size:1.2,speed:.4,energy:20,aggression:0,mode:predationMode==='contest'?'hunting':'exploring',targetType:predationMode==='contest'?'prey':'explore',targetId:predationMode==='contest'?otherPrey.id:null,targetX:otherPrey.x,targetY:otherPrey.y,reactionWindow:0,attackCooldownUntil:0})
       Object.assign(contestedPrey,{x:.3,y:.3,size:1,speed:.4,energy:40,caution:0,mode:'exploring',targetType:'explore',targetId:null,targetX:.3,targetY:.3,reactionWindow:0})
       Object.assign(otherPrey,{x:.7,y:.7,size:1,speed:2.8,energy:300,caution:1,mode:'exploring',targetType:'explore',targetId:null,targetX:.7,targetY:.7,reactionWindow:0})

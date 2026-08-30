@@ -1,16 +1,24 @@
 import type { Config,Creature,DecisionSummary,Food,Memory,Mode,TargetType } from './types'
 import { clamp,distance,keyedNoise } from './random'
-import {contestSuccessProbability} from './predation'
+import {contestSuccessProbability,isEligiblePrey} from './predation'
 
 export interface Decision {id:number;targetX:number;targetY:number;targetId:number|null;targetType:TargetType;mode:Mode;memory:Memory;commitUntil:number;wanderAngle:number;wanderTurn:number;summary?:DecisionSummary}
 type Candidate={type:TargetType;mode:Mode;x:number;y:number;id:number|null;score:number;urgent?:boolean}
 
 export function decide(c:Creature,active:readonly Creature[],food:readonly Food[],cfg:Config,time:number,tick:number,capture=false):Decision{
   let nearestFood:Food|undefined,foodD=Infinity,nearestPrey:Creature|undefined,preyD=Infinity,nearestThreat:Creature|undefined,threatD=Infinity
+  const advanced=cfg.ecologyMode==='energy-regrowth'
+  const huntScore=(prey:Creature,d:number)=>{if(cfg.predationMode!=='contest')return(1+7*c.aggression)/(d+.08)-4*c.caution*(prey.size/c.size);const expected=contestSuccessProbability(c,prey,cfg)*cfg.preyEnergy-cfg.attackCost;return expected<=0?-Infinity:expected*(.4+1.6*c.aggression)/(d+.08)-4*c.caution*(prey.size/c.size)}
+  let bestPreyScore=-Infinity
   for(const f of food){const d=distance(c,f);if(d<=c.sense&&(d<foodD||(d===foodD&&f.id<(nearestFood?.id??Infinity)))){nearestFood=f;foodD=d}}
   for(const o of active){if(o.id===c.id)continue;const d=distance(c,o);if(d>c.sense)continue
-    if(o.size>=c.size*cfg.predatorRatio&&(d<threatD||(d===threatD&&o.id<(nearestThreat?.id??Infinity)))){nearestThreat=o;threatD=d}
-    if(c.size>=o.size*cfg.predatorRatio&&(d<preyD||(d===preyD&&o.id<(nearestPrey?.id??Infinity)))){nearestPrey=o;preyD=d}
+    if(isEligiblePrey(o,c,cfg)&&(d<threatD||(d===threatD&&o.id<(nearestThreat?.id??Infinity)))){nearestThreat=o;threatD=d}
+    if(isEligiblePrey(c,o,cfg)){
+      if(cfg.predationMode==='contest'){
+        const score=huntScore(o,d)
+        if(Number.isFinite(score)&&(score>bestPreyScore||(score===bestPreyScore&&(d<preyD||(d===preyD&&o.id<(nearestPrey?.id??Infinity)))))){nearestPrey=o;preyD=d;bestPreyScore=score}
+      }else if(d<preyD||(d===preyD&&o.id<(nearestPrey?.id??Infinity))){nearestPrey=o;preyD=d}
+    }
   }
   const memory={...c.memory}
   if(nearestFood){memory.foodX=nearestFood.x;memory.foodY=nearestFood.y;memory.foodUntil=time+cfg.memoryDuration}
@@ -21,10 +29,9 @@ export function decide(c:Creature,active:readonly Creature[],food:readonly Food[
   const cost=.12+cfg.senseEnergyFactor*c.sense*8+cfg.moveEnergyFactor*c.size**3*c.speed**2
   const homeD=distance(c,{x:c.homeX,y:c.homeY}),homeTime=homeD/Math.max(.001,.038*c.speed),timeLeft=cfg.dayLength-time
   const unsafe=c.food===1&&(timeLeft<=homeTime*1.2+.5||c.energy<=cost*homeTime*1.25+2)
-  const advanced=cfg.ecologyMode==='energy-regrowth',advancedUnsafe=timeLeft<=homeTime*1.2+.5||c.energy<=cost*homeTime*1.25+5
+  const advancedUnsafe=timeLeft<=homeTime*1.2+.5||c.energy<=cost*homeTime*1.25+5
   const reproductiveReserve=cfg.startingEnergy+cfg.reproductionEnergyCost/Math.max(.05,cfg.energyRetention)
   const reserveReady=advanced&&c.energy>=reproductiveReserve
-  const huntScore=(prey:Creature,d:number)=>{if(cfg.predationMode!=='contest')return(1+7*c.aggression)/(d+.08)-4*c.caution*(prey.size/c.size);const expected=contestSuccessProbability(c,prey,cfg)*cfg.preyEnergy-cfg.attackCost;return expected<=0?-Infinity:expected*(.4+1.6*c.aggression)/(d+.08)-4*c.caution*(prey.size/c.size)}
   const candidates:Candidate[]=[]
   if(nearestThreat){const urgent=threatD<c.sense*(.1+.5*c.caution);candidates.push({type:'threat',mode:'fleeing',id:nearestThreat.id,x:clamp(c.x+(c.x-nearestThreat.x)*3,0,1),y:clamp(c.y+(c.y-nearestThreat.y)*3,0,1),score:6+6*c.caution+(c.sense-threatD)/c.sense*4,urgent})}
   else if(memory.threatX!==null)candidates.push({type:'threat',mode:'fleeing',id:null,x:clamp(c.x+(c.x-memory.threatX)*2,0,1),y:clamp(c.y+(c.y-memory.threatY!)*2,0,1),score:2.5*c.caution})
@@ -34,7 +41,7 @@ export function decide(c:Creature,active:readonly Creature[],food:readonly Food[
     if(nearestFood)candidates.push({type:'food',mode:'foraging',id:nearestFood.id,x:nearestFood.x,y:nearestFood.y,score:(3.2+c.exploration+(advanced?Math.max(0,reproductiveReserve-c.energy)/Math.max(1,cfg.foodEnergy):0))/(foodD+.06)})
     if(nearestPrey){const score=huntScore(nearestPrey,preyD);if(Number.isFinite(score))candidates.push({type:'prey',mode:'hunting',id:nearestPrey.id,x:nearestPrey.x,y:nearestPrey.y,score})}
     if(c.targetType==='food'&&c.targetId!==nearestFood?.id){const held=food.find(f=>f.id===c.targetId);if(held&&distance(c,held)<=c.sense)candidates.push({type:'food',mode:'foraging',id:held.id,x:held.x,y:held.y,score:(3.2+c.exploration)/(distance(c,held)+.06)})}
-    if(c.targetType==='prey'&&c.targetId!==nearestPrey?.id){const held=active.find(o=>o.id===c.targetId&&c.size>=o.size*cfg.predatorRatio);if(held&&distance(c,held)<=c.sense){const score=huntScore(held,distance(c,held));if(Number.isFinite(score))candidates.push({type:'prey',mode:'hunting',id:held.id,x:held.x,y:held.y,score})}}
+    if(c.targetType==='prey'&&c.targetId!==nearestPrey?.id){const held=active.find(o=>o.id===c.targetId&&isEligiblePrey(c,o,cfg));if(held&&distance(c,held)<=c.sense){const score=huntScore(held,distance(c,held));if(Number.isFinite(score))candidates.push({type:'prey',mode:'hunting',id:held.id,x:held.x,y:held.y,score})}}
     if(!nearestFood&&memory.foodX!==null)candidates.push({type:'memory',mode:'foraging',id:null,x:memory.foodX,y:memory.foodY!,score:(1.5+2*c.exploration)/(distance(c,{x:memory.foodX,y:memory.foodY!})+.1)})
   }
   const noise=keyedNoise(cfg.seed,c.id,tick,1)
