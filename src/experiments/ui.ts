@@ -1,6 +1,6 @@
 import { sanitizeConfig } from '../simulation/config'
 import type { Config } from '../simulation/types'
-import type { ExperimentMetric, ExperimentPlan, InterventionConfigKey, InterventionPatch } from './types'
+import type { AggregatePoint, ExperimentMetric, ExperimentPlan, InterventionConfigKey, InterventionPatch } from './types'
 
 export interface InterventionConstraint {
   key: InterventionConfigKey
@@ -65,7 +65,77 @@ export interface ExperimentDraft {
   interventionValue: number
 }
 
+export type ExperimentStudySizeKey = 'quick' | 'standard' | 'deep'
+export type ExperimentStudySizeSelection = ExperimentStudySizeKey | 'custom'
+export const DEFAULT_EXPERIMENT_STUDY_SIZE: ExperimentStudySizeKey = 'quick'
+
+export interface ExperimentStudySizeOption {
+  key: ExperimentStudySizeKey
+  label: string
+  replicates: number
+  generations: number
+}
+
+export const EXPERIMENT_ARM_COUNT = 2
+
+/** Count one run for each arm advancing through one generation. */
+export function experimentGenerationRunCount(replicates: number, generations: number): number {
+  const pairs = Number.isFinite(replicates) ? Math.max(0, Math.round(replicates)) : 0
+  const horizon = Number.isFinite(generations) ? Math.max(0, Math.round(generations)) : 0
+  return pairs * horizon * EXPERIMENT_ARM_COUNT
+}
+
+/** Named workloads keep the first experiment easy to run while making scale explicit. */
+export const EXPERIMENT_STUDY_SIZES: readonly ExperimentStudySizeOption[] = [
+  { key: 'quick', label: 'Quick exploratory', replicates: 4, generations: 6 },
+  { key: 'standard', label: 'Standard', replicates: 6, generations: 8 },
+  { key: 'deep', label: 'Deep', replicates: 10, generations: 16 },
+]
+
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
+
+/** Return the one-based generation where a treatment should begin for a horizon. */
+export function interventionGenerationFor(generations: number): number {
+  const horizon = Number.isFinite(generations) ? Math.max(1, Math.round(generations)) : 1
+  return clamp(Math.round(horizon * .4), 1, horizon)
+}
+
+export function identifyExperimentStudySize(replicates: number, generations: number): ExperimentStudySizeSelection {
+  return EXPERIMENT_STUDY_SIZES.find(item => item.replicates === replicates && item.generations === generations)?.key ?? 'custom'
+}
+
+export function applyExperimentStudySize(
+  size: ExperimentStudySizeKey,
+  draft: ExperimentDraft,
+): ExperimentDraft {
+  const option = EXPERIMENT_STUDY_SIZES.find(item => item.key === size)
+  if (!option) return draft
+  return {
+    ...draft,
+    replicates: option.replicates,
+    generations: option.generations,
+    interventionGeneration: interventionGenerationFor(option.generations),
+  }
+}
+
+export function experimentEarlyStopNote(completedGenerationRuns: number, plannedGenerationRuns: number): string | null {
+  if (completedGenerationRuns >= plannedGenerationRuns) return null
+  return `Only ${completedGenerationRuns} of ${plannedGenerationRuns} planned generation-runs completed; extinct arms stopped early.`
+}
+
+export function experimentCompletionMessage(completedGenerationRuns: number, plannedGenerationRuns: number): string {
+  const note = experimentEarlyStopNote(completedGenerationRuns, plannedGenerationRuns)
+  return note ? `Experiment complete. ${note}` : 'Experiment complete.'
+}
+
+/** Return the latest generation whose paired effect has at least one comparable pair. */
+export function latestComparableAggregate(aggregates: readonly AggregatePoint[]): AggregatePoint | null {
+  for (let index = aggregates.length - 1; index >= 0; index--) {
+    const aggregate = aggregates[index]
+    if (aggregate.effect.count > 0) return aggregate
+  }
+  return null
+}
 
 export function maximumExperimentGenerations(replicates: number): number {
   const cleanReplicates = clamp(Math.round(replicates || 2), 2, 20)
@@ -93,21 +163,22 @@ export function normalizeInterventionValue(key: InterventionConfigKey, value: nu
 }
 
 export function defaultExperimentDraft(baseConfig: Config): ExperimentDraft {
-  const generations = 12
+  const study = EXPERIMENT_STUDY_SIZES.find(option => option.key === DEFAULT_EXPERIMENT_STUDY_SIZE)!
+  const generations = study.generations
   return {
-    replicates: 6,
+    replicates: study.replicates,
     generations,
     masterSeed: baseConfig.seed,
     metric: 'population',
     stopOnExtinction: true,
-    interventionGeneration: 5,
+    interventionGeneration: interventionGenerationFor(generations),
     interventionKey: 'foodPerDay',
     interventionValue: normalizeInterventionValue('foodPerDay', baseConfig.ecologyMode === 'energy-regrowth' ? 0 : Math.round(baseConfig.foodPerDay * .4)),
   }
 }
 
 export function applyExperimentPreset(preset: ExperimentPreset, draft: ExperimentDraft, baseConfig: Config): ExperimentDraft {
-  const interventionGeneration = clamp(Math.round(draft.generations * .4), 1, draft.generations)
+  const interventionGeneration = interventionGenerationFor(draft.generations)
   if (preset === 'movement') return {
     ...draft,
     interventionGeneration,

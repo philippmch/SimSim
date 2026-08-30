@@ -4,12 +4,20 @@ import type { Config } from '../simulation/types'
 import {
   EXPERIMENT_METRIC_OPTIONS,
   EXPERIMENT_PRESETS,
+  DEFAULT_EXPERIMENT_STUDY_SIZE,
   availableInterventionConstraints,
   applyExperimentPreset,
+  applyExperimentStudySize,
   buildExperimentPlan,
   constraintFor,
   defaultExperimentDraft,
   experimentProgressIsCurrent,
+  experimentCompletionMessage,
+  experimentEarlyStopNote,
+  experimentGenerationRunCount,
+  EXPERIMENT_STUDY_SIZES,
+  identifyExperimentStudySize,
+  latestComparableAggregate,
   maximumExperimentGenerations,
   normalizeInterventionValue,
   formatExperimentMetricValue,
@@ -17,6 +25,7 @@ import {
   workerEventIsCurrent,
   type ExperimentDraft,
   type ExperimentPreset,
+  type ExperimentStudySizeSelection,
 } from '../experiments/panel'
 import { ExperimentCancelledError, runExperiment } from '../experiments/runner'
 import { fromExperimentJson, toExperimentJson, toTidyCsv } from '../experiments/serialize'
@@ -100,7 +109,9 @@ function ResultPlot({ result }: { result: ExperimentResult }) {
 function Results({ result, onReplay }: { result: ExperimentResult; onReplay: (config: Config) => void }) {
   const metric = result.plan.metrics[0]
   const points = result.aggregates.filter(point => point.metric === metric)
-  const final = points.at(-1)
+  const final = latestComparableAggregate(points)
+  const plannedGenerationRuns = experimentGenerationRunCount(result.plan.replicates, result.plan.generations)
+  const earlyStopNote = experimentEarlyStopNote(result.completedGenerationRuns, plannedGenerationRuns)
   const [replicate, setReplicate] = useState(0)
   const exportJson = () => {
     const json = toExperimentJson(result)
@@ -112,9 +123,9 @@ function Results({ result, onReplay }: { result: ExperimentResult; onReplay: (co
     onReplay(sanitizeConfig({ ...result.plan.baseConfig, ...(result.plan.scenarioA.config ?? {}), seed }))
   }
   return <section className="experiment-results" aria-labelledby="experiment-results-title">
-    <div className="experiment-results-head"><div><h3 id="experiment-results-title">Paired result</h3><p>{result.replicates.length} matched seeds · {metricLabel(metric)}</p></div><div className="experiment-effect"><span>Final treatment − control</span><strong>{format(final?.effect.mean ?? null, metric)}</strong><small>mean · median {format(final?.effect.median ?? null, metric)}</small></div></div>
+    <div className="experiment-results-head"><div><h3 id="experiment-results-title">Paired result</h3><p>{result.replicates.length} matched seeds · {metricLabel(metric)}</p>{earlyStopNote && <p>{earlyStopNote}</p>}</div><div className="experiment-effect">{final ? <><span>{final.generation === result.plan.generations ? 'Final treatment − control' : `Last comparable treatment − control · gen ${final.generation}`}</span><strong>{format(final.effect.mean, metric)}</strong><small>n={final.effect.count} comparable pairs · mean · median {format(final.effect.median, metric)}</small></> : <><span>No comparable paired effect</span><strong>—</strong><small>No generation had a numeric effect for both arms.</small></>}</div></div>
     <ResultPlot result={result}/>
-    <div className="experiment-table-wrap"><table className="experiment-table"><caption>Per-generation medians, middle 50% intervals, and paired effects</caption><thead><tr><th>Gen</th><th>Control</th><th>Treatment</th><th>Effect</th></tr></thead><tbody>{points.map(point => <tr key={point.generation}><th>{point.generation}</th><td>{format(point.scenarioA.median, metric)} <small>[{format(point.scenarioA.q1, metric)}–{format(point.scenarioA.q3, metric)}]</small></td><td>{format(point.scenarioB.median, metric)} <small>[{format(point.scenarioB.q1, metric)}–{format(point.scenarioB.q3, metric)}]</small></td><td>{format(point.effect.mean, metric)} <small>mean</small></td></tr>)}</tbody></table></div>
+    <div className="experiment-table-wrap"><table className="experiment-table"><caption>Per-generation medians, middle 50% intervals, and paired effects</caption><thead><tr><th>Gen</th><th>Control</th><th>Treatment</th><th>Effect</th></tr></thead><tbody>{points.map(point => <tr key={point.generation}><th>{point.generation}</th><td>{format(point.scenarioA.median, metric)} <small>[{format(point.scenarioA.q1, metric)}–{format(point.scenarioA.q3, metric)}]</small></td><td>{format(point.scenarioB.median, metric)} <small>[{format(point.scenarioB.q1, metric)}–{format(point.scenarioB.q3, metric)}]</small></td><td>{format(point.effect.mean, metric)} <small>mean · n={point.effect.count}</small></td></tr>)}</tbody></table></div>
     <div className="experiment-result-actions">
       <button onClick={exportJson}>Export JSON</button>
       <button onClick={() => download(`${result.plan.id}.csv`, 'text/csv;charset=utf-8', toTidyCsv(result))}>Export tidy CSV</button>
@@ -126,6 +137,7 @@ function Results({ result, onReplay }: { result: ExperimentResult; onReplay: (co
 
 export function ExperimentPanel({ baseConfig, onClose, onReplay }: ExperimentPanelProps) {
   const [draft, setDraft] = useState<ExperimentDraft>(() => defaultExperimentDraft(baseConfig))
+  const [studySize, setStudySize] = useState<ExperimentStudySizeSelection>(() => identifyExperimentStudySize(draft.replicates, draft.generations))
   const [preset, setPreset] = useState<ExperimentPreset | 'custom'>('drought')
   const [status, setStatus] = useState<RunStatus>('idle')
   const [runtime, setRuntime] = useState<'worker' | 'main'>(() => typeof Worker === 'undefined' ? 'main' : 'worker')
@@ -179,7 +191,7 @@ export function ExperimentPanel({ baseConfig, onClose, onReplay }: ExperimentPan
   const finishRun = (requestId: string, next: ExperimentResult) => {
     if (!workerEventIsCurrent(requestId, activeRunRef.current)) return
     workerRef.current?.terminate(); workerRef.current = null; abortRef.current = null; activeRunRef.current = null
-    setResult(next); setStatus('complete'); setMessage('Experiment complete.')
+    setResult(next); setStatus('complete'); setMessage(experimentCompletionMessage(next.completedGenerationRuns, experimentGenerationRunCount(next.plan.replicates, next.plan.generations)))
   }
 
   const runFallback = async (nextPlan: ExperimentPlan, requestId: string) => {
@@ -239,6 +251,10 @@ export function ExperimentPanel({ baseConfig, onClose, onReplay }: ExperimentPan
   }
 
   const choosePreset = (next: ExperimentPreset | 'custom') => { setPreset(next); if (next !== 'custom') setDraft(current => applyExperimentPreset(next, current, baseConfig)) }
+  const chooseStudySize = (next: ExperimentStudySizeSelection) => {
+    setStudySize(next)
+    if (next !== 'custom') setDraft(current => applyExperimentStudySize(next, current))
+  }
   const choosePressure = (key: InterventionConfigKey) => { setPreset('custom'); setDraft(current => ({ ...current, interventionKey: key, interventionValue: normalizeInterventionValue(key, baseConfig[key]) })) }
   const treatmentConstraint = constraintFor(draft.interventionKey)
   const availablePressures = availableInterventionConstraints(baseConfig)
@@ -251,8 +267,9 @@ export function ExperimentPanel({ baseConfig, onClose, onReplay }: ExperimentPan
         <form className="experiment-controls" onSubmit={event => { event.preventDefault(); start() }}>
           <fieldset disabled={status === 'running' || status === 'cancelling'}><legend>Study design</legend>
             <div className="experiment-field-grid">
-              <label>Paired replicates<input type="number" min={2} max={20} value={draft.replicates} onChange={event => { const replicates = Math.max(2, Math.min(20, event.currentTarget.valueAsNumber || 2)); setDraft(current => ({ ...current, replicates, generations: Math.min(current.generations, maximumExperimentGenerations(replicates)) })) }}/></label>
-              <label>Generations<input type="number" min={2} max={Math.min(40, maxGenerations)} value={draft.generations} onChange={event => { const generations = Math.max(2, Math.min(Math.min(40, maxGenerations), event.currentTarget.valueAsNumber || 2)); setDraft(current => ({ ...current, generations, interventionGeneration: Math.min(current.interventionGeneration, generations) })) }}/></label>
+              <label>Study size<select value={studySize} onChange={event => chooseStudySize(event.target.value as ExperimentStudySizeSelection)}>{EXPERIMENT_STUDY_SIZES.map(option => <option key={option.key} value={option.key}>{option.label}{option.key === DEFAULT_EXPERIMENT_STUDY_SIZE ? ' (default)' : ''} · {option.replicates}×{option.generations} · {experimentGenerationRunCount(option.replicates, option.generations)} runs</option>)}<option value="custom">Custom · edit values</option></select></label>
+              <label>Paired replicates<input type="number" min={2} max={20} value={draft.replicates} onChange={event => { const replicates = Math.max(2, Math.min(20, event.currentTarget.valueAsNumber || 2)); setStudySize('custom'); setDraft(current => ({ ...current, replicates, generations: Math.min(current.generations, maximumExperimentGenerations(replicates)) })) }}/></label>
+              <label>Generations<input type="number" min={2} max={Math.min(40, maxGenerations)} value={draft.generations} onChange={event => { const generations = Math.max(2, Math.min(Math.min(40, maxGenerations), event.currentTarget.valueAsNumber || 2)); setStudySize('custom'); setDraft(current => ({ ...current, generations, interventionGeneration: Math.min(current.interventionGeneration, generations) })) }}/></label>
               <label>Master seed<input type="number" min={1} max={9999999} value={draft.masterSeed} onChange={event => setDraft(current => ({ ...current, masterSeed: event.currentTarget.valueAsNumber || 1 }))}/></label>
               <label>Outcome metric<select value={draft.metric} onChange={event => setDraft(current => ({ ...current, metric: event.target.value as ExperimentDraft['metric'] }))}>{EXPERIMENT_METRIC_OPTIONS.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}</select></label>
             </div>
@@ -266,7 +283,7 @@ export function ExperimentPanel({ baseConfig, onClose, onReplay }: ExperimentPan
             <div className="scenario-summary"><div><strong>Control</strong><span>Applied live configuration</span></div><div><strong>Treatment</strong><span>{interventionKey} → {interventionValue} at generation {intervention.generation}</span></div></div>
             {noOpReason&&<p className="experiment-treatment-warning" id="experiment-treatment-warning" role="status">{noOpReason}</p>}
           </fieldset>
-          <div className="experiment-run-summary"><span>{plan.replicates} pairs × {plan.generations} generations</span><strong>{plan.replicates * plan.generations * 2} generation-runs</strong></div>
+          <div className="experiment-run-summary"><span>{plan.replicates} paired seeds × {plan.generations} generations × 2 arms<br/><small>One generation-run = one arm advancing one generation.</small></span><strong>{experimentGenerationRunCount(plan.replicates, plan.generations)} generation-runs</strong></div>
           <div className="experiment-run-actions"><button className="experiment-run" type="submit" disabled={status === 'running' || status === 'cancelling' || Boolean(noOpReason)} aria-describedby={noOpReason?'experiment-treatment-warning':undefined}>{result ? 'Run again' : 'Run paired experiment'}</button>{(status === 'running' || status === 'cancelling') && <button type="button" onClick={cancel} disabled={status === 'cancelling'}>Cancel</button>}</div>
           <div className="experiment-progress" role="status" aria-live="polite"><div><span>{message}</span><small>{runtime === 'worker' ? 'Experiment worker' : 'Main-thread compatibility mode'}</small></div>{(status === 'running' || status === 'cancelling') && <><progress max={100} value={progressPercent}/><b>{progressPercent}%</b></>}</div>
         </form>
