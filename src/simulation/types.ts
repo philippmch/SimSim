@@ -59,7 +59,7 @@ export interface InheritanceTraitSummary{parentMean:number|null;offspringMean:nu
 export interface InheritanceSummary{offspringCount:number;changedTraitValues:number;traits:Record<BiologicalTrait,InheritanceTraitSummary>}
 export const END_CAUSES=['survived','hunted','energy','unfed','late','aged'] as const
 export type EndCause=(typeof END_CAUSES)[number]
-export interface GenerationLedger{generation:number;startPopulation:number;outcomes:Record<EndCause,number>;foodAtStart:number;foodProduced:number;foodRemoved:number;foodConsumed:number;foodRemaining:number;preyConsumed:number;attackAttempts:number;attackSuccesses:number;attackFailures:number;birthsEligible:number;birthsAdmitted:number;birthsCapped:number;selection:{start:SelectionSummary;survivor:SelectionSummary;reproducer:SelectionSummary};selectionByOutcome:Record<EndCause,SelectionSummary>;inheritance?:InheritanceSummary}
+export interface GenerationLedger{generation:number;startPopulation:number;outcomes:Record<EndCause,number>;foodAtStart:number;foodProduced:number;foodRemoved:number;foodConsumed:number;foodRemaining:number;preyConsumed:number;attackAttempts:number;attackSuccesses:number;attackFailures:number;/** Optional for legacy ledgers retained before contested-attack telemetry. */attackContested?:number;birthsEligible:number;birthsAdmitted:number;birthsCapped:number;selection:{start:SelectionSummary;survivor:SelectionSummary;reproducer:SelectionSummary};selectionByOutcome:Record<EndCause,SelectionSummary>;inheritance?:InheritanceSummary}
 export type InterventionKind='resource-bloom'|'drought'|'founder-migration'
 export interface WorldEvent{generation:number;day:number;kind:InterventionKind;summary:string;count:number}
 export interface LineageShare{lineageId:number;count:number;share:number}
@@ -70,7 +70,7 @@ export interface World {
   creatures:Creature[];food:Food[];history:HistoryPoint[];environment:Environment
   rngState:number;nextId:number;dayHunted:number
   nextIndividualId:number;nextLineageId:number;inspectedIndividualId:number|null
-  dayFoodProduced:number;dayFoodRemoved:number;dayFoodConsumed:number;dayPreyConsumed:number;dayAttackAttempts:number;dayAttackSuccesses:number;dayAttackFailures:number;generationFoodStart:number;ledger:GenerationLedger[]
+  dayFoodProduced:number;dayFoodRemoved:number;dayFoodConsumed:number;dayPreyConsumed:number;dayAttackAttempts:number;dayAttackSuccesses:number;dayAttackFailures:number;dayAttackContested:number;generationFoodStart:number;ledger:GenerationLedger[]
   events:WorldEvent[]
   lastReport:{survived:number;born:number;starved:number;hunted:number;energy:number;unfed:number;late:number;aged:number;capped:number}
 }

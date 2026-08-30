@@ -39,4 +39,19 @@ describe('integrated contest predation',()=>{
   const setup=(success:boolean)=>{const template=advanced({perceptionMode:'realistic',reactionTime:1,predationMode:'contest',attackCost:4,handlingTime:.45,preyEnergy:30}),[attacker,prey]=template.creatures;Object.assign(attacker,{x:.5,y:.5,size:1.2,speed:success?2:.4,energy:success?180:40,aggression:success?1:0,caution:0,mode:'hunting',targetType:'prey',targetId:prey.id,targetX:prey.x,targetY:prey.y,reactionWindow:0});Object.assign(prey,{x:.5,y:.5,size:1,speed:(success ? .4 : 2.8),energy:success?40:300,caution:success?0:1,reactionWindow:0});const probability=contestSuccessProbability(attacker,prey,template.config);let seed=1;while((keyedRandom(seed,'predation-contest',1,0,attacker.individualId,prey.individualId)<probability)!==success)seed++;template.config.seed=seed;return{world:template,attacker,prey}}
   it('charges failures, rewards only successes, applies cooldowns, and ignores array order',()=>{const failure=setup(false),beforeFailure=failure.attacker.energy;tick(failure.world,SIMULATION_TIMESTEP);expect(failure.world).toMatchObject({dayAttackAttempts:1,dayAttackSuccesses:0,dayAttackFailures:1});expect(failure.attacker.energy).toBeLessThan(beforeFailure-3.9);expect(failure.prey.alive).toBe(true);expect(failure.attacker.attackCooldownUntil).toBeGreaterThan(failure.world.dayTime);const attempts=failure.world.dayAttackAttempts;tick(failure.world,SIMULATION_TIMESTEP);expect(failure.world.dayAttackAttempts).toBe(attempts)
     const success=setup(true),permuted=structuredClone(success.world),beforeSuccess=success.attacker.energy;permuted.creatures.reverse();tick(success.world,SIMULATION_TIMESTEP);tick(permuted,SIMULATION_TIMESTEP);expect(success.world).toMatchObject({dayAttackAttempts:1,dayAttackSuccesses:1,dayAttackFailures:0});expect(success.attacker.energy).toBeGreaterThan(beforeSuccess);expect(success.prey.alive).toBe(false);expect(sortedCreatures(permuted)).toEqual(sortedCreatures(success.world))})
+
+  it('records one contested claim in live and completed telemetry for both predation modes',()=>{
+    for(const predationMode of ['threshold','contest'] as const){
+      const world=advanced({initialPopulation:3,predationMode,perceptionMode:'realistic',reactionTime:5,fieldOfView:360,obstacleOcclusion:false,dayLength:5}),[first,second,prey]=world.creatures
+      Object.assign(first,{x:.5,y:.5,size:2,energy:200,mode:'hunting',targetType:'prey',targetId:prey.id,targetX:prey.x,targetY:prey.y,reactionWindow:0,attackCooldownUntil:0})
+      Object.assign(second,{x:.5,y:.5,size:2,energy:200,mode:'hunting',targetType:'prey',targetId:prey.id,targetX:prey.x,targetY:prey.y,reactionWindow:0,attackCooldownUntil:0})
+      Object.assign(prey,{x:.5,y:.5,size:1,mode:'exploring',targetType:'explore',targetId:null,targetX:.5,targetY:.5,reactionWindow:0})
+      expect(world.dayAttackContested).toBe(0)
+      tick(world,SIMULATION_TIMESTEP)
+      expect(world.dayAttackContested).toBe(1)
+      finishGeneration(world)
+      expect(world.ledger.at(-1)?.attackContested).toBe(1)
+      expect(world.dayAttackContested).toBe(0)
+    }
+  })
 })
