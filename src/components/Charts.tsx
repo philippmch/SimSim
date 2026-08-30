@@ -28,6 +28,9 @@ export function buildSpeedHistogram(values:number[],bins=12){
 
 export const MAX_TIMELINE_ENTRIES=40
 
+const HISTORY_TRAITS:BiologicalTrait[]=['speed','size','sense','aggression','caution','exploration']
+const HISTORY_TRAIT_FIELDS:Record<BiologicalTrait,keyof HistoryPoint>={speed:'avgSpeed',size:'avgSize',sense:'avgSense',aggression:'avgAggression',caution:'avgCaution',exploration:'avgExploration'}
+
 export interface HistoryTimelineEntry {
   generation:number
   point:HistoryPoint|null
@@ -68,6 +71,46 @@ export function formatTimelineSummary(entry:HistoryTimelineEntry){
   const outcomes=END_CAUSES.filter(cause=>entry.outcomes[cause]>0).map(cause=>`${entry.outcomes[cause]} ${TIMELINE_OUTCOME_LABELS[cause]}`).join(', ')
   const events=entry.retainedEvents>0?`; ${entry.retainedEvents} retained ${entry.retainedEvents===1?'event':'events'}`:''
   return`Generation ${entry.generation}: next population ${timelineValue(entry.nextPopulation)}, mean energy ${timelineValue(entry.nextMeanEnergy)}, mean age ${timelineValue(entry.nextMeanAge)}, ${entry.births} births${outcomes?`; outcomes ${outcomes}`:''}${events}`
+}
+
+export type GenerationDeltaStatus='available'|'missing-selected'|'missing-predecessor'
+export interface GenerationDelta {
+  status:GenerationDeltaStatus
+  generation:number|null
+  previousGeneration:number|null
+  population:number|null
+  meanEnergy:number|null
+  meanAge:number|null
+  traits:Record<BiologicalTrait,number|null>
+}
+
+const emptyGenerationDelta=(status:GenerationDeltaStatus,generation:number|null,previousGeneration:number|null):GenerationDelta=>({status,generation,previousGeneration,population:null,meanEnergy:null,meanAge:null,traits:Object.fromEntries(HISTORY_TRAITS.map(trait=>[trait,null])) as Record<BiologicalTrait,number|null>})
+const finiteDifference=(after:number|null|undefined,before:number|null|undefined)=>after!==null&&after!==undefined&&before!==null&&before!==undefined&&Number.isFinite(after)&&Number.isFinite(before)?after-before:null
+
+/** Compare one retained history point with the exact preceding generation. */
+export function buildGenerationDelta(history:readonly HistoryPoint[],generation:number|null):GenerationDelta{
+  if(generation===null||!Number.isFinite(generation))return emptyGenerationDelta('missing-selected',null,null)
+  const previousGeneration=generation-1,selected=history.find(point=>point.generation===generation)
+  if(!selected)return emptyGenerationDelta('missing-selected',generation,previousGeneration)
+  const previous=history.find(point=>point.generation===previousGeneration)
+  if(!previous)return emptyGenerationDelta('missing-predecessor',generation,previousGeneration)
+  return{status:'available',generation,previousGeneration,population:finiteDifference(selected.population,previous.population),meanEnergy:finiteDifference(selected.avgEnergy,previous.avgEnergy),meanAge:finiteDifference(selected.avgAge,previous.avgAge),traits:Object.fromEntries(HISTORY_TRAITS.map(trait=>{const field=HISTORY_TRAIT_FIELDS[trait];return[trait,finiteDifference(selected[field] as number|null,previous[field] as number|null)]})) as Record<BiologicalTrait,number|null>}
+}
+
+const formatObservedDeltaValue=(value:number|null,decimals:number)=>{
+  if(value===null||!Number.isFinite(value))return'unavailable'
+  const rounded=Number(value.toFixed(decimals))
+  if(rounded===0)return'0'
+  const formatted=decimals?rounded.toFixed(decimals):String(Math.round(rounded))
+  return rounded>0?`+${formatted}`:formatted
+}
+
+/** Describe retained summary differences without implying why they changed. */
+export function formatGenerationDelta(delta:GenerationDelta){
+  if(delta.status==='missing-selected')return delta.generation===null?'No observed change available: no retained generation is selected.':`Generation ${delta.generation}: observed change unavailable; that generation is not retained.`
+  if(delta.status==='missing-predecessor')return`Generation ${delta.generation}: observed change unavailable; generation ${delta.previousGeneration} is not retained.`
+  const traits=HISTORY_TRAITS.map(trait=>`${trait} ${formatObservedDeltaValue(delta.traits[trait],2)}`).join(', ')
+  return`Generation ${delta.generation} vs ${delta.previousGeneration}: population ${formatObservedDeltaValue(delta.population,0)}; mean energy ${formatObservedDeltaValue(delta.meanEnergy,2)}; mean age ${formatObservedDeltaValue(delta.meanAge,2)}; trait means ${traits}.`
 }
 
 export interface ChartCoordinate {x:number;y:number}

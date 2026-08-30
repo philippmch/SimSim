@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildHistoryTimeline, buildSpeedHistogram, formatTimelineSummary, historyCoordinate, MAX_TIMELINE_ENTRIES, resolveTimelineGeneration, SPEED_HISTOGRAM_DOMAIN, traitColor } from './Charts'
+import { buildGenerationDelta, buildHistoryTimeline, buildSpeedHistogram, formatGenerationDelta, formatTimelineSummary, historyCoordinate, MAX_TIMELINE_ENTRIES, resolveTimelineGeneration, SPEED_HISTOGRAM_DOMAIN, traitColor } from './Charts'
 import { speedColor } from './ArenaCanvas'
 import type { GenerationLedger, HistoryPoint, WorldEvent } from '../simulation/types'
 
@@ -83,5 +83,41 @@ describe('generation history timeline',()=>{
     const point=historyCoordinate(0,0,1,0,1)
     expect(point).toMatchObject({x:160})
     expect(Object.values(point!).every(value=>Number.isFinite(value))).toBe(true)
+  })
+})
+
+describe('observed generation deltas',()=>{
+  it('compares generation one with the retained generation zero baseline',()=>{
+    const result=buildGenerationDelta([point(1,14,9,3),point(0,10,8,2)],1)
+    expect(result).toMatchObject({status:'available',generation:1,previousGeneration:0,population:4,meanEnergy:1,meanAge:1})
+    expect(result.traits.speed).toBe(0)
+  })
+
+  it('compares a pinned generation with its exact predecessor, not the latest point',()=>{
+    const result=buildGenerationDelta([point(0,10,8,2),point(1,14,9,3),point(2,20,12,4)],1)
+    expect(result).toMatchObject({generation:1,previousGeneration:0,population:4,meanEnergy:1,meanAge:1})
+  })
+
+  it('formats positive, negative, zero, and six-trait movement explicitly',()=>{
+    const result=buildGenerationDelta([point(0,10,8,2),{...point(1,8,7.125,2),avgSpeed:1.2,avgSize:.8,avgSense:.2,avgAggression:.4,avgCaution:.7,avgExploration:.5}],1)
+    const text=formatGenerationDelta(result)
+    expect(text).toContain('population -2')
+    expect(text).toContain('mean energy -0.88')
+    expect(text).toContain('mean age 0')
+    expect(text).toContain('speed +0.20')
+    expect(text).toContain('size -0.20')
+    expect(text).toContain('sense 0')
+    expect(text).toContain('caution +0.20')
+    expect(text).not.toMatch(/because|caused|led to|impact/i)
+  })
+
+  it('marks missing selections, predecessors, and nonfinite metrics as unavailable',()=>{
+    expect(formatGenerationDelta(buildGenerationDelta([point(0,10)],null))).toContain('no retained generation is selected')
+    expect(formatGenerationDelta(buildGenerationDelta([point(0,10)],1))).toContain('generation is not retained')
+    expect(formatGenerationDelta(buildGenerationDelta([point(2,12)],2))).toContain('generation 1 is not retained')
+    const result=buildGenerationDelta([point(0,10,8,2),{...point(1,12,Number.NaN,null),avgSpeed:null}],1)
+    expect(formatGenerationDelta(result)).toContain('mean energy unavailable')
+    expect(formatGenerationDelta(result)).toContain('mean age unavailable')
+    expect(formatGenerationDelta(result)).toContain('speed unavailable')
   })
 })
