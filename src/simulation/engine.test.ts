@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { createWorld, defaultConfig, finishGeneration, getStats, runGeneration, setInspectedIndividual, SIMULATION_TIMESTEP, tick } from './engine'
-import {CLASSIC_MODES} from './config'
+import { buildInheritanceSummary, createWorld, defaultConfig, finishGeneration, getStats, runGeneration, setInspectedIndividual, SIMULATION_TIMESTEP, tick } from './engine'
+import {CLASSIC_MODES, MAX_POPULATION} from './config'
+import type { BiologicalTrait } from './types'
+
+const traitValues=(speed:number,size:number,sense:number,aggression:number,caution:number,exploration:number):Record<BiologicalTrait,number>=>({speed,size,sense,aggression,caution,exploration})
 
 describe('selection simulation', () => {
   it('is deterministic for a seed and configuration', () => {
@@ -21,11 +24,61 @@ describe('selection simulation', () => {
   })
 
   it('keeps traits unchanged when mutations are disabled', () => {
-    const w=createWorld({...defaultConfig,...CLASSIC_MODES,initialPopulation:1,foodPerDay:0,mutateSpeed:false,mutateSize:false,mutateSense:false,mutationRate:1})
+    const w=createWorld({...defaultConfig,...CLASSIC_MODES,initialPopulation:1,foodPerDay:0,mutateSpeed:false,mutateSize:false,mutateSense:false,mutateAggression:false,mutateCaution:false,mutateExploration:false,mutationRate:1})
     const original=w.creatures[0]
     original.food=2; original.home=true
     finishGeneration(w)
     expect(w.creatures.every(c=>c.speed===original.speed && c.size===original.size && c.sense===original.sense)).toBe(true)
+    expect(w.ledger.at(-1)?.inheritance).toMatchObject({offspringCount:1,changedTraitValues:0})
+    expect(w.ledger.at(-1)?.inheritance?.traits.speed).toMatchObject({parentMean:original.speed,offspringMean:original.speed,changedCount:0})
+  })
+
+  it('computes newborn-only means and matched final value changes', () => {
+    const audit=buildInheritanceSummary([
+      {parent:traitValues(1,2,.1,.2,.3,.4),offspring:traitValues(1.5,2,.1,.8,.3,.4)},
+      {parent:traitValues(2,2,.3,.4,.5,.6),offspring:traitValues(1.7,2,.3,.4,.5,.9)},
+    ])
+    expect(audit).toMatchObject({offspringCount:2,changedTraitValues:4})
+    expect(audit.traits.speed).toMatchObject({parentMean:1.5,offspringMean:1.6,changedCount:2})
+    expect(audit.traits.size).toMatchObject({parentMean:2,offspringMean:2,changedCount:0})
+    expect(audit.traits.aggression).toMatchObject({changedCount:1})
+    expect(audit.traits.aggression.parentMean).toBeCloseTo(.3)
+    expect(audit.traits.aggression.offspringMean).toBeCloseTo(.6)
+    expect(audit.traits.exploration).toMatchObject({changedCount:1})
+    expect(audit.traits.exploration.parentMean).toBeCloseTo(.5)
+    expect(audit.traits.exploration.offspringMean).toBeCloseTo(.65)
+  })
+
+  it('records the actual parent-to-newborn differences produced at settlement', () => {
+    const w=createWorld({...defaultConfig,...CLASSIC_MODES,seed:73,initialPopulation:1,foodPerDay:0,founderPhysicalVariation:0,founderBehaviorVariation:0,mutationRate:1,mutationStrength:.2})
+    const parent=w.creatures[0],before=traitValues(parent.speed,parent.size,parent.sense,parent.aggression,parent.caution,parent.exploration)
+    parent.food=2;parent.home=true
+    finishGeneration(w)
+    const newborn=w.creatures.find(creature=>creature.parentIndividualId===parent.individualId)!,audit=w.ledger.at(-1)!.inheritance!
+    expect(audit.offspringCount).toBe(1)
+    for(const trait of ['speed','size','sense','aggression','caution','exploration'] as const){
+      expect(audit.traits[trait].parentMean).toBe(before[trait])
+      expect(audit.traits[trait].offspringMean).toBe(newborn[trait])
+      expect(audit.traits[trait].changedCount).toBe(Number(before[trait]!==newborn[trait]))
+    }
+    expect(audit.changedTraitValues).toBe(Object.values(audit.traits).reduce((sum,trait)=>sum+trait.changedCount,0))
+  })
+
+  it('records null means and no changes when no births are admitted', () => {
+    const w=createWorld({...defaultConfig,...CLASSIC_MODES,initialPopulation:1,foodPerDay:0})
+    finishGeneration(w)
+    const audit=w.ledger.at(-1)?.inheritance
+    expect(audit).toMatchObject({offspringCount:0,changedTraitValues:0})
+    for(const trait of ['speed','size','sense','aggression','caution','exploration'] as const)expect(audit?.traits[trait]).toMatchObject({parentMean:null,offspringMean:null,changedCount:0})
+  })
+
+  it('does not count birth-cap rejections in the inheritance audit', () => {
+    const w=createWorld({...defaultConfig,...CLASSIC_MODES,initialPopulation:MAX_POPULATION,foodPerDay:0,mutationRate:1,mutationStrength:0})
+    for(const creature of w.creatures){creature.home=true;creature.food=2}
+    for(const creature of w.creatures.slice(-3)){creature.home=false;creature.food=0}
+    finishGeneration(w)
+    expect(w.lastReport).toMatchObject({born:3,capped:MAX_POPULATION-6})
+    expect(w.ledger.at(-1)?.inheritance).toMatchObject({offspringCount:3,changedTraitValues:0})
   })
 
   it('does not give a predation turn to a creature killed earlier in the tick', () => {

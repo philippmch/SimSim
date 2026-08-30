@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { getSelectionTakeaway, MAX_WORLD_EVENTS } from '../simulation/engine'
 import { END_CAUSES } from '../simulation/types'
-import type { BiologicalTrait, EndCause, GenerationLedger, SelectionSummary, WorldEvent } from '../simulation/types'
+import type { BiologicalTrait, EndCause, GenerationLedger, InheritanceTraitSummary, SelectionSummary, WorldEvent } from '../simulation/types'
 
 export const MAX_JOURNAL_ENTRIES = 40
 
@@ -50,6 +50,15 @@ export interface GenerationReview {
   attacks:{attempts:number;wins:number;failures:number;preyConsumed:number}
   births:{eligible:number;admitted:number;capped:number}
   takeaway:string
+}
+
+export type InheritanceAuditStatus='available'|'no-births'|'legacy-unavailable'
+
+export interface InheritanceAuditReview {
+  status:InheritanceAuditStatus
+  offspringCount:number
+  changedTraitValues:number
+  traits:Record<BiologicalTrait,InheritanceTraitSummary>
 }
 
 /** Keep the journal small and ordered exactly as the retained ledger is ordered. */
@@ -174,6 +183,34 @@ export function deriveGenerationReview(ledger:GenerationLedger|undefined):Genera
 
 export const getJournalReview=deriveGenerationReview
 
+const emptyInheritanceTraits=():Record<BiologicalTrait,InheritanceTraitSummary>=>Object.fromEntries(JOURNAL_TRAITS.map(trait=>[trait,{parentMean:null,offspringMean:null,changedCount:0}])) as Record<BiologicalTrait,InheritanceTraitSummary>
+const nonNegativeInteger=(value:unknown):value is number=>typeof value==='number'&&Number.isInteger(value)&&value>=0
+const validMean=(value:unknown):value is number|null=>value===null||finiteNumber(value)
+const inheritanceRecord=(value:unknown):value is Record<string,unknown>=>typeof value==='object'&&value!==null
+
+/** Derive a conservative parent-to-newborn audit, keeping old ledgers explicit rather than guessing. */
+export function deriveInheritanceAudit(ledger:GenerationLedger|undefined):InheritanceAuditReview{
+  const empty=emptyInheritanceTraits()
+  if(!ledger||!nonNegativeInteger(ledger.birthsAdmitted))return{status:'legacy-unavailable',offspringCount:0,changedTraitValues:0,traits:empty}
+  const raw=(ledger as GenerationLedger & {inheritance?:unknown}).inheritance
+  if(ledger.birthsAdmitted===0){
+    if(raw===undefined)return{status:'no-births',offspringCount:0,changedTraitValues:0,traits:empty}
+    if(!inheritanceRecord(raw)||raw.offspringCount!==0||raw.changedTraitValues!==0)return{status:'legacy-unavailable',offspringCount:0,changedTraitValues:0,traits:empty}
+    return{status:'no-births',offspringCount:0,changedTraitValues:0,traits:empty}
+  }
+  if(!inheritanceRecord(raw)||!nonNegativeInteger(raw.offspringCount)||raw.offspringCount!==ledger.birthsAdmitted||!nonNegativeInteger(raw.changedTraitValues)||raw.changedTraitValues>raw.offspringCount*JOURNAL_TRAITS.length||!inheritanceRecord(raw.traits))return{status:'legacy-unavailable',offspringCount:0,changedTraitValues:0,traits:empty}
+  const traits=Object.fromEntries(JOURNAL_TRAITS.map(trait=>{
+    const value=raw.traits?.[trait]
+    if(!inheritanceRecord(value)||!validMean(value.parentMean)||!validMean(value.offspringMean)||!nonNegativeInteger(value.changedCount)||value.changedCount>raw.offspringCount||value.changedCount===0&&value.parentMean!==value.offspringMean)return[trait,null]
+    if(value.parentMean===null||value.offspringMean===null)return[trait,null]
+    return[trait,{parentMean:value.parentMean,offspringMean:value.offspringMean,changedCount:value.changedCount}]
+  })) as Record<BiologicalTrait,InheritanceTraitSummary|null>
+  if(JOURNAL_TRAITS.some(trait=>traits[trait]===null))return{status:'legacy-unavailable',offspringCount:0,changedTraitValues:0,traits:empty}
+  const complete=traits as Record<BiologicalTrait,InheritanceTraitSummary>
+  if(JOURNAL_TRAITS.reduce((sum,trait)=>sum+complete[trait].changedCount,0)!==raw.changedTraitValues)return{status:'legacy-unavailable',offspringCount:0,changedTraitValues:0,traits:empty}
+  return{status:'available',offspringCount:raw.offspringCount,changedTraitValues:raw.changedTraitValues,traits:complete}
+}
+
 export interface GenerationJournalProps {
   ledgers:readonly GenerationLedger[]
   events:readonly WorldEvent[]
@@ -204,6 +241,7 @@ export function GenerationJournal({ledgers,events,requestedGeneration,onRequeste
   const selection=useMemo(()=>resolveJournalSelection(ledgers,requestedGeneration),[ledgers,requestedGeneration])
   const selectedLedger=selection.entries.find(ledger=>ledger.generation===selection.selectedGeneration)
   const review=deriveGenerationReview(selectedLedger)
+  const inheritance=deriveInheritanceAudit(selectedLedger)
   const pressureFingerprints=derivePressureFingerprints(selectedLedger)
   const eventReview=deriveJournalEvents(events,selection.selectedGeneration)
   const latestGeneration=selection.entries.at(-1)?.generation??null
@@ -243,6 +281,7 @@ export function GenerationJournal({ledgers,events,requestedGeneration,onRequeste
         <div><h3>Resource balance</h3><p className="journal-equation"><strong>{formatNumber(review.resource.start)}</strong> start + <strong>{formatNumber(review.resource.produced)}</strong> produced − <strong>{formatNumber(review.resource.removed)}</strong> drought removed − <strong>{formatNumber(review.resource.consumed)}</strong> consumed = <strong>{formatNumber(review.resource.remaining)}</strong> remaining</p><p className={review.resource.reconciled?'journal-check':'journal-warning'} role="status">{review.resource.reconciled?'✓ Resource count reconciles.':`Check resource count: expected ${formatNumber(review.resource.expected)}.`}</p><p className="journal-kicker">Survivors: <strong>{review.survivors}</strong></p></div>
         <div><h3>Attacks &amp; births</h3><div className="utility-breakdown"><table><tbody><tr><th scope="row">Attack attempts</th><td>{review.attacks.attempts}</td></tr><tr><th scope="row">Wins / failures</th><td>{review.attacks.wins} / {review.attacks.failures}</td></tr><tr><th scope="row">Prey consumed</th><td>{review.attacks.preyConsumed}</td></tr><tr><th scope="row">Eligible parents → admitted births</th><td>{review.births.eligible} → {review.births.admitted}</td></tr><tr><th scope="row">Births capped</th><td>{review.births.capped}</td></tr><tr><th scope="row">Parents of newborns</th><td>{review.births.admitted}</td></tr></tbody></table></div></div>
       </div>
+      <div className="event-story journal-events pressure-patterns"><h3>How offspring inherited traits</h3><p className="journal-kicker">One admitted parent produces one same-lineage offspring. Newborns copy all six traits, then enabled traits may mutate independently.{inheritance.status==='available'?' Rows show parent mean → newborn mean.':''}</p>{inheritance.status==='available'?<><p className="journal-equation"><strong>Generation {review.generation} → {review.generation+1}</strong> · {inheritance.offspringCount} newborns · <strong>{inheritance.changedTraitValues}</strong> final trait values changed out of {inheritance.offspringCount*JOURNAL_TRAITS.length}</p><ul className="story-grid">{JOURNAL_TRAITS.map(trait=>{const summary=inheritance.traits[trait],means=formatAdaptivePair(summary.parentMean!,summary.offspringMean!);return <li key={trait}><span>{TRAIT_LABELS[trait][0].toUpperCase()+TRAIT_LABELS[trait].slice(1)}</span><strong>{means[0]} → {means[1]} · {summary.changedCount} of {inheritance.offspringCount} changed</strong></li>})}</ul></>:inheritance.status==='no-births'?<p className="journal-kicker">Generation {review.generation} → {review.generation+1}: no parent→offspring comparison; no admitted parent produced a newborn.</p>:<p className="journal-kicker">Generation {review.generation} → {review.generation+1}: this retained record has {review.births.admitted} births, but its parent→offspring trait comparison is unavailable.</p>}{inheritance.status==='available'&&<p className="journal-kicker">Changed means the final clamped value differed from the matched parent; this is not a mutation-attempt count. A zero here does not imply mutation was disabled.</p>}</div>
       <div className="journal-takeaway"><strong>Selection takeaway</strong><span>{review.takeaway}</span></div>
       {pressureFingerprints.length>0&&<div className="event-story journal-events pressure-patterns"><h3>Outcome trait patterns</h3><p className="journal-kicker">Compared with the evaluated cohort; associations are descriptive, not proof of cause.</p><ul>{pressureFingerprints.map(fingerprint=>{const comparison=fingerprint.comparison,means=comparison?formatAdaptivePair(comparison.outcomeMean,comparison.baselineMean):null;return <li key={fingerprint.cause}><span>{fingerprint.label} · n={fingerprint.count}</span>{comparison&&means?<strong>{comparison.traitLabel}: {means[0]} vs cohort {means[1]} ({comparison.direction})</strong>:<strong>Trait comparison unavailable.</strong>}<span>{fingerprint.interpretation}</span></li>})}</ul></div>}
       <div className="event-story journal-events"><h3>Ecosystem events · generation {review.generation}</h3>{eventReview.events.length?<>{eventReview.status==='partial'&&<p className="journal-kicker">Showing retained events; earlier events from this generation may no longer be available.</p>}<ul>{eventReview.events.map((event,index)=><li key={`${event.generation}-${event.day}-${event.kind}-${index}`}><span>Day {event.day.toFixed(2)}</span><strong>{event.summary}</strong></li>)}</ul></>:<p className="journal-kicker">{eventReview.status==='unknown'?'Event history is unavailable for this generation.':'No shocks occurred in this generation.'}</p>}</div>

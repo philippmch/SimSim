@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import type { BiologicalTrait, GenerationLedger, SelectionSummary, TraitMoments, WorldEvent } from '../simulation/types'
-import { clampJournalGeneration, deriveGenerationReview, deriveJournalEvents, derivePressureFingerprints, filterJournalEvents, formatAdaptivePair, getJournalEventStatus, getRecentGenerationLedgers, MAX_JOURNAL_ENTRIES, pinCurrentGeneration, resolveJournalSelection } from './GenerationJournal'
+import type { BiologicalTrait, GenerationLedger, InheritanceTraitSummary, SelectionSummary, TraitMoments, WorldEvent } from '../simulation/types'
+import { clampJournalGeneration, deriveGenerationReview, deriveInheritanceAudit, deriveJournalEvents, derivePressureFingerprints, filterJournalEvents, formatAdaptivePair, getJournalEventStatus, getRecentGenerationLedgers, MAX_JOURNAL_ENTRIES, pinCurrentGeneration, resolveJournalSelection } from './GenerationJournal'
 
 const moments=(mean:number|null)=>({mean,variance:mean===null?null:0,sd:mean===null?null:0})
 const selection=(mean:number|null)=>({speed:moments(mean),size:moments(mean),sense:moments(mean),aggression:moments(mean),caution:moments(mean),exploration:moments(mean)})
 const traitKeys:readonly BiologicalTrait[]=['speed','size','sense','aggression','caution','exploration']
 const profile=(overrides:Partial<Record<BiologicalTrait,TraitMoments>>={},fallback=moments(1)):SelectionSummary=>Object.fromEntries(traitKeys.map(trait=>[trait,overrides[trait]??fallback])) as SelectionSummary
+const inheritanceProfile=(overrides:Partial<Record<BiologicalTrait,InheritanceTraitSummary>>={}):Record<BiologicalTrait,InheritanceTraitSummary>=>Object.fromEntries(traitKeys.map(trait=>[trait,overrides[trait]??{parentMean:1,offspringMean:1,changedCount:0}])) as Record<BiologicalTrait,InheritanceTraitSummary>
 const makeLedger=(generation:number,overrides:Partial<GenerationLedger>={}):GenerationLedger=>({
   generation,startPopulation:5,
   outcomes:{survived:3,hunted:1,energy:0,unfed:1,late:0,aged:0},
@@ -120,6 +121,24 @@ describe('generation journal helpers',()=>{
     expect(formatAdaptivePair(1.004,1.001)).toEqual(['1.004','1.001'])
     expect(formatAdaptivePair(.49,.51)).toEqual(['0.49','0.51'])
     expect(formatAdaptivePair(1.2,1.2)).toEqual(['1.20','1.20'])
+  })
+
+  it('derives available, no-birth, and older-runtime inheritance statuses conservatively',()=>{
+    const available=makeLedger(15,{birthsAdmitted:2,inheritance:{offspringCount:2,changedTraitValues:1,traits:inheritanceProfile({speed:{parentMean:1.004,offspringMean:1.001,changedCount:1}})}})
+    expect(deriveInheritanceAudit(available)).toMatchObject({status:'available',offspringCount:2,changedTraitValues:1})
+    expect(deriveInheritanceAudit(available).traits.speed).toMatchObject({parentMean:1.004,offspringMean:1.001,changedCount:1})
+
+    const noBirths=makeLedger(16,{birthsEligible:0,birthsAdmitted:0,birthsCapped:0})
+    expect(deriveInheritanceAudit(noBirths)).toMatchObject({status:'no-births',offspringCount:0,changedTraitValues:0})
+
+    const legacy=makeLedger(17,{birthsAdmitted:2})
+    expect(deriveInheritanceAudit(legacy)).toMatchObject({status:'legacy-unavailable',offspringCount:0,changedTraitValues:0})
+    expect(deriveInheritanceAudit(undefined).status).toBe('legacy-unavailable')
+
+    const malformed=makeLedger(18,{birthsAdmitted:2,inheritance:{offspringCount:2,changedTraitValues:2,traits:inheritanceProfile({speed:{parentMean:1,offspringMean:1,changedCount:1}})}})
+    expect(deriveInheritanceAudit(malformed).status).toBe('legacy-unavailable')
+    const contradictory=makeLedger(19,{birthsAdmitted:1,inheritance:{offspringCount:1,changedTraitValues:0,traits:inheritanceProfile({speed:{parentMean:1,offspringMean:2,changedCount:0}})}})
+    expect(deriveInheritanceAudit(contradictory).status).toBe('legacy-unavailable')
   })
 
   it('distinguishes a weak signal, too few observations, and unavailable spread',()=>{
