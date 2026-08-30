@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type React from 'react'
-import type { Mode, World } from '../simulation/types'
+import type { Mode, TargetType, World } from '../simulation/types'
 
 interface Props { world: World; revision: number;selectedIndividualId:number|null;onSelect:(individualId:number|null)=>void }
 
@@ -10,6 +10,7 @@ export type ArenaPlaybackStatus = 'Running'|'Paused'|'Extinct'
 
 export const ARENA_PATCH_STOCK_KEY = 'Patch arcs = current food stock.'
 export const ARENA_SELECTED_OVERLAY_KEY = 'Selected: gold ring = focus; gold area = sight; dash = target; colored rings = memory; dotted rings = kin.'
+export const ARENA_HUNT_CONTACT_KEY = 'Hunts resolve against the nearest eligible prey at contact, which may differ from the dashed pursuit target.'
 export const ARENA_QUICK_START = [
   'Try this: pause → inspect a creature → finish generation.',
   'Then change one parameter and restart to compare.',
@@ -29,6 +30,30 @@ export function formatArenaDayProgress(dayTime: number, dayLength: number, statu
   return `Day ${current.toFixed(1)} / ${duration.toFixed(1)} · ${status}`
 }
 
+export interface ArenaSelectedTargetInput {
+  targetType: TargetType | null
+  targetId: number | null
+}
+
+type ArenaTargetCreature = Pick<World['creatures'][number], 'id' | 'individualId' | 'alive'>
+type ArenaTargetFood = Pick<World['food'][number], 'id'>
+
+export function formatSelectedTarget(
+  target: ArenaSelectedTargetInput,
+  creatures: ReadonlyArray<ArenaTargetCreature>,
+  food: ReadonlyArray<ArenaTargetFood> = [],
+): string {
+  if (target.targetType === null) return 'None'
+  if (target.targetType === 'home') return 'Home location'
+  if (target.targetType === 'memory') return 'Remembered location'
+  if (target.targetType === 'explore') return 'Exploration waypoint'
+  if (target.targetId === null) return `${target.targetType === 'food' ? 'Food' : target.targetType === 'prey' ? 'Prey' : 'Threat'} · unavailable`
+  if (target.targetType === 'food') return food.some(item => item.id === target.targetId) ? 'Food item' : 'Food · unavailable'
+  const targetCreature = creatures.find(creature => creature.id === target.targetId && creature.alive)
+  const kind = target.targetType === 'prey' ? 'Prey' : 'Threat'
+  return targetCreature ? `${kind} · Individual ${targetCreature.individualId}` : `${kind} · unavailable`
+}
+
 export interface ArenaAccessibleDescriptionInput {
   generation: number
   livingCreatures: number
@@ -39,15 +64,20 @@ export interface ArenaAccessibleDescriptionInput {
   obstacleCount: number
   ecologyMode: World['config']['ecologyMode']
   hasSelectedCreature: boolean
+  selectedIsHunting?: boolean
 }
 
 export function formatArenaOverlayDescription(
   ecologyMode: World['config']['ecologyMode'],
   hasSelectedCreature: boolean,
+  selectedIsHunting = false,
 ): string {
   const descriptions: string[] = []
   if (ecologyMode === 'energy-regrowth') descriptions.push(ARENA_PATCH_STOCK_KEY)
-  if (hasSelectedCreature) descriptions.push(ARENA_SELECTED_OVERLAY_KEY)
+  if (hasSelectedCreature) {
+    descriptions.push(ARENA_SELECTED_OVERLAY_KEY)
+    if (selectedIsHunting) descriptions.push(ARENA_HUNT_CONTACT_KEY)
+  }
   return descriptions.join(' ')
 }
 
@@ -55,7 +85,7 @@ export function formatArenaAccessibleDescription(input: ArenaAccessibleDescripti
   const resourceLabel = input.ecologyMode === 'energy-regrowth'
     ? `${input.foodCount} food items distributed across ${input.patchCount} resource patches`
     : `${input.foodCount} food remaining from a ${Math.round(input.foodBudget)}-item generation pulse across ${input.patchCount} patches`
-  const overlayDescription = formatArenaOverlayDescription(input.ecologyMode, input.hasSelectedCreature)
+  const overlayDescription = formatArenaOverlayDescription(input.ecologyMode, input.hasSelectedCreature, input.selectedIsHunting)
   const selectionHint = input.hasSelectedCreature
     ? ''
     : 'Select a creature to reveal its focus, sight, target, memory, and same-lineage overlays.'
@@ -155,7 +185,7 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect}:Props
   const stateCounts:Record<CreatureState,number>={safe:0,exploring:0,foraging:0,hunting:0,fleeing:0,returning:0}
   for(const creature of livingCreatures)stateCounts[creature.home?'safe':creature.mode]++
   const stateSummary=(Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]).map(([state,metadata])=>`${stateCounts[state]} ${metadata.label.toLowerCase()}`).join(', ')
-  const accessibleDescription=formatArenaAccessibleDescription({generation:world.generation,livingCreatures:livingCreatures.length,stateSummary,foodCount:world.food.length,patchCount:world.environment.patches.length,foodBudget:world.environment.foodBudget,obstacleCount:world.environment.obstacles.length,ecologyMode:world.config.ecologyMode,hasSelectedCreature:Boolean(selected)})
+  const accessibleDescription=formatArenaAccessibleDescription({generation:world.generation,livingCreatures:livingCreatures.length,stateSummary,foodCount:world.food.length,patchCount:world.environment.patches.length,foodBudget:world.environment.foodBudget,obstacleCount:world.environment.obstacles.length,ecologyMode:world.config.ecologyMode,hasSelectedCreature:Boolean(selected),selectedIsHunting:selected?.mode==='hunting'})
   return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={accessibleDescription}>
     Natural selection simulation arena. Live counts are available in the statistics region.
   </canvas><label className="creature-picker">Inspect <select value={selectedIndividualId??''} onChange={e=>onSelect(e.target.value?Number(e.target.value):null)}><option value="">No creature selected</option>{livingCreatures.sort((a,b)=>a.individualId-b.individualId).map(c=><option key={c.individualId} value={c.individualId}>Individual {c.individualId}, lineage {c.lineageId}, {CREATURE_STATE_METADATA[c.home?'safe':c.mode].label}</option>)}</select></label></>
