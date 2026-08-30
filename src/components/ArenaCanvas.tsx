@@ -10,6 +10,14 @@ export type ArenaPlaybackStatus = 'Running'|'Paused'|'Extinct'
 
 export const ARENA_PATCH_STOCK_KEY = 'Patch arcs = current food stock.'
 export const ARENA_SELECTED_OVERLAY_KEY = 'Selected: gold ring = focus; gold area = sight; dash = target; colored rings = memory; dotted rings = kin.'
+export const ARENA_QUICK_START = [
+  'Try this: pause → inspect a creature → finish generation.',
+  'Then change one parameter and restart to compare.',
+] as const
+
+export function showArenaQuickStart(completedGenerations: number): boolean {
+  return completedGenerations === 0
+}
 
 export function arenaPlaybackStatus(playing: boolean, extinct: boolean): ArenaPlaybackStatus {
   return extinct ? 'Extinct' : playing ? 'Running' : 'Paused'

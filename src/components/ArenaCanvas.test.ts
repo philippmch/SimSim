@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   ARENA_PATCH_STOCK_KEY,
+  ARENA_QUICK_START,
   ARENA_SELECTED_OVERLAY_KEY,
   arenaPlaybackStatus,
   formatArenaAccessibleDescription,
   formatArenaDayProgress,
+  showArenaQuickStart,
   type ArenaAccessibleDescriptionInput,
 } from './ArenaCanvas'
 
@@ -27,6 +29,13 @@ describe('arena clarity helpers', () => {
     expect(arenaPlaybackStatus(false, false)).toBe('Paused')
     expect(arenaPlaybackStatus(true, true)).toBe('Extinct')
     expect(formatArenaDayProgress(2.25, 18, 'Running')).toBe('Day 2.3 / 18.0 · Running')
+  })
+
+  it('shows a concise workflow cue only before the first generation is completed', () => {
+    expect(showArenaQuickStart(0)).toBe(true)
+    expect(showArenaQuickStart(1)).toBe(false)
+    expect(ARENA_QUICK_START.join(' ')).toContain('pause → inspect a creature → finish generation')
+    expect(ARENA_QUICK_START.join(' ')).toContain('change one parameter')
   })
 
   it('describes ecological patch stock and unselected overlay affordance', () => {

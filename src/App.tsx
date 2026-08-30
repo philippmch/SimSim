@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { ARENA_PATCH_STOCK_KEY, ARENA_SELECTED_OVERLAY_KEY, ArenaCanvas, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress } from './components/ArenaCanvas'
+import { ARENA_PATCH_STOCK_KEY, ARENA_QUICK_START, ARENA_SELECTED_OVERLAY_KEY, ArenaCanvas, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress, showArenaQuickStart } from './components/ArenaCanvas'
 import type { CreatureState } from './components/ArenaCanvas'
 import { BehaviorHistory, buildHistoryTimeline, Histogram, HistoryChart, summarizeDistribution } from './components/Charts'
 import { GenerationAccounting } from './components/GenerationAccounting'
@@ -123,7 +123,7 @@ function App(){
       <section className="simulation-panel" aria-label="Simulation" aria-hidden={settingsOpen&&isNarrow||undefined}>
         <div className="arena-wrap">
           <ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual}/>
-          <div className="arena-badge"><strong>{arenaDayLabel}</strong><small>Generation {world.generation}</small><small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} food across ${world.environment.patches.length} resource patches`:`${world.food.length} / ${Math.round(world.environment.foodBudget)} seasonal food`}</small></div>
+          <div className="arena-badge" style={{pointerEvents:'none'}}><strong>{arenaDayLabel}</strong><small>Generation {world.generation}</small><small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} food across ${world.environment.patches.length} resource patches`:`${world.food.length} / ${Math.round(world.environment.foodBudget)} seasonal food`}</small>{showArenaQuickStart(world.ledger.length)&&ARENA_QUICK_START.map(line=><small key={line}>{line}</small>)}</div>
           <div className="arena-keys">
             <div className="state-key" role="group" aria-label="Creature action and overlay key"><strong>Outline = action · body color = speed</strong>{world.config.ecologyMode==='energy-regrowth'&&<strong>{ARENA_PATCH_STOCK_KEY}</strong>}{selected&&<strong>{ARENA_SELECTED_OVERLAY_KEY}</strong>}{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/>{metadata.label}</span>)}</div>
             <div className="legend"><span>Body color = speed</span><i/><small>slower</small><small>faster</small></div>
