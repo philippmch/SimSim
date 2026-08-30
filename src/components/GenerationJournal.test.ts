@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { BiologicalTrait, GenerationLedger, InheritanceTraitSummary, SelectionSummary, TraitMoments, WorldEvent } from '../simulation/types'
-import { clampJournalGeneration, deriveGenerationReview, deriveInheritanceAudit, deriveJournalEvents, derivePressureFingerprints, filterJournalEvents, formatAdaptivePair, getJournalEventStatus, getRecentGenerationLedgers, MAX_JOURNAL_ENTRIES, pinCurrentGeneration, resolveJournalSelection } from './GenerationJournal'
+import { clampJournalGeneration, deriveGenerationInterpretation, deriveGenerationReview, deriveInheritanceAudit, deriveJournalEvents, derivePressureFingerprints, filterJournalEvents, formatAdaptivePair, getJournalEventStatus, getRecentGenerationLedgers, MAX_JOURNAL_ENTRIES, pinCurrentGeneration, resolveJournalSelection } from './GenerationJournal'
 
 const moments=(mean:number|null)=>({mean,variance:mean===null?null:0,sd:mean===null?null:0})
 const selection=(mean:number|null)=>({speed:moments(mean),size:moments(mean),sense:moments(mean),aggression:moments(mean),caution:moments(mean),exploration:moments(mean)})
@@ -110,6 +110,42 @@ describe('generation journal helpers',()=>{
   it('makes growing and unchanged next-population equations exact',()=>{
     expect(deriveGenerationReview(makeLedger(20,{outcomes:{survived:5,hunted:0,energy:0,unfed:0,late:0,aged:0},birthsAdmitted:2}))!).toMatchObject({evaluatedPopulation:5,nextPopulation:7,populationChange:2})
     expect(deriveGenerationReview(makeLedger(21,{outcomes:{survived:4,hunted:1,energy:0,unfed:0,late:0,aged:0},birthsAdmitted:1}))!).toMatchObject({evaluatedPopulation:5,nextPopulation:5,populationChange:0})
+  })
+
+  it('describes the largest recorded loss while naming survivors and births',()=>{
+    const review=deriveGenerationReview(makeLedger(22,{outcomes:{survived:3,hunted:2,energy:0,unfed:0,late:0,aged:0},birthsAdmitted:1}))!
+    const text=deriveGenerationInterpretation(review)
+    expect(text).toContain('Hunted was the largest recorded loss (2)')
+    expect(text).toContain('survivors: 3')
+    expect(text).toContain('admitted births: 1')
+    expect(text).toContain('Descriptive only')
+    expect(text).not.toMatch(/caused|because|led to/)
+  })
+
+  it('calls tied loss outcomes a tie instead of inventing a winner',()=>{
+    const review=deriveGenerationReview(makeLedger(23,{outcomes:{survived:1,hunted:2,energy:2,unfed:0,late:0,aged:0},birthsAdmitted:0}))!
+    const text=deriveGenerationInterpretation(review)
+    expect(text).toContain('Hunted and Energy depleted were tied as the largest recorded losses (2 each)')
+    expect(text).toContain('survivors: 1')
+    expect(text).toContain('admitted births: 0')
+  })
+
+  it('recognizes an all-survived generation',()=>{
+    const review=deriveGenerationReview(makeLedger(24,{outcomes:{survived:5,hunted:0,energy:0,unfed:0,late:0,aged:0},birthsAdmitted:2}))!
+    const text=deriveGenerationInterpretation(review)
+    expect(text).toContain('all 5 creatures survived')
+    expect(text).toContain('admitted births: 2')
+    expect(text).toContain('next population: 7')
+  })
+
+  it('makes extinction and zero births explicit without claiming a cause',()=>{
+    const review=deriveGenerationReview(makeLedger(25,{outcomes:{survived:0,hunted:3,energy:1,unfed:0,late:0,aged:0},birthsEligible:0,birthsAdmitted:0,birthsCapped:0,foodAtStart:0,foodProduced:0,foodRemoved:0,foodConsumed:0,foodRemaining:0}))!
+    const text=deriveGenerationInterpretation(review)
+    expect(text).toContain('no next population remained')
+    expect(text).toContain('survivors: 0')
+    expect(text).toContain('admitted births: 0')
+    expect(text).toContain('Hunted was the largest recorded loss (3)')
+    expect(text).not.toMatch(/caused|because|led to/)
   })
 
   it('finds one strong, descriptive outcome pattern against the evaluated cohort',()=>{
