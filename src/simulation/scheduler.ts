@@ -15,6 +15,14 @@ export function nextActionMaxTicks(reactionTime:number){
 
 export type NextActionStop='beat'|'generation-boundary'|'no-active'|'bounded'
 export interface NextActionResult{ticks:number;stop:NextActionStop}
+export interface NextActionContext{selectedIndividualId:number|null;selectedWasActive:boolean}
+
+/** Capture the inspected creature state at the exact start of a manual step. */
+export function captureNextActionContext(world:World):NextActionContext{
+  const selectedIndividualId=world.inspectedIndividualId
+  const selected=selectedIndividualId===null?undefined:world.creatures.find(creature=>creature.individualId===selectedIndividualId)
+  return{selectedIndividualId,selectedWasActive:Boolean(selected?.alive&&!selected.home)}
+}
 
 /**
  * Advance to the next decision beat without consuming wall-clock time.

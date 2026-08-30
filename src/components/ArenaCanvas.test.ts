@@ -15,10 +15,15 @@ import {
   formatArenaFocusDescription,
   formatArenaFocusOption,
   formatArenaOverlayDescription,
+  formatObservedPath,
   formatSelectedTarget,
   showArenaQuickStart,
   type ArenaAccessibleDescriptionInput,
 } from './ArenaCanvas'
+import { createWorld, defaultConfig } from '../simulation/engine'
+import { advanceToNextAction } from '../simulation/scheduler'
+import type { NextActionContext } from '../simulation/scheduler'
+import type { World } from '../simulation/types'
 
 const descriptionInput = (overrides: Partial<ArenaAccessibleDescriptionInput> = {}): ArenaAccessibleDescriptionInput => ({
   generation: 3,
@@ -32,6 +37,27 @@ const descriptionInput = (overrides: Partial<ArenaAccessibleDescriptionInput> = 
   hasSelectedCreature: false,
   ...overrides,
 })
+
+const observedWorld = (): World => {
+  const world = createWorld({ ...defaultConfig, initialPopulation: 2, perceptionMode: 'realistic' })
+  const creature = world.creatures[0]
+  world.inspectedIndividualId = creature.individualId
+  creature.alive = true
+  creature.home = false
+  creature.mode = 'foraging'
+  creature.targetType = 'food'
+  creature.targetId = world.food[0]?.id ?? null
+  creature.perceptionDiagnostics = {
+    mode: 'realistic',
+    reactionWindow: 3,
+    creatures: { total: 2, detected: 1, range: 0, fov: 1, occlusion: 0, detection: 0 },
+    food: { total: 4, detected: 2, range: 0, fov: 2, occlusion: 0, detection: 0 },
+  }
+  creature.decisionSummary = { chosen: 'food', reason: 'Nearby food utility', candidates: [] }
+  return world
+}
+
+const observedContext = (world: World, selectedWasActive = true): NextActionContext => ({ selectedIndividualId: world.inspectedIndividualId, selectedWasActive })
 
 describe('arena clarity helpers', () => {
   it('offers stable action focus labels and keeps the selected creature visible', () => {
@@ -129,5 +155,170 @@ describe('arena clarity helpers', () => {
     expect(selectedHunter).toContain('nearest eligible prey at contact')
     expect(formatArenaOverlayDescription('energy-regrowth', true, false)).not.toContain(ARENA_HUNT_CONTACT_KEY)
     expect(formatArenaAccessibleDescription(descriptionInput({ hasSelectedCreature: true, selectedIsHunting: true }))).toContain(ARENA_HUNT_CONTACT_KEY)
+  })
+
+  it('describes selected active telemetry from perception through the current action', () => {
+    const world = observedWorld()
+    const internalCreatureId = world.creatures[0].id
+    const internalFoodId = world.food[0]?.id
+    const path = formatObservedPath(world, { ticks: 1, stop: 'beat' }, observedContext(world))
+    expect(path).toContain('perception recorded 1/2 creatures and 2/4 food')
+    expect(path).toContain('decision recorded as food (reason noted: Nearby food utility)')
+    expect(path).toContain('current action: Finding food · target: Food item.')
+    expect(path).not.toContain(String(internalCreatureId))
+    if (internalFoodId !== undefined) expect(path).not.toContain(String(internalFoodId))
+  })
+
+  it('prompts inspection without inventing telemetry when nothing is selected', () => {
+    const world = observedWorld()
+    world.inspectedIndividualId = null
+    const path = formatObservedPath(world, { ticks: 1, stop: 'beat' }, { selectedIndividualId: null, selectedWasActive: false })
+    expect(path).toContain('Inspect a creature, then choose Next action')
+    expect(path).not.toContain('perception recorded')
+    expect(path).not.toContain('creatures and')
+  })
+
+  it('names missing telemetry and home state explicitly', () => {
+    const missing = observedWorld()
+    delete missing.creatures[0].perceptionDiagnostics
+    delete missing.creatures[0].decisionSummary
+    const missingPath = formatObservedPath(missing, { ticks: 1, stop: 'beat' }, observedContext(missing))
+    expect(missingPath).toContain('perception telemetry is unavailable')
+    expect(missingPath).toContain('decision telemetry is unavailable')
+
+    const home = observedWorld()
+    delete home.creatures[0].perceptionDiagnostics
+    delete home.creatures[0].decisionSummary
+    home.creatures[0].home = true
+    const homePath = formatObservedPath(home, { ticks: 1, stop: 'beat' }, observedContext(home, false))
+    expect(homePath).toContain('already home at step start')
+    expect(homePath).toContain('no new decision path was observed')
+  })
+
+  it('summarizes a generation boundary from the latest ledger and exact next population', () => {
+    const world = observedWorld()
+    world.generation = 5
+    world.ledger = [{
+      generation: 4,
+      startPopulation: 8,
+      outcomes: { survived: 3, hunted: 2, energy: 1, unfed: 1, late: 1, aged: 0 },
+      foodAtStart: 12,
+      foodProduced: 4,
+      foodRemoved: 1,
+      foodConsumed: 7,
+      foodRemaining: 8,
+      preyConsumed: 1,
+      attackAttempts: 5,
+      attackSuccesses: 2,
+      attackFailures: 3,
+      birthsEligible: 4,
+      birthsAdmitted: 2,
+      birthsCapped: 0,
+      selection: {} as never,
+      selectionByOutcome: {} as never,
+    }]
+    const path = formatObservedPath(world, { ticks: 4, stop: 'generation-boundary' }, observedContext(world))
+    expect(path).toContain('Generation 4 recorded 7 food items consumed')
+    expect(path).toContain('5 attack attempts')
+    expect(path).toContain('2 attack successes')
+    expect(path).toContain('3 survivors')
+    expect(path).toContain('2 births')
+    expect(path).toContain('exact next population: 5')
+  })
+
+  it('handles no-active and bounded results without claiming an unobserved decision', () => {
+    const noActive = observedWorld()
+    noActive.inspectedIndividualId = null
+    for (const creature of noActive.creatures) creature.home = true
+    const noActivePath = formatObservedPath(noActive, { ticks: 0, stop: 'no-active' }, { selectedIndividualId: null, selectedWasActive: false })
+    expect(noActivePath).toContain('No active creatures remain')
+    expect(noActivePath).toContain('2 living creatures are home')
+
+    const extinct = observedWorld()
+    for (const creature of extinct.creatures) creature.alive = false
+    expect(formatObservedPath(extinct, { ticks: 0, stop: 'no-active' }, { selectedIndividualId: null, selectedWasActive: false })).toContain('the population is extinct')
+
+    const boundedWorld = observedWorld()
+    const bounded = formatObservedPath(boundedWorld, { ticks: 10, stop: 'bounded' }, observedContext(boundedWorld))
+    expect(bounded).toContain('10 ticks reaction-window bound')
+    expect(bounded).toContain('perception recorded 1/2 creatures and 2/4 food')
+  })
+
+  it('reports a generation boundary without fabricating a missing ledger', () => {
+    const world = observedWorld()
+    world.generation = 3
+    world.ledger = []
+    expect(formatObservedPath(world, { ticks: 1, stop: 'generation-boundary' }, observedContext(world))).toContain('no generation ledger is available')
+  })
+
+  it('preserves an inspected returning creature path when the step reaches home', () => {
+    const world = observedWorld()
+    const returning = world.creatures[0]
+    const internalCreatureId = returning.id
+    const context = observedContext(world)
+    returning.x = returning.homeX
+    returning.y = returning.homeY
+    returning.mode = 'returning'
+    returning.returning = true
+    for (const creature of world.creatures.slice(1)) creature.home = true
+
+    const result = advanceToNextAction(world)
+    const path = formatObservedPath(world, result, context)
+    expect(result.stop).toBe('no-active')
+    expect(path).toContain('perception recorded 1/2 creatures and 2/4 food')
+    expect(path).toContain('decision recorded as food (reason noted: Nearby food utility)')
+    expect(path).toContain('current action: Safe at home · target: Food item')
+    expect(path).toContain('It reached home during this step.')
+    expect(path).not.toContain(String(internalCreatureId))
+  })
+
+  it('does not replay retained telemetry for a creature already home at step start', () => {
+    const world = observedWorld()
+    const selected = world.creatures[0]
+    selected.id = 987654
+    const context: NextActionContext = { selectedIndividualId: selected.individualId, selectedWasActive: false }
+    selected.home = true
+    const result = advanceToNextAction(world)
+    const active = world.creatures[1]
+    world.inspectedIndividualId = null
+    const path = formatObservedPath(world, result, context)
+    expect(active.alive && !active.home).toBe(true)
+    expect(path).toContain('already home at step start')
+    expect(path).toContain('no new decision path was observed')
+    expect(path).not.toContain('perception recorded')
+    expect(path).not.toContain('Nearby food utility')
+    expect(path).not.toContain('987654')
+  })
+
+  it('keeps zero-count ledger grammar plural and avoids raw identifiers', () => {
+    const world = observedWorld()
+    world.generation = 2
+    world.ledger = [{
+      generation: 1,
+      startPopulation: 0,
+      outcomes: { survived: 0, hunted: 0, energy: 0, unfed: 0, late: 0, aged: 0 },
+      foodAtStart: 0,
+      foodProduced: 0,
+      foodRemoved: 0,
+      foodConsumed: 0,
+      foodRemaining: 0,
+      preyConsumed: 0,
+      attackAttempts: 0,
+      attackSuccesses: 0,
+      attackFailures: 0,
+      birthsEligible: 0,
+      birthsAdmitted: 0,
+      birthsCapped: 0,
+      selection: {} as never,
+      selectionByOutcome: {} as never,
+    }]
+    const path = formatObservedPath(world, { ticks: 1, stop: 'generation-boundary' }, observedContext(world))
+    expect(path).toContain('0 food items consumed')
+    expect(path).toContain('0 attack attempts')
+    expect(path).toContain('0 attack successes')
+    expect(path).toContain('0 survivors')
+    expect(path).toContain('0 births')
+    expect(path).toContain('exact next population: 0')
+    expect(path).not.toContain('undefined')
   })
 })

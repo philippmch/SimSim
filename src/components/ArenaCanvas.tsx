@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type React from 'react'
+import type { NextActionContext, NextActionResult } from '../simulation/scheduler'
 import type { Mode, TargetType, World } from '../simulation/types'
 
 interface Props { world: World; revision: number;selectedIndividualId:number|null;onSelect:(individualId:number|null)=>void;arenaFocus:ArenaFocus }
@@ -96,6 +97,84 @@ export function formatSelectedTarget(
   const targetCreature = creatures.find(creature => creature.id === target.targetId && creature.alive)
   const kind = target.targetType === 'prey' ? 'Prey' : 'Threat'
   return targetCreature ? `${kind} · Individual ${targetCreature.individualId}` : `${kind} · unavailable`
+}
+
+function observedCount(value: number | undefined): number {
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value!)) : 0
+}
+
+function observedQuantity(value: number | undefined, singular: string, plural = `${singular}s`): string {
+  const count = observedCount(value)
+  return `${count} ${count === 1 ? singular : plural}`
+}
+
+function observedDecisionLabel(target: TargetType): string {
+  return target === 'food' ? 'food' : target === 'prey' ? 'prey' : target === 'threat' ? 'danger' : target === 'home' ? 'home' : target === 'memory' ? 'remembered food' : 'exploration'
+}
+
+function observedActionLabel(creature: World['creatures'][number]): string {
+  return CREATURE_STATE_METADATA[creature.home ? 'safe' : creature.mode].label
+}
+
+function inspectedCreature(world: World, individualId: number | null): World['creatures'][number] | undefined {
+  return individualId === null
+    ? undefined
+    : world.creatures.find(creature => creature.individualId === individualId)
+}
+
+function formatObservedCreaturePath(world: World, context: NextActionContext): string {
+  const inspected = inspectedCreature(world, context.selectedIndividualId)
+  if (!inspected) return 'Inspect a creature, then choose Next action to observe its perception and decision path.'
+  if (!inspected.alive) return 'The inspected creature is no longer living; inspect an active creature to observe a decision path.'
+
+  const perception = inspected.perceptionDiagnostics
+  const decision = inspected.decisionSummary
+  if (inspected.home && !perception && !decision) return 'The inspected creature is home; no active decision path was recorded for this step.'
+  const perceptionText = perception
+    ? `perception recorded ${observedCount(perception.creatures.detected)}/${observedCount(perception.creatures.total)} creatures and ${observedCount(perception.food.detected)}/${observedCount(perception.food.total)} food`
+    : 'perception telemetry is unavailable'
+  const decisionText = decision
+    ? `decision recorded as ${observedDecisionLabel(decision.chosen)} (reason noted: ${decision.reason.trim() || 'not provided'})`
+    : 'decision telemetry is unavailable'
+  const target = formatSelectedTarget(inspected, world.creatures, world.food)
+  const arrival = inspected.home ? ' It reached home during this step.' : ''
+  return `Inspected ${inspected.home ? 'creature now home' : 'active creature'}: ${perceptionText} → ${decisionText} → current action: ${observedActionLabel(inspected)} · target: ${target}.${arrival}`
+}
+
+function formatObservedGenerationBoundary(world: World): string {
+  const ledger = world.ledger.at(-1)
+  if (!ledger) return `Generation boundary reached; no generation ledger is available. Generation ${world.generation} is ready.`
+  const survivors = observedCount(ledger.outcomes?.survived)
+  const births = observedCount(ledger.birthsAdmitted)
+  const nextPopulation = survivors + births
+  return `Generation ${ledger.generation} recorded ${observedQuantity(ledger.foodConsumed, 'food item')} consumed, ${observedQuantity(ledger.attackAttempts, 'attack attempt')}, ${observedQuantity(ledger.attackSuccesses, 'attack success', 'attack successes')}, ${observedQuantity(survivors, 'survivor')}, and ${observedQuantity(births, 'birth')} → exact next population: ${nextPopulation}.`
+}
+
+/**
+ * Summarize one manual action step using only telemetry and ledger facts present
+ * in the resulting world. The wording is intentionally observational: it
+ * describes recorded perception, decisions, and outcomes without claiming why
+ * the population changed.
+ */
+export function formatObservedPath(world: World, result: NextActionResult, context: NextActionContext): string {
+  if (result.stop === 'generation-boundary') return `Observed path: ${formatObservedGenerationBoundary(world)}`
+  const inspected = inspectedCreature(world, context.selectedIndividualId)
+  if (context.selectedIndividualId !== null && !context.selectedWasActive) {
+    return inspected?.home
+      ? 'Observed path: The inspected creature was already home at step start; no new decision path was observed.'
+      : 'Observed path: The selected creature was not active at step start; no new decision path was observed.'
+  }
+  if (result.stop === 'no-active') {
+    if (context.selectedWasActive && inspected?.alive && (inspected.perceptionDiagnostics || inspected.decisionSummary)) return `Observed path: ${formatObservedCreaturePath(world, context)}`
+    const living = world.creatures.filter(creature => creature.alive)
+    return living.length
+      ? `Observed path: No active creatures remain; ${observedQuantity(living.length, 'living creature')} ${living.length === 1 ? 'is' : 'are'} home.`
+      : 'Observed path: No active creatures remain; the population is extinct.'
+  }
+  const prefix = result.stop === 'bounded'
+    ? `Observed path: Step stopped at the ${observedQuantity(result.ticks, 'tick')} reaction-window bound. `
+    : 'Observed path: '
+  return `${prefix}${formatObservedCreaturePath(world, context)}`
 }
 
 export interface ArenaAccessibleDescriptionInput {

@@ -1,6 +1,6 @@
 import{afterEach,describe,expect,it,vi}from'vitest'
 import{controllerEventIsCurrent,createController,fallbackController}from'./controller'
-import{applyIntervention,createWorld,defaultConfig,finishGeneration}from'./engine'
+import{applyIntervention,createWorld,defaultConfig,finishGeneration,setInspectedIndividual}from'./engine'
 import type{WorkerCommand,WorkerEvent}from'./protocol'
 
 class FakeWorker{
@@ -81,6 +81,17 @@ describe('controller failover and ordering',()=>{
     expect(after.tickIndex).toBe(before.tickIndex+1)
     expect(after.dayTime).toBeCloseTo(before.dayTime+.025)
     expect(after.creatures[0].reactionWindow).toBe(0)
+    controller.dispose()
+  })
+  it('captures fallback step context from its internal world before advancing',()=>{
+    const source=createWorld({...defaultConfig,seed:309,initialPopulation:2,foodPerDay:0})
+    const selected=source.creatures[0]
+    setInspectedIndividual(source,selected.individualId)
+    const snapshots:ReturnType<typeof createWorld>[]=[],metas:unknown[]=[]
+    const controller=fallbackController(source,(world,meta)=>{snapshots.push(world);metas.push(meta)})
+    snapshots[0].creatures[0].home=true
+    controller.send({type:'step',stepId:43})
+    expect(metas.at(-1)).toMatchObject({stepId:43,stepContext:{selectedIndividualId:selected.individualId,selectedWasActive:true}})
     controller.dispose()
   })
   it('detaches every fallback snapshot while preserving action metadata and prior state',()=>{

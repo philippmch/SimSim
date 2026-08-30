@@ -1,4 +1,4 @@
 import type {Config,InterventionKind,World} from './types'
-import type {NextActionResult} from './scheduler'
+import type {NextActionContext,NextActionResult} from './scheduler'
 export type WorkerCommand={type:'init'|'reset';config:Config;epoch?:number}|{type:'play'|'pause'|'finish'}|{type:'step';stepId?:number}|{type:'speed';speed:number}|{type:'inspect';individualId:number|null}|{type:'intervene';kind:InterventionKind;commandId?:number}
-export type WorkerEvent={type:'snapshot';world:World;epoch:number;lastCommandId?:number;stepId?:number;stepResult?:NextActionResult}|{type:'error';message:string;epoch:number}
+export type WorkerEvent={type:'snapshot';world:World;epoch:number;lastCommandId?:number;stepId?:number;stepResult?:NextActionResult;stepContext?:NextActionContext}|{type:'error';message:string;epoch:number}

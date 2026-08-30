@@ -1,6 +1,6 @@
 import {describe,expect,it} from 'vitest'
 import {createWorld,defaultConfig,setInspectedIndividual,SIMULATION_TIMESTEP} from './engine'
-import {MAX_TICKS_PER_PULSE,advanceToNextAction,nextActionMaxTicks,scheduledTicks} from './scheduler'
+import {MAX_TICKS_PER_PULSE,advanceToNextAction,captureNextActionContext,nextActionMaxTicks,scheduledTicks} from './scheduler'
 
 describe('bounded scheduler',()=>{
   it('preserves fixed-step remainder and caps a stalled pulse',()=>{
@@ -80,6 +80,16 @@ describe('bounded scheduler',()=>{
     expect(advanceToNextAction(world)).toEqual({ticks:0,stop:'no-active'})
     world.creatures=[]
     expect(advanceToNextAction(world)).toEqual({ticks:0,stop:'no-active'})
+  })
+
+  it('captures the inspected individual and active state before a step',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0})
+    const creature=world.creatures[0]
+    expect(captureNextActionContext(world)).toEqual({selectedIndividualId:null,selectedWasActive:false})
+    setInspectedIndividual(world,creature.individualId)
+    expect(captureNextActionContext(world)).toEqual({selectedIndividualId:creature.individualId,selectedWasActive:true})
+    creature.home=true
+    expect(captureNextActionContext(world)).toEqual({selectedIndividualId:creature.individualId,selectedWasActive:false})
   })
 
   it('refreshes deterministic selected decision and perception telemetry at each beat',()=>{

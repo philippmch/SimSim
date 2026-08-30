@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { ARENA_FOCUS_OPTIONS, ARENA_HUNT_CONTACT_KEY, ARENA_PATCH_STOCK_KEY, ARENA_QUICK_START, ARENA_SELECTED_OVERLAY_KEY, ArenaCanvas, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress, formatArenaFocusDescription, formatArenaFocusOption, formatSelectedTarget, showArenaQuickStart } from './components/ArenaCanvas'
+import { ARENA_FOCUS_OPTIONS, ARENA_HUNT_CONTACT_KEY, ARENA_PATCH_STOCK_KEY, ARENA_QUICK_START, ARENA_SELECTED_OVERLAY_KEY, ArenaCanvas, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress, formatArenaFocusDescription, formatArenaFocusOption, formatObservedPath, formatSelectedTarget, showArenaQuickStart } from './components/ArenaCanvas'
 import type { CreatureState } from './components/ArenaCanvas'
 import { GenerationAccounting } from './components/GenerationAccounting'
 import { GenerationForecast } from './components/GenerationForecast'
@@ -55,6 +55,7 @@ function App(){
   const settingsCloseRef=useRef<HTMLButtonElement>(null)
   const importRef=useRef<HTMLInputElement>(null)
   const [actionStatus,setActionStatus]=useState('')
+  const [observedPath,setObservedPath]=useState('Inspect a creature, then choose Next action to observe its perception and decision path.')
   const [stepPending,setStepPending]=useState(false)
   const pendingStepRef=useRef<number|null>(null)
   const nextStepIdRef=useRef(0)
@@ -88,14 +89,14 @@ function App(){
   const closeSettings=useCallback(()=>setSettingsOpen(false),[])
   const closeExperiment=useCallback(()=>{setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
   const replayExperiment=useCallback((config:Config)=>{setDraft(sanitizeConfig(config));setActionStatus('Control seed staged. Choose Apply & restart to replay it live.');setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
-  const reset=useCallback(()=>{pendingStepRef.current=null;setStepPending(false);const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);setRequestedGeneration(null);persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}controllerRef.current?.send({type:'reset',config:clean});setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
-  const finishGeneration=()=>{pendingStepRef.current=null;setStepPending(false);setPlaying(false);controllerRef.current?.send({type:'finish'})}
-  const nextAction=()=>{const controller=controllerRef.current;if(!controller||stepPending||pendingStepRef.current!==null)return;const stepId=++nextStepIdRef.current;pendingStepRef.current=stepId;setStepPending(true);setPlaying(false);setActionStatus('Playback paused.');controller.send({type:'step',stepId})}
+  const reset=useCallback(()=>{pendingStepRef.current=null;setStepPending(false);const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);setRequestedGeneration(null);setObservedPath('Inspect a creature, then choose Next action to observe its perception and decision path.');persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}controllerRef.current?.send({type:'reset',config:clean});setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
+  const finishGeneration=()=>{const interrupted=pendingStepRef.current!==null;pendingStepRef.current=null;setStepPending(false);if(interrupted)setObservedPath('Manual step interrupted; choose Next action to retry.');setPlaying(false);controllerRef.current?.send({type:'finish'})}
+  const nextAction=()=>{const controller=controllerRef.current;if(!controller||stepPending||pendingStepRef.current!==null)return;const stepId=++nextStepIdRef.current;pendingStepRef.current=stepId;setStepPending(true);setObservedPath('Next action pending…');setPlaying(false);setActionStatus('Playback paused.');controller.send({type:'step',stepId})}
   const selectIndividual=(individualId:number|null)=>{setSelectedIndividualId(individualId);controllerRef.current?.send({type:'inspect',individualId})}
   const intervene=(kind:InterventionKind)=>{controllerRef.current?.send({type:'intervene',kind});setActionStatus(kind==='resource-bloom'?'Resource bloom released.':kind==='drought'?'Drought applied.':'Founder migration released.')}
 
-  const handleSnapshot=useCallback((nextWorld:World,meta?:SimulationSnapshotMeta)=>{setWorld(nextWorld);setRevision(n=>n+1);if(pendingStepRef.current!==null&&meta?.stepResult&&meta.stepId===pendingStepRef.current){pendingStepRef.current=null;setStepPending(false);setActionStatus(formatStepCompletion(nextWorld,meta))}},[])
-  const handleFallback=useCallback(()=>{const interrupted=pendingStepRef.current!==null;pendingStepRef.current=null;setStepPending(false);if(interrupted)setActionStatus('Step interrupted; retry Next action.');setRuntimeMode('fallback')},[])
+  const handleSnapshot=useCallback((nextWorld:World,meta?:SimulationSnapshotMeta)=>{setWorld(nextWorld);setRevision(n=>n+1);if(pendingStepRef.current!==null&&meta?.stepResult&&meta.stepId===pendingStepRef.current){pendingStepRef.current=null;setStepPending(false);if(meta.stepContext)setObservedPath(formatObservedPath(nextWorld,meta.stepResult,meta.stepContext));else setObservedPath('Observed path unavailable; retry Next action.');setActionStatus(formatStepCompletion(nextWorld,meta))}},[])
+  const handleFallback=useCallback(()=>{const interrupted=pendingStepRef.current!==null;pendingStepRef.current=null;setStepPending(false);if(interrupted){setObservedPath('Manual step interrupted; choose Next action to retry.');setActionStatus('Step interrupted; retry Next action.')}setRuntimeMode('fallback')},[])
 
   useEffect(()=>{const controller=createController(initialRef.current,handleSnapshot,handleFallback);controllerRef.current=controller;setRuntimeMode(controller.mode);return()=>{controller.dispose();controllerRef.current=null}},[handleSnapshot,handleFallback])
 
@@ -163,6 +164,10 @@ function App(){
           <div className="day-progress" role="progressbar" aria-label="Current generation progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={dayProgress} aria-valuetext={arenaDayLabel}><i style={{width:`${dayProgress}%`}}/></div>
           <label className="speed-select">Playback speed <select value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value={.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option><option value={4}>4×</option></select></label>
           <button className="reset" onClick={reset}>{dirty?'Apply & restart':'Restart run'}</button>
+        </div>
+        <div className="interventions" role="status" aria-live="polite" aria-label="Observed action path">
+          <span><strong>Observed path</strong><small>Latest manual step</small></span>
+          <output>{observedPath}</output>
         </div>
         <div className="interventions" role="group" aria-label="Live ecological interventions">
           <span><strong>Live shocks</strong><small>No restart needed</small></span>

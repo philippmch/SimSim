@@ -24,6 +24,10 @@ describe('simulation worker transport',()=>{
     const initial=snapshot(messages[0])
     expect(initial).toMatchObject({type:'snapshot',epoch:7,lastCommandId:0})
     const initialTick=initial.world.tickIndex
+    const selectedIndividualId=initial.world.creatures[0].individualId
+    send({type:'inspect',individualId:selectedIndividualId})
+    const inspected=snapshot(messages.at(-1))
+    inspected.world.creatures[0].home=true
 
     send({type:'play'})
     vi.advanceTimersByTime(100)
@@ -32,7 +36,7 @@ describe('simulation worker transport',()=>{
 
     send({type:'step',stepId:1})
     const stepped=snapshot(messages.at(-1))
-    expect(stepped).toMatchObject({type:'snapshot',epoch:7,lastCommandId:0,stepId:1,stepResult:{stop:'beat'}})
+    expect(stepped).toMatchObject({type:'snapshot',epoch:7,lastCommandId:0,stepId:1,stepResult:{stop:'beat'},stepContext:{selectedIndividualId,selectedWasActive:true}})
     expect(stepped.world.tickIndex).toBeGreaterThan(initialTick)
     const messageCount=messages.length,steppedTick=stepped.world.tickIndex
     vi.advanceTimersByTime(250)
@@ -47,8 +51,8 @@ describe('simulation worker transport',()=>{
     send({type:'step',stepId:2})
     send({type:'step',stepId:3})
     const boundaryBeat=snapshot(messages.at(-2)),boundary=snapshot(messages.at(-1))
-    expect(boundaryBeat).toMatchObject({type:'snapshot',epoch:8,lastCommandId:0,stepId:2,stepResult:{stop:'beat'}})
-    expect(boundary).toMatchObject({type:'snapshot',epoch:8,lastCommandId:0,stepId:3,stepResult:{stop:'generation-boundary'}})
+    expect(boundaryBeat).toMatchObject({type:'snapshot',epoch:8,lastCommandId:0,stepId:2,stepResult:{stop:'beat'},stepContext:{selectedIndividualId:null,selectedWasActive:false}})
+    expect(boundary).toMatchObject({type:'snapshot',epoch:8,lastCommandId:0,stepId:3,stepResult:{stop:'generation-boundary'},stepContext:{selectedIndividualId:null,selectedWasActive:false}})
     expect(boundary.world.generation).toBe(2)
   })
 })
