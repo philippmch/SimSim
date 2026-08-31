@@ -20,6 +20,7 @@ import {
   interventionGenerationFor,
   latestComparableAggregate,
   maximumExperimentGenerations,
+  normalizeInterventionValue,
   treatmentNoOpReason,
   inactiveInterventionReason,
   workerEventIsCurrent,
@@ -141,6 +142,18 @@ describe('experiment lab UI helpers', () => {
     expect(treatmentNoOpReason(defaultConfig, applyExperimentPreset('drought', defaultExperimentDraft(defaultConfig), defaultConfig))).toBeNull()
     expect(treatmentNoOpReason(defaultConfig, applyExperimentPreset('movement', defaultExperimentDraft(defaultConfig), defaultConfig))).toBeNull()
     expect(treatmentNoOpReason(defaultConfig, applyExperimentPreset('predation', defaultExperimentDraft(defaultConfig), defaultConfig))).toBeNull()
+  })
+
+  it('compares treatment steps with the actual applied control value', () => {
+    const base = { ...defaultConfig, moveEnergyFactor: .73 }
+    const draft = { ...defaultExperimentDraft(base), interventionKey: 'moveEnergyFactor' as const, interventionValue: .70 }
+    expect(normalizeInterventionValue('moveEnergyFactor', draft.interventionValue)).toBe(.71)
+    expect(treatmentNoOpReason(base, draft)).toBeNull()
+    const plan = buildExperimentPlan(base, draft)
+    expect(plan.baseConfig.moveEnergyFactor).toBe(.73)
+    expect(plan.scenarioB.interventions?.[0]?.changes.moveEnergyFactor).toBe(.71)
+
+    expect(treatmentNoOpReason({ ...base, moveEnergyFactor: .71 }, draft)).toMatch(/identical to the control/)
   })
 
   it('filters mode-inactive pressures and explains defensive no-ops',()=>{

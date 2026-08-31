@@ -230,7 +230,7 @@ export function treatmentNoOpReason(baseConfig: Config, draft: ExperimentDraft):
   const inactive=inactiveInterventionReason(baseConfig,draft.interventionKey)
   if(inactive)return inactive
   const constraint = constraintFor(draft.interventionKey)
-  const controlValue = normalizeInterventionValue(draft.interventionKey, baseConfig[draft.interventionKey])
+  const controlValue = baseConfig[draft.interventionKey]
   const treatmentValue = normalizeInterventionValue(draft.interventionKey, draft.interventionValue)
   if (controlValue !== treatmentValue) return null
   const boundary = controlValue === constraint.min ? 'minimum' : controlValue === constraint.max ? 'maximum' : 'current value'
