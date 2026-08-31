@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { formatNextActionCopy, resolveTerminalOutcome, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { formatNextActionCopy, GenerationAccountingFallback, resolveTerminalOutcome, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
 import { formatPerceptionTelemetry } from './components/CreatureInspector'
 import type { LastInspectedOutcome, PerceptionDiagnostics } from './simulation/types'
 
@@ -158,5 +160,16 @@ describe('perception telemetry copy', () => {
       creatures: { total: 3, detected: 0, range: 0, fov: 0, occlusion: 0, detection: 3 },
       food: { total: 0, detected: 0, range: 0, fov: 0, occlusion: 0, detection: 0 },
     }).notDetected).toContain('3 detection misses')
+  })
+})
+
+describe('generation accounting loading state', () => {
+  it('keeps both lazy sections visibly present and marked busy', () => {
+    const markup = renderToStaticMarkup(createElement(GenerationAccountingFallback))
+    expect(markup).toContain('Resource pressure')
+    expect(markup).toContain('Loading resource pressure…')
+    expect(markup).toContain('Generation accounting')
+    expect(markup).toContain('Loading generation accounting…')
+    expect(markup.match(/aria-busy="true"/g)).toHaveLength(2)
   })
 })

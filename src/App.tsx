@@ -1,7 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { ARENA_FOCUS_OPTIONS, ARENA_HUNT_CONTACT_KEY, ARENA_PATCH_STOCK_KEY, ARENA_QUICK_START, ARENA_SELECTED_OVERLAY_KEY, ArenaCanvas, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress, formatArenaFocusDescription, formatArenaFocusOption, formatObservedPath, formatSelectedTarget, showArenaQuickStart } from './components/ArenaCanvas'
 import type { CreatureState } from './components/ArenaCanvas'
-import { GenerationAccounting } from './components/GenerationAccounting'
 import { GenerationForecast } from './components/GenerationForecast'
 import { createWorld, formatLatestWorldEvent, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
 import { defaultConfig,MAX_FOOD,MAX_POPULATION, sanitizeConfig } from './simulation/config'
@@ -17,9 +16,14 @@ const LivePulse=lazy(()=>import('./components/LivePulse'))
 const TerminalOutcome=lazy(()=>import('./components/TerminalOutcome'))
 const CreatureInspector=lazy(()=>import('./components/CreatureInspector'))
 const PopulationStory=lazy(()=>import('./components/PopulationStory'))
+const GenerationAccounting=lazy(()=>import('./components/GenerationAccounting'))
 const creatureStates=Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]
 
 const copyConfig=(c:Config):Config=>({...c})
+
+export function GenerationAccountingFallback(){
+  return <><div className="ecology-line activity-line" aria-busy="true"><strong>Resource pressure</strong><span>Loading resource pressure…</span></div><div className="ecology-line activity-line" aria-busy="true"><strong>Generation accounting</strong><span>Loading generation accounting…</span></div></>
+}
 
 function formatStepCompletion(world:World,meta:SimulationSnapshotMeta){
   const result=meta.stepResult
@@ -230,7 +234,7 @@ function App(){
       <section className="simulation-panel" aria-label="Simulation" aria-hidden={settingsOpen&&isNarrow||undefined}>
         <div className="arena-wrap">
           <ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual} arenaFocus={arenaFocus}/>
-          <div className="arena-badge" style={{pointerEvents:'none'}}><strong>{arenaDayLabel}</strong><small>Generation {world.generation}</small><small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} food across ${world.environment.patches.length} resource patches`:`${world.food.length} / ${Math.round(world.environment.foodBudget)} seasonal food`}</small>{showArenaQuickStart(world.ledger.length)&&ARENA_QUICK_START.map(line=><small key={line}>{line}</small>)}</div>
+          <div className="arena-badge" style={{pointerEvents:'none'}}><strong>{arenaDayLabel}</strong><small>Generation {world.generation}</small><small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} current food across ${world.environment.patches.length} resource patches`:`${world.food.length} current food`}</small>{showArenaQuickStart(world.ledger.length)&&ARENA_QUICK_START.map(line=><small key={line}>{line}</small>)}</div>
           <details className="arena-keys" style={{border:0,paddingTop:0,marginTop:0}} open={arenaKeysOpen||!isNarrow} onToggle={event=>{if(isNarrow)setArenaKeysOpen(event.currentTarget.open)}}>
             <summary className="state-key" aria-label={arenaKeysOpen?'Hide arena key':'Show arena key'} style={{display:isNarrow?'flex':'none',pointerEvents:'auto',touchAction:'manipulation',cursor:'pointer',listStyle:'none'}}>{arenaKeysOpen?'Hide key':'Show key'}</summary>
             <div className="state-key" role="group" aria-label="Creature action and overlay key"><strong>Outline = action · number = current count · body color = speed</strong>{world.config.ecologyMode==='energy-regrowth'&&<strong>{ARENA_PATCH_STOCK_KEY}</strong>}{selected&&<strong>{ARENA_SELECTED_OVERLAY_KEY}</strong>}{selected?.mode==='hunting'&&<strong>{ARENA_HUNT_CONTACT_KEY}</strong>}<label htmlFor="arena-focus" style={{pointerEvents:'auto',display:'inline-flex',alignItems:'center',gap:5,flexBasis:'100%',justifyContent:'flex-end',fontWeight:700}}><span>Focus</span><select id="arena-focus" aria-label="Focus creatures by current action" value={arenaFocus} onChange={event=>setArenaFocus(event.target.value as 'all'|CreatureState)} style={{pointerEvents:'auto',touchAction:'manipulation',minWidth:0,maxWidth:'170px',minHeight:'28px',fontSize:'10px',lineHeight:1.2,padding:'3px 5px',border:0,borderRadius:'5px',backgroundColor:'var(--paper)',color:'var(--ink)',colorScheme:'light dark'}}>{ARENA_FOCUS_OPTIONS.map(option=><option key={option.value} value={option.value}>{formatArenaFocusOption(option.value,option.value==='all'?living:stateCounts[option.value])}</option>)}</select></label><small style={{flexBasis:'100%',textAlign:'right',fontSize:'9px',lineHeight:1.35,color:arenaFocus==='all'?'#a7bbb2':'#f6dd83'}}>{formatArenaFocusDescription(arenaFocus,arenaFocusCount,living,selectedOutsideArenaFocus)}</small>{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/><b>{stateCounts[state]}</b>{' '}{metadata.label}</span>)}</div>
@@ -277,7 +281,7 @@ function App(){
           <Suspense fallback={<div className="ecology-line activity-line" role="group" aria-label="Live simulation pulse. Waiting for the next simulation update."><strong>Live pulse</strong><span>Waiting for the next simulation update.</span></div>}><LivePulse key={livePulseRun} world={world}/></Suspense>
           <div className="ecology-line" aria-label="Current model and energy statistics"><strong>{world.config.ecologyMode==='energy-regrowth'?'Ecological model':'Classic model'}</strong><span>{world.config.perceptionMode} perception</span><span>{world.config.predationMode} predation</span><span>mean energy <b>{stats.avgEnergy.toFixed(1)}</b></span><span>mean age <b>{stats.avgAge.toFixed(1)}</b></span></div>
           <GenerationForecast world={world}/>
-          <GenerationAccounting world={world}/>
+          <Suspense fallback={<GenerationAccountingFallback/>}><GenerationAccounting world={world} globalFoodCap={MAX_FOOD}/></Suspense>
           <Suspense fallback={<section className="evolution-story generation-journal" aria-busy="true"><p className="journal-empty" role="status">Opening generation journal…</p></section>}><GenerationJournal ledgers={world.ledger} events={world.events} requestedGeneration={requestedGeneration} onRequestedGenerationChange={setRequestedGeneration}/></Suspense>
           <Suspense fallback={<section className="evolution-story" aria-busy="true"><p className="journal-empty" role="status">Opening population story…</p></section>}><PopulationStory lineage={lineage}/></Suspense>
           <Suspense fallback={<section className="evolution-story generation-journal" aria-busy="true"><p className="journal-empty" role="status">Opening insights…</p></section>}><InsightsPanel world={world} requestedGeneration={requestedGeneration} onSelectGeneration={setRequestedGeneration}/></Suspense>
