@@ -232,9 +232,13 @@ function pairedDeltas(a: ArmResult, b: ArmResult, metrics: readonly ExperimentMe
     for (const metric of metrics) {
       const av = pointA.metrics[metric]
       const bv = pointB.metrics[metric]
-      values[metric] = av === null && bv === null
-        ? 0
-        : typeof av === 'number' && typeof bv === 'number' ? (bv === av ? 0 : bv - av) : null
+      // A paired effect is only defined when both arms observed this metric.
+      // In particular, two unavailable values are not evidence of a zero
+      // effect: they must stay unavailable so they do not enter aggregates.
+      values[metric] = typeof av === 'number' && Number.isFinite(av)
+        && typeof bv === 'number' && Number.isFinite(bv)
+        ? (bv === av ? 0 : bv - av)
+        : null
     }
     return [{ generation: pointB.generation, metrics: values }]
   })

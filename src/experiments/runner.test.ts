@@ -11,6 +11,7 @@ import {
   validateExperimentPlan,
 } from './runner'
 import { fromExperimentJson, MAX_EXPERIMENT_JSON_LENGTH, toExperimentJson, toTidyCsv } from './serialize'
+import { latestComparableAggregate } from './ui'
 
 const plan = (overrides: Partial<ExperimentPlan> = {}): ExperimentPlan => ({
   id: 'paired-test',
@@ -52,7 +53,14 @@ describe('paired experiment runner', () => {
     const metrics = ['avgEnergy', 'avgAge', 'aged', 'foodProduced', 'resourceAbundance', 'attackSuccessRate'] as const
     const result = await runExperiment(plan({ replicates: 1, generations: 2, metrics }))
     for (const point of result.replicates[0].pairedDeltas) {
-      expect(Object.fromEntries(metrics.map(metric => [metric, point.metrics[metric]]))).toEqual(Object.fromEntries(metrics.map(metric => [metric, 0])))
+      expect(Object.fromEntries(metrics.map(metric => [metric, point.metrics[metric]]))).toEqual({
+        avgEnergy: 0,
+        avgAge: 0,
+        aged: 0,
+        foodProduced: 0,
+        resourceAbundance: 0,
+        attackSuccessRate: point.generation === 1 ? null : 0,
+      })
     }
     expect(result.schemaVersion).toBe(1)
   })
@@ -67,6 +75,28 @@ describe('paired experiment runner', () => {
     expect(result.replicates[0].scenarioA.generations[0].metrics).toEqual({ avgEnergy: null, avgAge: null, aged: 0, foodProduced: 0, resourceAbundance: 0, attackSuccessRate: null })
   })
 
+  it('keeps unavailable paired effects out of aggregates and comparable selection', async () => {
+    const result = await runExperiment(plan({
+      replicates: 1,
+      generations: 1,
+      baseConfig: { ...defaultConfig, ...CLASSIC_MODES, initialPopulation: 1, foodPerDay: 0, startingEnergy: 10, dayLength: 60 },
+      scenarioB: { id: 'treatment', label: 'Treatment', config: { startingEnergy: 500, foodPerDay: 120 } },
+      metrics: ['avgEnergy', 'avgAge', 'attackSuccessRate'],
+    }))
+    const replicate = result.replicates[0]
+    expect(replicate.scenarioA.generations[0].metrics).toEqual({ avgEnergy: null, avgAge: null, attackSuccessRate: null })
+    const treatmentMetrics=replicate.scenarioB.generations[0].metrics
+    expect(typeof treatmentMetrics.avgEnergy==='number'&&Number.isFinite(treatmentMetrics.avgEnergy)).toBe(true)
+    expect(typeof treatmentMetrics.avgAge==='number'&&Number.isFinite(treatmentMetrics.avgAge)).toBe(true)
+    expect(replicate.pairedDeltas[0].metrics).toEqual({ avgEnergy: null, avgAge: null, attackSuccessRate: null })
+    expect(result.aggregates.map(point => point.effect)).toEqual([
+      { count: 0, mean: null, median: null, q1: null, q3: null, interval: [null, null] },
+      { count: 0, mean: null, median: null, q1: null, q3: null, interval: [null, null] },
+      { count: 0, mean: null, median: null, q1: null, q3: null, interval: [null, null] },
+    ])
+    expect(latestComparableAggregate(result.aggregates)).toBeNull()
+  })
+
   it('runs v4 continuous pressure interventions deterministically from their scheduled boundary', async () => {
     const input = plan({
       replicates: 1,
@@ -78,7 +108,13 @@ describe('paired experiment runner', () => {
     const first = await runExperiment(input), second = await runExperiment(input)
     expect(second).toEqual(first)
     expect(first.replicates[0].scenarioB.generations.map(point => point.appliedInterventionIds)).toEqual([[], ['v4-pressure']])
-    expect(Object.values(first.replicates[0].pairedDeltas[0].metrics).every(value => Object.is(value, 0))).toBe(true)
+    expect(first.replicates[0].pairedDeltas[0].metrics).toEqual({
+      population: 0,
+      avgEnergy: 0,
+      foodProduced: 0,
+      resourceAbundance: 0,
+      attackSuccessRate: null,
+    })
     expect(fromExperimentJson(toExperimentJson(first)).result).toEqual(first)
     expect(toTidyCsv(first)).toContain(',foodProduced,')
   })
