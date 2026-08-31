@@ -25,6 +25,7 @@ import {
   formatArenaFocusDescription,
   formatArenaFocusOption,
   formatArenaOverlayDescription,
+  formatArenaPlaybackDetail,
   formatArenaSelectionStatus,
   formatObservedPath,
   formatObservedDecisionMetadata,
@@ -213,11 +214,19 @@ describe('arena clarity helpers', () => {
     expect(all).toContain('Choose an action focus to reveal dashed current held-target paths for active matches')
   })
 
-  it('gives extinction status precedence and formats day progress consistently', () => {
-    expect(arenaPlaybackStatus(true, false)).toBe('Running')
-    expect(arenaPlaybackStatus(false, false)).toBe('Paused')
-    expect(arenaPlaybackStatus(true, true)).toBe('Extinct')
+  it('derives playback phases from population and active creature counts', () => {
+    expect(arenaPlaybackStatus({ playing: true, populationCount: 2, activeCount: 2 })).toBe('Running')
+    expect(arenaPlaybackStatus({ playing: false, populationCount: 2, activeCount: 2 })).toBe('Paused')
+    expect(arenaPlaybackStatus({ playing: true, populationCount: 2, activeCount: 0 })).toBe('Awaiting settlement')
+    expect(arenaPlaybackStatus({ playing: false, populationCount: 2, activeCount: 0 })).toBe('Awaiting settlement')
+    expect(arenaPlaybackStatus({ playing: true, populationCount: 0, activeCount: 0 })).toBe('Extinct')
     expect(formatArenaDayProgress(2.25, 18, 'Running')).toBe('Day 2.3 / 18.0 · Running')
+  })
+
+  it('explains whether an awaiting cohort is home, dead, or post-settlement extinct', () => {
+    expect(formatArenaPlaybackDetail({ status: 'Awaiting settlement', populationCount: 2, livingCount: 2 })).toBe('Awaiting settlement. No active creature actions remain; all living creatures are home. Finish generation to settle this cohort.')
+    expect(formatArenaPlaybackDetail({ status: 'Awaiting settlement', populationCount: 2, livingCount: 0 })).toBe('Awaiting settlement. All creatures in this generation are dead, but the generation has not been recorded yet. Finish generation to record it, or use Founder migration to rescue the run.')
+    expect(formatArenaPlaybackDetail({ status: 'Extinct', populationCount: 0, livingCount: 0 })).toBe('Extinct. The last settlement produced no creatures. Use Founder migration to rescue this run or restart.')
   })
 
   it('shows a concise workflow cue only before the first generation is completed', () => {
@@ -233,6 +242,14 @@ describe('arena clarity helpers', () => {
     expect(description).toContain('Select a creature to reveal its focus, sight, target, memory, and same-lineage overlays.')
     expect(description).toContain('use the Inspect creature selector')
     expect(description).not.toContain(ARENA_SELECTED_OVERLAY_KEY)
+  })
+
+  it('includes playback status and its stable phase detail in the canvas description', () => {
+    const detail = formatArenaPlaybackDetail({ status: 'Awaiting settlement', populationCount: 2, livingCount: 2 })
+    const description = formatArenaAccessibleDescription(descriptionInput({ playbackStatus: 'Awaiting settlement', playbackDetail: detail }))
+    expect(description).toContain('Awaiting settlement')
+    expect(description).toContain('all living creatures are home')
+    expect(description).toContain('Finish generation to settle this cohort')
   })
 
   it('announces creature inspection selection and clearing without live state details', () => {
@@ -369,12 +386,19 @@ describe('arena clarity helpers', () => {
     noActive.inspectedIndividualId = null
     for (const creature of noActive.creatures) creature.home = true
     const noActivePath = formatObservedPath(noActive, { ticks: 0, stop: 'no-active' }, { selectedIndividualId: null, selectedWasActive: false })
-    expect(noActivePath).toContain('No active creatures remain')
-    expect(noActivePath).toContain('2 living creatures are home')
+    expect(noActivePath).toContain('Awaiting settlement')
+    expect(noActivePath).toContain('all living creatures are home')
+    expect(noActivePath).toContain('Finish generation to settle this cohort')
 
     const extinct = observedWorld()
     for (const creature of extinct.creatures) creature.alive = false
-    expect(formatObservedPath(extinct, { ticks: 0, stop: 'no-active' }, { selectedIndividualId: null, selectedWasActive: false })).toContain('the population is extinct')
+    const awaitingDeadPath = formatObservedPath(extinct, { ticks: 0, stop: 'no-active' }, { selectedIndividualId: null, selectedWasActive: false })
+    expect(awaitingDeadPath).toContain('Awaiting settlement')
+    expect(awaitingDeadPath).toContain('All creatures in this generation are dead')
+    expect(awaitingDeadPath).not.toContain('the population is extinct')
+
+    extinct.creatures = []
+    expect(formatObservedPath(extinct, { ticks: 0, stop: 'no-active' }, { selectedIndividualId: null, selectedWasActive: false })).toContain('Extinct. The last settlement produced no creatures')
 
     const boundedWorld = observedWorld()
     const bounded = formatObservedPath(boundedWorld, { ticks: 10, stop: 'bounded' }, observedContext(boundedWorld))
@@ -412,7 +436,8 @@ describe('arena clarity helpers', () => {
     dead.creatures[1].home = true
     const deadPath = formatObservedPath(dead, { ticks: 1, stop: 'no-active' }, deadContext)
     expect(deadPath).toContain('selected creature died')
-    expect(deadPath).toContain('No active creatures remain; 1 living creature is home')
+    expect(deadPath).toContain('Awaiting settlement')
+    expect(deadPath).toContain('all living creatures are home')
 
     const home = observedWorld()
     const homeContext = observedContext(home)
@@ -422,7 +447,8 @@ describe('arena clarity helpers', () => {
     delete home.creatures[0].decisionSummary
     const homePath = formatObservedPath(home, { ticks: 1, stop: 'no-active' }, homeContext)
     expect(homePath).toContain('selected creature reached home during this step')
-    expect(homePath).toContain('No active creatures remain; 2 living creatures are home')
+    expect(homePath).toContain('Awaiting settlement')
+    expect(homePath).toContain('all living creatures are home')
   })
 
   it('reports a generation boundary without fabricating a missing ledger', () => {

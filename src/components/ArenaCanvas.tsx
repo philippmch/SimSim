@@ -4,12 +4,24 @@ import type { NextActionContext, NextActionResult } from '../simulation/schedule
 import { MAX_POPULATION } from '../simulation/config'
 import type { DecisionSummary, Mode, TargetType, World } from '../simulation/types'
 
-interface Props { world: World; revision: number;selectedIndividualId:number|null;onSelect:(individualId:number|null)=>void;arenaFocus:ArenaFocus }
+interface Props { world: World; revision: number;selectedIndividualId:number|null;onSelect:(individualId:number|null)=>void;arenaFocus:ArenaFocus;playbackStatus:ArenaPlaybackStatus;playbackDetail:string }
 
 export type CreatureState = 'safe'|Mode
 export type ArenaFocus = 'all'|CreatureState
 
-export type ArenaPlaybackStatus = 'Running'|'Paused'|'Extinct'
+export type ArenaPlaybackStatus = 'Running'|'Paused'|'Awaiting settlement'|'Extinct'
+
+export interface ArenaPlaybackStatusInput {
+  playing: boolean
+  populationCount: number
+  activeCount: number
+}
+
+export interface ArenaPlaybackDetailInput {
+  status: ArenaPlaybackStatus
+  populationCount: number
+  livingCount: number
+}
 
 export const ARENA_PATCH_STOCK_KEY = 'Patch arcs = current food stock.'
 export const ARENA_SELECTED_OVERLAY_KEY = 'Selected: gold ring = focus; gold area = sight; dash = target; colored rings = memory; dotted rings = kin.'
@@ -79,8 +91,26 @@ export function showArenaQuickStart(completedGenerations: number): boolean {
   return completedGenerations === 0
 }
 
-export function arenaPlaybackStatus(playing: boolean, extinct: boolean): ArenaPlaybackStatus {
-  return extinct ? 'Extinct' : playing ? 'Running' : 'Paused'
+export function arenaPlaybackStatus(input: ArenaPlaybackStatusInput): ArenaPlaybackStatus {
+  const populationCount = Number.isFinite(input.populationCount) ? Math.max(0, input.populationCount) : 0
+  const activeCount = Number.isFinite(input.activeCount) ? Math.max(0, input.activeCount) : 0
+  if (populationCount === 0) return 'Extinct'
+  if (activeCount === 0) return 'Awaiting settlement'
+  return input.playing ? 'Running' : 'Paused'
+}
+
+export function formatArenaPlaybackDetail(input: ArenaPlaybackDetailInput): string {
+  const populationCount = Number.isFinite(input.populationCount) ? Math.max(0, Math.trunc(input.populationCount)) : 0
+  const livingCount = Number.isFinite(input.livingCount) ? Math.max(0, Math.trunc(input.livingCount)) : 0
+  if (input.status === 'Extinct' || populationCount === 0) return 'Extinct. The last settlement produced no creatures. Use Founder migration to rescue this run or restart.'
+  if (input.status === 'Awaiting settlement') {
+    return livingCount > 0
+      ? 'Awaiting settlement. No active creature actions remain; all living creatures are home. Finish generation to settle this cohort.'
+      : 'Awaiting settlement. All creatures in this generation are dead, but the generation has not been recorded yet. Finish generation to record it, or use Founder migration to rescue the run.'
+  }
+  return input.status === 'Running'
+    ? 'Running. Active creature actions are being simulated.'
+    : 'Paused. Resume playback to continue active creature actions.'
 }
 
 export function formatArenaDayProgress(dayTime: number, dayLength: number, status: ArenaPlaybackStatus): string {
@@ -205,9 +235,8 @@ export function formatObservedPath(world: World, result: NextActionResult, conte
   }
   if (result.stop === 'no-active') {
     const living = world.creatures.filter(creature => creature.alive)
-    const aggregate = living.length
-      ? `No active creatures remain; ${observedQuantity(living.length, 'living creature')} ${living.length === 1 ? 'is' : 'are'} home.`
-      : 'No active creatures remain; the population is extinct.'
+    const status = arenaPlaybackStatus({ playing: false, populationCount: world.creatures.length, activeCount: 0 })
+    const aggregate = formatArenaPlaybackDetail({ status, populationCount: world.creatures.length, livingCount: living.length })
     if (context.selectedWasActive) {
       if (!inspected) return `Observed path: The selected creature became unavailable. ${aggregate}`
       if (!inspected.alive) return `Observed path: The selected creature died. ${aggregate}`
@@ -240,6 +269,8 @@ export interface ArenaAccessibleDescriptionInput {
   focus?: ArenaFocus
   focusCount?: number
   selectedOutsideFocus?: boolean
+  playbackStatus?: ArenaPlaybackStatus
+  playbackDetail?: string
 }
 
 export function formatArenaOverlayDescription(
@@ -266,7 +297,9 @@ export function formatArenaAccessibleDescription(input: ArenaAccessibleDescripti
   const selectionHint = input.hasSelectedCreature
     ? ''
     : 'Select a creature to reveal its focus, sight, target, memory, and same-lineage overlays.'
-  return `Simulation arena, generation ${input.generation}, ${input.livingCreatures} living creatures: ${input.stateSummary}. ${resourceLabel}. ${input.obstacleCount} obstacles. ${overlayDescription ? `${overlayDescription} ` : ''}${focusDescription}${allFocusPathDescription} ${selectionHint} Creature body color shows speed and the bright body outline shows its current action. Click a creature or use the Inspect creature selector to select it.`
+  const playbackDescription = input.playbackDetail
+    || (input.playbackStatus ? `Playback status: ${input.playbackStatus}.` : '')
+  return `Simulation arena, generation ${input.generation}, ${input.livingCreatures} living creatures: ${input.stateSummary}. ${playbackDescription ? `${playbackDescription} ` : ''}${resourceLabel}. ${input.obstacleCount} obstacles. ${overlayDescription ? `${overlayDescription} ` : ''}${focusDescription}${allFocusPathDescription} ${selectionHint} Creature body color shows speed and the bright body outline shows its current action. Click a creature or use the Inspect creature selector to select it.`
 }
 
 export function formatArenaSelectionStatus(selectedIndividualId: number | null): string {
@@ -427,7 +460,7 @@ function speedColor(speed: number) {
   return `hsl(${hue} 58% ${42+t*14}%)`
 }
 
-export function ArenaCanvas({world,revision,selectedIndividualId,onSelect,arenaFocus}:Props) {
+export function ArenaCanvas({world,revision,selectedIndividualId,onSelect,arenaFocus,playbackStatus,playbackDetail}:Props) {
   const ref=useRef<HTMLCanvasElement>(null)
   const drawRef=useRef<()=>void>(()=>{})
   const darkModeRef=useRef<boolean | null>(null)
@@ -528,7 +561,7 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect,arenaF
   for(const creature of livingCreatures)stateCounts[creature.home?'safe':creature.mode]++
   const stateSummary=(Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]).map(([state,metadata])=>`${stateCounts[state]} ${metadata.label.toLowerCase()}`).join(', ')
   const selectedState=selected?(selected.home?'safe':selected.mode):null
-  const accessibleDescription=formatArenaAccessibleDescription({generation:world.generation,livingCreatures:livingCreatures.length,stateSummary,foodCount:world.food.length,patchCount:world.environment.patches.length,foodBudget:world.environment.foodBudget,obstacleCount:world.environment.obstacles.length,ecologyMode:world.config.ecologyMode,hasSelectedCreature:Boolean(selected),selectedIsHunting:selected?.mode==='hunting',focus:arenaFocus,focusCount:arenaFocus==='all'?livingCreatures.length:stateCounts[arenaFocus],selectedOutsideFocus:arenaFocus!=='all'&&selectedState!==null&&selectedState!==arenaFocus})
+  const accessibleDescription=formatArenaAccessibleDescription({generation:world.generation,livingCreatures:livingCreatures.length,stateSummary,foodCount:world.food.length,patchCount:world.environment.patches.length,foodBudget:world.environment.foodBudget,obstacleCount:world.environment.obstacles.length,ecologyMode:world.config.ecologyMode,hasSelectedCreature:Boolean(selected),selectedIsHunting:selected?.mode==='hunting',focus:arenaFocus,focusCount:arenaFocus==='all'?livingCreatures.length:stateCounts[arenaFocus],selectedOutsideFocus:arenaFocus!=='all'&&selectedState!==null&&selectedState!==arenaFocus,playbackStatus,playbackDetail})
   return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={accessibleDescription}>
     Natural selection simulation arena. Live counts are available in the statistics region.
   </canvas><label className="creature-picker" htmlFor="arena-creature-picker">Inspect creature <select id="arena-creature-picker" aria-describedby="arena-creature-picker-help" value={selectedIndividualId??''} onChange={e=>onSelect(e.target.value?Number(e.target.value):null)} style={{background:'var(--paper)',color:'var(--ink)',colorScheme:'light dark'}}><option value="">No creature selected</option>{livingCreatures.sort((a,b)=>a.individualId-b.individualId).map(c=><option key={c.individualId} value={c.individualId}>Individual {c.individualId}, lineage {c.lineageId}, {CREATURE_STATE_METADATA[c.home?'safe':c.mode].label}</option>)}</select></label><span id="arena-creature-picker-help" className="sr-only">Choose a living creature to inspect its current behavior. Choose No creature selected to clear inspection.</span><span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{formatArenaSelectionStatus(selectedIndividualId)}</span></>

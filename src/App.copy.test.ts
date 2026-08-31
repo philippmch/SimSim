@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { formatNextActionCopy, GenerationAccountingFallback, resolveTerminalOutcome, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
+import { formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, PlaybackPhaseStatus, resolveTerminalOutcome, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
 import { formatPerceptionTelemetry } from './components/CreatureInspector'
+import { createWorld, defaultConfig } from './simulation/engine'
 import type { LastInspectedOutcome, PerceptionDiagnostics } from './simulation/types'
 
 const ready = (overrides: Partial<NextActionCopyInput> = {}): NextActionCopyInput => ({
@@ -11,6 +12,7 @@ const ready = (overrides: Partial<NextActionCopyInput> = {}): NextActionCopyInpu
   pending: false,
   selectedIndividualId: null,
   selectedIsActive: false,
+  livingCreatures: 1,
   ...overrides,
 })
 
@@ -55,14 +57,65 @@ describe('next action control copy', () => {
     })
     expect(formatNextActionCopy(ready({ hasActiveCreatures: false }))).toEqual({
       buttonLabel: 'No active creatures',
-      ariaLabel: 'Next action unavailable: no active living creatures',
-      title: 'No active living creatures can take a next action.',
+      ariaLabel: 'Next action unavailable during awaiting settlement; use Finish generation to settle this cohort',
+      title: 'No active creature actions remain; use Finish generation to settle this cohort.',
     })
     expect(formatNextActionCopy(ready({ extinct: true }))).toEqual({
       buttonLabel: 'Population extinct',
       ariaLabel: 'Next action unavailable: population extinct',
       title: 'Population extinct; no next action is available.',
     })
+  })
+
+  it('distinguishes awaiting-home and awaiting-dead guidance for a disabled next action', () => {
+    const home = formatNextActionCopy(ready({ hasActiveCreatures: false, livingCreatures: 2 }))
+    expect(home.ariaLabel).toContain('use Finish generation to settle this cohort')
+    expect(home.title).toContain('No active creature actions remain')
+
+    const dead = formatNextActionCopy(ready({ hasActiveCreatures: false, livingCreatures: 0 }))
+    expect(dead.title).toContain('All creatures in this generation are dead')
+    expect(dead.title).toContain('Finish generation to record it')
+  })
+
+  it('keeps playback controls and the phase announcement truthful at settlement', () => {
+    expect(formatPlaybackControlLabel('Running', true)).toBe('Pause simulation')
+    expect(formatPlaybackControlLabel('Paused', false)).toBe('Play simulation')
+    expect(formatPlaybackControlLabel('Awaiting settlement', true)).toBe('Pause playback before settlement')
+    expect(formatPlaybackControlLabel('Awaiting settlement', false)).toBe('Resume playback toward settlement')
+    expect(formatPlaybackControlLabel('Extinct', true)).toBe('Playback unavailable: population extinct')
+    const detail = 'Awaiting settlement. Finish generation to settle this cohort.'
+    expect(formatPlaybackPhaseAnnouncement('Awaiting settlement', detail, true)).toContain('Playback continues toward automatic settlement')
+    expect(formatPlaybackPhaseAnnouncement('Awaiting settlement', detail, false)).toContain('Playback is paused before settlement')
+    expect(formatPlaybackPhaseAnnouncement('Extinct', 'Extinct. The last settlement produced no creatures.', false)).toBe('')
+  })
+
+  it('renders one stable atomic phase region with distinct awaiting pause and resume text', () => {
+    const detail = 'Awaiting settlement. Finish generation to settle this cohort.'
+    const paused = renderToStaticMarkup(createElement(PlaybackPhaseStatus, { status: 'Awaiting settlement', detail, playing: false }))
+    const running = renderToStaticMarkup(createElement(PlaybackPhaseStatus, { status: 'Awaiting settlement', detail, playing: true }))
+    const suppressed = renderToStaticMarkup(createElement(PlaybackPhaseStatus, { status: 'Awaiting settlement', detail, playing: false, suppressed: true }))
+    expect(paused).toContain('id="playback-phase-status"')
+    expect(paused).toContain('role="status"')
+    expect(paused).toContain('aria-live="polite"')
+    expect(paused).toContain('aria-atomic="true"')
+    expect(paused).toContain('Playback is paused before settlement')
+    expect(running).toContain('Playback continues toward automatic settlement')
+    expect(suppressed).not.toContain('Awaiting settlement')
+  })
+
+  it('describes a stopped manual step as awaiting settlement until the cohort is recorded', () => {
+    const home = createWorld({ ...defaultConfig, initialPopulation: 2 })
+    for (const individual of home.creatures) individual.home = true
+    expect(formatStepCompletion(home, { stepResult: { ticks: 0, stop: 'no-active' } })).toContain('Awaiting settlement')
+    expect(formatStepCompletion(home, { stepResult: { ticks: 0, stop: 'no-active' } })).toContain('all living creatures are home')
+
+    const dead = createWorld({ ...defaultConfig, initialPopulation: 2 })
+    for (const individual of dead.creatures) individual.alive = false
+    expect(formatStepCompletion(dead, { stepResult: { ticks: 0, stop: 'no-active' } })).toContain('All creatures in this generation are dead')
+    expect(formatStepCompletion(dead, { stepResult: { ticks: 0, stop: 'no-active' } })).not.toContain('Extinct')
+
+    dead.creatures = []
+    expect(formatStepCompletion(dead, { stepResult: { ticks: 0, stop: 'no-active' } })).toContain('Extinct')
   })
 
   it('does not claim an inactive inspected individual is the step subject', () => {
