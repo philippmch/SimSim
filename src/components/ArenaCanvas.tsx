@@ -251,7 +251,13 @@ export function formatArenaAccessibleDescription(input: ArenaAccessibleDescripti
   const selectionHint = input.hasSelectedCreature
     ? ''
     : 'Select a creature to reveal its focus, sight, target, memory, and same-lineage overlays.'
-  return `Simulation arena, generation ${input.generation}, ${input.livingCreatures} living creatures: ${input.stateSummary}. ${resourceLabel}. ${input.obstacleCount} obstacles. ${overlayDescription ? `${overlayDescription} ` : ''}${focusDescription}${allFocusPathDescription} ${selectionHint} Creature body color shows speed and the bright body outline shows its current action. Click a creature or use the inspector list to select it.`
+  return `Simulation arena, generation ${input.generation}, ${input.livingCreatures} living creatures: ${input.stateSummary}. ${resourceLabel}. ${input.obstacleCount} obstacles. ${overlayDescription ? `${overlayDescription} ` : ''}${focusDescription}${allFocusPathDescription} ${selectionHint} Creature body color shows speed and the bright body outline shows its current action. Click a creature or use the Inspect creature selector to select it.`
+}
+
+export function formatArenaSelectionStatus(selectedIndividualId: number | null): string {
+  return selectedIndividualId === null
+    ? 'Creature inspection cleared. No creature selected.'
+    : `Individual ${selectedIndividualId} selected for inspection.`
 }
 
 export const CREATURE_STATE_METADATA = {
@@ -510,7 +516,7 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect,arenaF
   const accessibleDescription=formatArenaAccessibleDescription({generation:world.generation,livingCreatures:livingCreatures.length,stateSummary,foodCount:world.food.length,patchCount:world.environment.patches.length,foodBudget:world.environment.foodBudget,obstacleCount:world.environment.obstacles.length,ecologyMode:world.config.ecologyMode,hasSelectedCreature:Boolean(selected),selectedIsHunting:selected?.mode==='hunting',focus:arenaFocus,focusCount:arenaFocus==='all'?livingCreatures.length:stateCounts[arenaFocus],selectedOutsideFocus:arenaFocus!=='all'&&selectedState!==null&&selectedState!==arenaFocus})
   return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={accessibleDescription}>
     Natural selection simulation arena. Live counts are available in the statistics region.
-  </canvas><label className="creature-picker">Inspect <select value={selectedIndividualId??''} onChange={e=>onSelect(e.target.value?Number(e.target.value):null)} style={{background:'var(--paper)',color:'var(--ink)',colorScheme:'light dark'}}><option value="">No creature selected</option>{livingCreatures.sort((a,b)=>a.individualId-b.individualId).map(c=><option key={c.individualId} value={c.individualId}>Individual {c.individualId}, lineage {c.lineageId}, {CREATURE_STATE_METADATA[c.home?'safe':c.mode].label}</option>)}</select></label></>
+  </canvas><label className="creature-picker" htmlFor="arena-creature-picker">Inspect creature <select id="arena-creature-picker" aria-describedby="arena-creature-picker-help" value={selectedIndividualId??''} onChange={e=>onSelect(e.target.value?Number(e.target.value):null)} style={{background:'var(--paper)',color:'var(--ink)',colorScheme:'light dark'}}><option value="">No creature selected</option>{livingCreatures.sort((a,b)=>a.individualId-b.individualId).map(c=><option key={c.individualId} value={c.individualId}>Individual {c.individualId}, lineage {c.lineageId}, {CREATURE_STATE_METADATA[c.home?'safe':c.mode].label}</option>)}</select></label><span id="arena-creature-picker-help" className="sr-only">Choose a living creature to inspect its current behavior. Choose No creature selected to clear inspection.</span><span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{formatArenaSelectionStatus(selectedIndividualId)}</span></>
 }
 
 export { speedColor }

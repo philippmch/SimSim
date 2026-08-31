@@ -25,6 +25,7 @@ import {
   formatArenaFocusDescription,
   formatArenaFocusOption,
   formatArenaOverlayDescription,
+  formatArenaSelectionStatus,
   formatObservedPath,
   formatSelectedTarget,
   showArenaQuickStart,
@@ -229,7 +230,13 @@ describe('arena clarity helpers', () => {
     const description = formatArenaAccessibleDescription(descriptionInput())
     expect(description).toContain(ARENA_PATCH_STOCK_KEY)
     expect(description).toContain('Select a creature to reveal its focus, sight, target, memory, and same-lineage overlays.')
+    expect(description).toContain('use the Inspect creature selector')
     expect(description).not.toContain(ARENA_SELECTED_OVERLAY_KEY)
+  })
+
+  it('announces creature inspection selection and clearing without live state details', () => {
+    expect(formatArenaSelectionStatus(7)).toBe('Individual 7 selected for inspection.')
+    expect(formatArenaSelectionStatus(null)).toBe('Creature inspection cleared. No creature selected.')
   })
 
   it('describes selected overlays while keeping classic mode free of patch-ring claims', () => {
