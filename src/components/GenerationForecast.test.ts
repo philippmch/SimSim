@@ -42,7 +42,7 @@ describe('generation forecast', () => {
     expect(formatGenerationForecastBirths(summary)).toBe('118 eligible parents · 2 admitted newborns · 116 births blocked by the population cap')
   })
 
-  it('formats the equation, nonzero losses, and provisional wording', () => {
+  it('formats the equation, nonzero losses, and counterfactual wording', () => {
     const world = createWorld({ ...defaultConfig, ...CLASSIC_MODES, initialPopulation: 2, foodPerDay: 0 })
     Object.assign(world.creatures[0], { alive: true, home: true, food: 2 })
     Object.assign(world.creatures[1], { alive: false, deathCause: 'hunted' })
@@ -50,8 +50,8 @@ describe('generation forecast', () => {
 
     expect(formatGenerationForecastEquation(summary)).toBe('2 creatures evaluated → 1 survived + 1 newborn = 2 in the next population')
     expect(formatGenerationForecastLosses(summary)).toBe('Hunted: 1')
-    expect(formatGenerationForecastAriaLabel(summary)).toContain('If generation ended now (provisional)')
-    expect(formatGenerationForecastAriaLabel(summary)).toContain('This forecast changes as creatures act.')
+    expect(formatGenerationForecastAriaLabel(summary)).toContain('counterfactual, not a prediction')
+    expect(formatGenerationForecastAriaLabel(summary)).toContain('This snapshot changes as creatures act.')
   })
 
   it('keeps singular, plural, zero, and journal loss labels readable', () => {

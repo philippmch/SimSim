@@ -62,7 +62,7 @@ export function formatGenerationForecastBirths(summary: GenerationForecastSummar
 }
 
 export function formatGenerationForecastAriaLabel(summary: GenerationForecastSummary): string {
-  return `If generation ended now (provisional): ${formatGenerationForecastEquation(summary)}. Loss causes: ${formatGenerationForecastLosses(summary)}. ${formatGenerationForecastBirths(summary)}. This forecast changes as creatures act.`
+  return `If the generation ended at this exact moment (counterfactual, not a prediction): ${formatGenerationForecastEquation(summary)}. Loss causes: ${formatGenerationForecastLosses(summary)}. ${formatGenerationForecastBirths(summary)}. This snapshot changes as creatures act.`
 }
 
 export function GenerationForecast({ world }: { world: World }) {
@@ -75,6 +75,6 @@ export function GenerationForecast({ world }: { world: World }) {
     {losses.length ? losses.map(cause => <span key={cause}>{FORECAST_LOSS_LABELS[cause]} <b>{summary.losses[cause]}</b></span>) : <span>No current losses</span>}
     <span><b>{summary.eligibleParents}</b> eligible {summary.eligibleParents === 1 ? 'parent' : 'parents'}</span>
     <span><b>{summary.cappedBirths}</b> {summary.cappedBirths === 1 ? 'birth' : 'births'} blocked by cap</span>
-    <span>Provisional · changes as creatures act</span>
+    <span>Counterfactual snapshot · not a prediction</span>
   </div>
 }
