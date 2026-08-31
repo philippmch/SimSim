@@ -28,6 +28,55 @@ function formatStepCompletion(world:World,meta:SimulationSnapshotMeta){
   return'Next action beat reached.'
 }
 
+export interface NextActionCopyInput {
+  extinct: boolean
+  hasActiveCreatures: boolean
+  pending: boolean
+  selectedIndividualId: number | null
+  selectedIsActive: boolean
+}
+
+export interface NextActionCopy {
+  buttonLabel: string
+  ariaLabel: string
+  title: string
+}
+
+export function formatNextActionCopy(input: NextActionCopyInput): NextActionCopy {
+  const subject = input.selectedIsActive && input.selectedIndividualId !== null && Number.isFinite(input.selectedIndividualId)
+    ? `Individual ${input.selectedIndividualId}`
+    : null
+  if (input.extinct) return {
+    buttonLabel: 'Population extinct',
+    ariaLabel: 'Next action unavailable: population extinct',
+    title: 'Population extinct; no next action is available.',
+  }
+  if (!input.hasActiveCreatures) return {
+    buttonLabel: 'No active creatures',
+    ariaLabel: 'Next action unavailable: no active living creatures',
+    title: 'No active living creatures can take a next action.',
+  }
+  if (input.pending) return subject ? {
+    buttonLabel: `Advancing to ${subject}'s next decision`,
+    ariaLabel: `Advancing the simulation until ${subject} reaches its next action beat; other creatures may also move and react`,
+    title: `Advancing the simulation until ${subject} reaches its next action beat.`,
+  } : {
+    buttonLabel: 'Next action pending',
+    ariaLabel: 'Next action pending',
+    title: 'Waiting for the current action beat to finish.',
+  }
+  if (subject) return {
+    buttonLabel: `Advance until ${subject}'s next decision`,
+    ariaLabel: `Pause and advance the simulation until ${subject} reaches its next action beat; other creatures may also move and react`,
+    title: `Advance the simulation until ${subject} reaches its next decision beat; other creatures may also move and react.`,
+  }
+  return {
+    buttonLabel: 'Advance action beat',
+    ariaLabel: 'Pause and advance the simulation to the next action beat',
+    title: 'Advance the simulation to the next decision beat.',
+  }
+}
+
 function NumberControl({label,value,min,max,step,onChange,unit}:{label:string,value:number,min:number,max:number,step:number,onChange:(n:number)=>void,unit?:string}){
   const id=label.toLowerCase().replace(/\W/g,'-')
   return <div className="control">
@@ -71,8 +120,6 @@ function App(){
   const extinct=world.creatures.length===0
   const hasActiveCreatures=world.creatures.some(c=>c.alive&&!c.home)
   const nextActionUnavailable=!hasActiveCreatures
-  const nextActionLabel=extinct?'Next action unavailable: population extinct':nextActionUnavailable?'Next action unavailable: no active living creatures':stepPending?'Next action pending':'Pause and advance to the next action beat'
-  const nextActionTitle=extinct?'Population extinct; no next action is available.':nextActionUnavailable?'No active living creatures can take a next action.':stepPending?'Waiting for the current action beat to finish.':'Advance to the next decision beat.'
   const playingRef=useRef(playing);playingRef.current=playing
   const extinctRef=useRef(extinct);extinctRef.current=extinct
   const resumeOnVisibleRef=useRef(false)
@@ -85,6 +132,7 @@ function App(){
   const selected=world.creatures.find(c=>c.individualId===selectedIndividualId&&c.alive)
   const selectedArenaState=selected?(selected.home?'safe':selected.mode):null
   const selectedOutsideArenaFocus=arenaFocus!=='all'&&selectedArenaState!==null&&selectedArenaState!==arenaFocus
+  const nextActionCopy=formatNextActionCopy({extinct,hasActiveCreatures,pending:stepPending,selectedIndividualId,selectedIsActive:Boolean(selected&&!selected.home)})
   const arenaStatus=arenaPlaybackStatus(playing,extinct)
   const arenaDayLabel=formatArenaDayProgress(world.dayTime,world.config.dayLength,arenaStatus)
   const dayProgress=Math.max(0,Math.min(100,Math.round(world.dayTime/world.config.dayLength*100)))
@@ -162,7 +210,7 @@ function App(){
         </section>}
         <div className="transport" role="group" aria-label="Playback controls">
           <button className="play" disabled={extinct} onClick={()=>setPlaying(v=>!v)} aria-label={extinct?'Playback unavailable: population extinct':playing?'Pause simulation':'Play simulation'}>{playing?'Ⅱ':'▶'}</button>
-          <button onClick={nextAction} disabled={nextActionUnavailable||stepPending} aria-label={nextActionLabel} title={nextActionTitle}>Next action</button>
+          <button onClick={nextAction} disabled={nextActionUnavailable||stepPending} aria-label={nextActionCopy.ariaLabel} title={nextActionCopy.title}>{nextActionCopy.buttonLabel}</button>
           <button onClick={finishGeneration} disabled={extinct} aria-label="Pause and finish the current generation">Finish generation</button>
           <div className="day-progress" role="progressbar" aria-label="Current generation progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={dayProgress} aria-valuetext={arenaDayLabel}><i style={{width:`${dayProgress}%`}}/></div>
           <label className="speed-select">Playback speed <select value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value={.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option><option value={4}>4×</option></select></label>
