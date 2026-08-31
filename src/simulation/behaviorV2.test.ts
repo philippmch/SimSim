@@ -142,6 +142,50 @@ describe('motion',()=>{
 })
 
 describe('utility, memory, and commitment',()=>{
+  it('captures the highest-utility target and its provenance when no override applies',()=>{
+    const w=world(1),c=w.creatures[0]
+    Object.assign(c,{x:.5,y:.5,sense:.3,food:0})
+    const decision=decide(c,[c],[food(90,.55,.5)],w.config,0,1,true,{generation:4,dayTime:.75,reactionWindow:2})
+    expect(decision.targetType).toBe('food')
+    expect(decision.summary).toMatchObject({chosen:'food',chosenTargetId:90,selectionBasis:'best-utility',decidedAt:{generation:4,dayTime:.75,reactionWindow:2}})
+  })
+
+  it('records commitment only when the held target differs from the utility winner',()=>{
+    const w=world(1),c=w.creatures[0]
+    Object.assign(c,{x:.5,y:.5,sense:.3,targetType:'food',targetId:91,commitUntil:5})
+    const decision=decide(c,[c],[food(90,.59,.5),food(91,.6,.5)],w.config,1,2,true,{generation:1,dayTime:1,reactionWindow:1})
+    expect(decision.targetId).toBe(91)
+    expect(decision.summary?.selectionBasis).toBe('commitment')
+    expect(decision.summary?.chosenTargetId).toBe(91)
+  })
+
+  it('keeps best-utility when an active commitment already matches the utility winner',()=>{
+    const w=world(1),c=w.creatures[0]
+    Object.assign(c,{x:.5,y:.5,sense:.3,targetType:'food',targetId:90,commitUntil:5})
+    const decision=decide(c,[c],[food(90,.55,.5)],w.config,1,2,true)
+    expect(decision.targetId).toBe(90)
+    expect(decision.summary?.selectionBasis).toBe('best-utility')
+  })
+
+  it('records an urgent safety override when danger is not the top utility candidate',()=>{
+    const w=world(2),[actor,threat]=w.creatures
+    Object.assign(actor,{x:.5,y:.5,size:1,sense:.3,caution:0,aggression:0,food:0})
+    Object.assign(threat,{x:.524,y:.5,size:2,home:false,alive:true})
+    const decision=decide(actor,w.creatures,[food(90,.51,.5)],w.config,0,1,true,{generation:2,dayTime:0,reactionWindow:0})
+    expect(decision.summary?.candidates[0]?.type).toBe('food')
+    expect(decision.targetType).toBe('threat')
+    expect(decision.summary?.selectionBasis).toBe('urgent-override')
+  })
+
+  it('keeps best-utility when an urgent candidate already wins on utility',()=>{
+    const w=world(1),c=w.creatures[0]
+    Object.assign(c,{x:.5,y:.5,food:2,returning:false})
+    const decision=decide(c,[c],[],w.config,0,1,true)
+    expect(decision.targetType).toBe('home')
+    expect(decision.summary?.candidates[0]?.type).toBe('home')
+    expect(decision.summary?.selectionBasis).toBe('best-utility')
+  })
+
   it('aggression favors prey while caution lets danger override it',()=>{
     const w=world(3),[actor,prey,threat]=w.creatures
     Object.assign(actor,{x:.5,y:.5,size:1.5,sense:.25,aggression:1,caution:0})

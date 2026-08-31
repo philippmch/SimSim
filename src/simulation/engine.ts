@@ -182,7 +182,7 @@ export function tick(world:World,dt:number,boundaryConfig?:Config){
     reactionWindows.set(c.id,reactionWindow)
     if(!schedule.perceive){decisions.set(c.id,held);continue}
     const seen=perceiveCanonical(c,snapshots,canonicalFood,world.environment.obstacles,world.config,world.generation,world.tickIndex,world.dayTime)
-    decisions.set(c.id,schedule.decide?decide(c,seen.creatures,seen.food,world.config,world.dayTime,world.tickIndex,inspected):held)
+    decisions.set(c.id,schedule.decide?decide(c,seen.creatures,seen.food,world.config,world.dayTime,world.tickIndex,inspected,inspected?{generation:world.generation,dayTime:world.dayTime,reactionWindow}:undefined):held)
     if(inspected)diagnostics.set(c.id,seen.diagnostics)
   }
   const motions=new Map(snapshots.map(c=>[c.id,proposeMotion(c,decisions.get(c.id)!,world.config,world.environment.obstacles,dt)]))

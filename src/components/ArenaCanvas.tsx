@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import type React from 'react'
 import type { NextActionContext, NextActionResult } from '../simulation/scheduler'
 import { MAX_POPULATION } from '../simulation/config'
-import type { Mode, TargetType, World } from '../simulation/types'
+import type { DecisionSummary, Mode, TargetType, World } from '../simulation/types'
 
 interface Props { world: World; revision: number;selectedIndividualId:number|null;onSelect:(individualId:number|null)=>void;arenaFocus:ArenaFocus }
 
@@ -126,6 +126,21 @@ function observedDecisionLabel(target: TargetType): string {
   return target === 'food' ? 'food' : target === 'prey' ? 'prey' : target === 'threat' ? 'danger' : target === 'home' ? 'home' : target === 'memory' ? 'remembered food' : 'exploration'
 }
 
+export function formatObservedDecisionMetadata(decision:Pick<DecisionSummary,'selectionBasis'|'decidedAt'>):string{
+  const basis=decision.selectionBasis==='best-utility'
+    ? 'basis: highest relative utility'
+    : decision.selectionBasis==='commitment'
+      ? 'basis: target commitment'
+      : decision.selectionBasis==='urgent-override'
+        ? 'basis: urgent safety override'
+        : ''
+  const provenance=decision.decidedAt
+  const captured=provenance&&Number.isInteger(provenance.generation)&&provenance.generation>=1&&Number.isFinite(provenance.dayTime)&&provenance.dayTime>=0&&Number.isInteger(provenance.reactionWindow)&&provenance.reactionWindow>=0
+    ? `captured Generation ${provenance.generation} · day ${provenance.dayTime.toFixed(2)} · reaction window ${provenance.reactionWindow}`
+    : ''
+  return [basis,captured].filter(Boolean).join(' · ')
+}
+
 function observedActionLabel(creature: World['creatures'][number]): string {
   return CREATURE_STATE_METADATA[creature.home ? 'safe' : creature.mode].label
 }
@@ -148,7 +163,7 @@ function formatObservedCreaturePath(world: World, context: NextActionContext): s
     ? `perception recorded ${observedCount(perception.creatures.detected)}/${observedCount(perception.creatures.total)} creatures and ${observedCount(perception.food.detected)}/${observedCount(perception.food.total)} food`
     : 'perception telemetry is unavailable'
   const decisionText = decision
-    ? `decision recorded as ${observedDecisionLabel(decision.chosen)} (reason noted: ${decision.reason.trim() || 'not provided'})`
+    ? `decision recorded as ${observedDecisionLabel(decision.chosen)} (reason noted: ${typeof decision.reason==='string'&&decision.reason.trim()?decision.reason:'not provided'})${formatObservedDecisionMetadata(decision)?` · ${formatObservedDecisionMetadata(decision)}`:''}`
     : 'decision telemetry is unavailable'
   const target = formatSelectedTarget(inspected, world.creatures, world.food)
   const arrival = inspected.home ? ' It reached home during this step.' : ''

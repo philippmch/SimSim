@@ -1,11 +1,12 @@
-import type { Config,Creature,DecisionSummary,Food,Memory,Mode,TargetType } from './types'
+import type { Config,Creature,DecisionProvenance,DecisionSelectionBasis,DecisionSummary,Food,Memory,Mode,TargetType } from './types'
 import { clamp,distance,keyedNoise } from './random'
 import {contestSuccessProbability,isEligiblePrey} from './predation'
 
 export interface Decision {id:number;targetX:number;targetY:number;targetId:number|null;targetType:TargetType;mode:Mode;memory:Memory;commitUntil:number;wanderAngle:number;wanderTurn:number;summary?:DecisionSummary}
+export type DecisionCaptureContext=DecisionProvenance
 type Candidate={type:TargetType;mode:Mode;x:number;y:number;id:number|null;score:number;urgent?:boolean}
 
-export function decide(c:Creature,active:readonly Creature[],food:readonly Food[],cfg:Config,time:number,tick:number,capture=false):Decision{
+export function decide(c:Creature,active:readonly Creature[],food:readonly Food[],cfg:Config,time:number,tick:number,capture=false,captureContext?:DecisionCaptureContext):Decision{
   let nearestFood:Food|undefined,foodD=Infinity,nearestPrey:Creature|undefined,preyD=Infinity,nearestThreat:Creature|undefined,threatD=Infinity
   const advanced=cfg.ecologyMode==='energy-regrowth'
   const huntScore=(prey:Creature,d:number)=>{if(cfg.predationMode!=='contest')return(1+7*c.aggression)/(d+.08)-4*c.caution*(prey.size/c.size);const expected=contestSuccessProbability(c,prey,cfg)*cfg.preyEnergy-cfg.attackCost;return expected<=0?-Infinity:expected*(.4+1.6*c.aggression)/(d+.08)-4*c.caution*(prey.size/c.size)}
@@ -49,14 +50,25 @@ export function decide(c:Creature,active:readonly Creature[],food:readonly Food[
   const wanderAngle=c.wanderAngle+wanderTurn*(.45+c.exploration)*.025
   candidates.push({type:'explore',mode:'exploring',id:null,x:clamp(c.x+Math.cos(wanderAngle)*.32,.03,.97),y:clamp(c.y+Math.sin(wanderAngle)*.32,.03,.97),score:.6+2.5*c.exploration+keyedNoise(cfg.seed,c.id,tick,2)*.15})
   candidates.sort((a,b)=>b.score-a.score||a.type.localeCompare(b.type))
-  let choice=candidates[0]
+  const best=candidates[0]
+  let choice=best
+  let selectionBasis:DecisionSelectionBasis='best-utility'
+  const sameCandidate=(a:Candidate,b:Candidate)=>a.type===b.type&&a.id===b.id
   const urgent=candidates.find(v=>v.urgent)
-  if(urgent)choice=urgent
+  if(urgent){choice=urgent;if(!sameCandidate(choice,best))selectionBasis='urgent-override'}
   else if(time<c.commitUntil&&c.targetType){
     const committed=candidates.find(v=>v.type===c.targetType&&(c.targetId===null||v.id===c.targetId))
-    if(committed&&choice.score<committed.score*1.3)choice=committed
+    if(committed&&choice.score<committed.score*1.3){choice=committed;if(!sameCandidate(choice,best))selectionBasis='commitment'}
   }
   const switched=choice.type!==c.targetType||choice.id!==c.targetId
   const reason=(candidate:Candidate)=>candidate.type==='threat'?'Detected danger weighted by caution':candidate.type==='home'?'Food, time, and energy favor returning':candidate.type==='food'?'Nearby food utility':candidate.type==='prey'?'Hunting utility weighted by aggression':candidate.type==='memory'?'Recently remembered food location':'Persistent exploration and novelty'
-  return{id:c.id,targetX:choice.x,targetY:choice.y,targetId:choice.id,targetType:choice.type,mode:choice.mode,memory,commitUntil:switched?time+cfg.commitmentDuration:c.commitUntil,wanderAngle,wanderTurn,summary:capture?{chosen:choice.type,reason:reason(choice),candidates:candidates.map(v=>({type:v.type,mode:v.mode,score:v.score,reason:reason(v),targetId:v.id}))}:undefined}
+  const summary=capture?{
+    chosen:choice.type,
+    chosenTargetId:choice.id,
+    selectionBasis,
+    ...(captureContext?{decidedAt:{generation:captureContext.generation,dayTime:captureContext.dayTime,reactionWindow:captureContext.reactionWindow}}:{}),
+    reason:reason(choice),
+    candidates:candidates.map(v=>({type:v.type,mode:v.mode,score:v.score,reason:reason(v),targetId:v.id})),
+  }:undefined
+  return{id:c.id,targetX:choice.x,targetY:choice.y,targetId:choice.id,targetType:choice.type,mode:choice.mode,memory,commitUntil:switched?time+cfg.commitmentDuration:c.commitUntil,wanderAngle,wanderTurn,summary}
 }

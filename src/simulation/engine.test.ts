@@ -93,7 +93,7 @@ describe('selection simulation', () => {
   })
 
   it('captures a newly inspected decision and refreshes its held-window diagnostics',()=>{
-    const w=createWorld({...defaultConfig,initialPopulation:2,foodPerDay:0,perceptionMode:'realistic',reactionTime:1,fieldOfView:360,detectionFalloff:0,obstacleCount:0})
+    const w=createWorld({...defaultConfig,initialPopulation:2,foodPerDay:0,ecologyMode:'classic',perceptionMode:'realistic',reactionTime:1,fieldOfView:360,detectionFalloff:0,obstacleCount:0})
     const [selected]=w.creatures
     Object.assign(selected,{x:.5,y:.5,homeX:.05,homeY:.05,angle:0,sense:.4})
     w.food=[{id:900,x:.7,y:.5,patchId:null,energy:22}]
@@ -104,6 +104,9 @@ describe('selection simulation', () => {
     tick(w,SIMULATION_TIMESTEP)
     const summary=selected.decisionSummary,firstDiagnostics=selected.perceptionDiagnostics
     expect(summary).toBeDefined()
+    expect(summary).toMatchObject({selectionBasis:'best-utility',decidedAt:{generation:1,dayTime:SIMULATION_TIMESTEP,reactionWindow:0}})
+    expect(summary).toHaveProperty('chosenTargetId')
+    expect(summary?.chosen).not.toBe('home')
     expect(firstDiagnostics).toMatchObject({mode:'realistic',reactionWindow:0,food:{total:1,detected:1}})
     w.food=[]
     tick(w,SIMULATION_TIMESTEP)
@@ -111,6 +114,13 @@ describe('selection simulation', () => {
     expect(selected.decisionSummary).toBe(summary)
     expect(selected.perceptionDiagnostics).toMatchObject({mode:'realistic',reactionWindow:0,food:{total:0,detected:0}})
     expect(selected.perceptionDiagnostics).not.toBe(firstDiagnostics)
+    selected.food=2
+    w.dayTime=1
+    tick(w,SIMULATION_TIMESTEP)
+    expect(selected.reactionWindow).toBe(1)
+    expect(selected.decisionSummary).not.toBe(summary)
+    expect(selected.decisionSummary?.decidedAt).toEqual({generation:1,dayTime:1,reactionWindow:1})
+    expect(selected.decisionSummary?.chosen).toBe('home')
   })
 
   it('holds an uninspected decision until the reaction window changes',()=>{

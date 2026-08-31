@@ -37,7 +37,21 @@ export interface Creature {
   perceptionDiagnostics?:PerceptionDiagnostics
 }
 export interface DecisionCandidateSummary{type:TargetType;mode:Mode;score:number;reason:string;targetId:number|null}
-export interface DecisionSummary{chosen:TargetType;reason:string;candidates:DecisionCandidateSummary[]}
+export type DecisionSelectionBasis='best-utility'|'commitment'|'urgent-override'
+export interface DecisionProvenance{generation:number;dayTime:number;reactionWindow:number}
+/**
+ * A decision summary is only retained for an inspected creature.  The
+ * optional provenance fields keep saved/hand-authored legacy snapshots
+ * renderable while new engine decisions remain auditable.
+ */
+export interface DecisionSummary{
+  chosen:TargetType
+  reason:string
+  candidates:DecisionCandidateSummary[]
+  chosenTargetId?:number|null
+  selectionBasis?:DecisionSelectionBasis
+  decidedAt?:DecisionProvenance
+}
 export interface PerceptionCounts{total:number;detected:number;range:number;fov:number;occlusion:number;detection:number}
 export interface PerceptionDiagnostics{mode:PerceptionMode;reactionWindow:number;creatures:PerceptionCounts;food:PerceptionCounts}
 export interface Food {id:number;x:number;y:number;patchId:number|null;energy:number}

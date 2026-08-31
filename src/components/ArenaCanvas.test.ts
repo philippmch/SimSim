@@ -27,6 +27,7 @@ import {
   formatArenaOverlayDescription,
   formatArenaSelectionStatus,
   formatObservedPath,
+  formatObservedDecisionMetadata,
   formatSelectedTarget,
   showArenaQuickStart,
   type ArenaAccessibleDescriptionInput,
@@ -287,6 +288,23 @@ describe('arena clarity helpers', () => {
     expect(path).toContain('current action: Finding food · target: Food item.')
     expect(path).not.toContain(String(internalCreatureId))
     if (internalFoodId !== undefined) expect(path).not.toContain(String(internalFoodId))
+  })
+
+  it('adds captured decision basis and provenance while retaining legacy copy', () => {
+    const world = observedWorld()
+    const creature = world.creatures[0]
+    creature.decisionSummary = {
+      ...creature.decisionSummary!,
+      chosenTargetId: creature.targetId,
+      selectionBasis: 'urgent-override',
+      decidedAt: { generation: 1, dayTime: .025, reactionWindow: 0 },
+    }
+    const path = formatObservedPath(world, { ticks: 1, stop: 'beat' }, observedContext(world))
+    expect(path).toContain('basis: urgent safety override')
+    expect(path).toContain('captured Generation 1 · day 0.03 · reaction window 0')
+    const legacy = observedWorld()
+    expect(formatObservedPath(legacy, { ticks: 1, stop: 'beat' }, observedContext(legacy))).not.toContain('basis:')
+    expect(formatObservedDecisionMetadata({ selectionBasis: 'unknown' as never, decidedAt: undefined })).toBe('')
   })
 
   it('prompts inspection without inventing telemetry when nothing is selected', () => {
