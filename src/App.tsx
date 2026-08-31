@@ -8,12 +8,13 @@ import { defaultConfig,MAX_FOOD,MAX_POPULATION, sanitizeConfig } from './simulat
 import { createController } from './simulation/controller'
 import type { SimulationController,SimulationSnapshotMeta } from './simulation/controller'
 import { experimentUrl,exportExperiment,importExperiment,loadInitialConfig,MAX_EXPERIMENT_TEXT,persistExperiment } from './simulation/share'
-import type { BiologicalTrait,Config,InterventionKind, World } from './simulation/types'
+import type { BiologicalTrait,Config,InterventionKind,LastInspectedOutcome, World } from './simulation/types'
 
 const ExperimentPanel=lazy(()=>import('./components/ExperimentPanel').then(module=>({default:module.ExperimentPanel})))
 const GenerationJournal=lazy(()=>import('./components/GenerationJournal'))
 const InsightsPanel=lazy(()=>import('./components/InsightsPanel'))
 const LivePulse=lazy(()=>import('./components/LivePulse'))
+const TerminalOutcome=lazy(()=>import('./components/TerminalOutcome'))
 const creatureStates=Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]
 
 const copyConfig=(c:Config):Config=>({...c})
@@ -75,6 +76,29 @@ export function formatNextActionCopy(input: NextActionCopyInput): NextActionCopy
     ariaLabel: 'Pause and advance the simulation to the next action beat',
     title: 'Advance the simulation to the next decision beat.',
   }
+}
+
+export type TerminalOutcomeCreature=Pick<World['creatures'][number],'individualId'|'alive'|'deathCause'>
+
+export interface TerminalOutcomeResolverInput{
+  selectedIndividualId:number|null
+  creatures:ReadonlyArray<TerminalOutcomeCreature>
+  recordedOutcome:LastInspectedOutcome|null|undefined
+  currentGeneration:number
+}
+
+const isTerminalOutcomeCause=(cause:unknown):cause is LastInspectedOutcome['cause']=>cause==='hunted'||cause==='energy'||cause==='unfed'||cause==='late'||cause==='aged'
+const isGeneration=(value:number)=>Number.isInteger(value)&&value>=1
+
+export function resolveTerminalOutcome(input:TerminalOutcomeResolverInput):LastInspectedOutcome|null{
+  const selectedIndividualId=input.selectedIndividualId
+  if(selectedIndividualId===null)return null
+  const selected=input.creatures.find(creature=>creature.individualId===selectedIndividualId)
+  if(selected?.alive)return null
+  const recorded=input.recordedOutcome
+  if(recorded&&recorded.individualId===selectedIndividualId&&isGeneration(recorded.generation)&&isGeneration(input.currentGeneration)&&recorded.generation<=input.currentGeneration&&isTerminalOutcomeCause(recorded.cause))return{...recorded}
+  if(selected&&!selected.alive&&isTerminalOutcomeCause(selected.deathCause)&&isGeneration(input.currentGeneration))return{individualId:selectedIndividualId,generation:input.currentGeneration,cause:selected.deathCause}
+  return null
 }
 
 function NumberControl({label,value,min,max,step,onChange,unit}:{label:string,value:number,min:number,max:number,step:number,onChange:(n:number)=>void,unit?:string}){
@@ -140,10 +164,11 @@ function App(){
   const closeSettings=useCallback(()=>setSettingsOpen(false),[])
   const closeExperiment=useCallback(()=>{setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
   const replayExperiment=useCallback((config:Config)=>{setDraft(sanitizeConfig(config));setActionStatus('Control seed staged. Choose Apply & restart to replay it live.');setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
-  const reset=useCallback(()=>{pendingStepRef.current=null;setStepPending(false);const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);setRequestedGeneration(null);setObservedPath('Inspect a creature, then choose Next action to observe its perception and decision path.');persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}const controller=controllerRef.current;if(controller){pendingPulseResetRef.current=true;controller.send({type:'reset',config:clean})}setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
+  const [terminalOutcome,setTerminalOutcome]=useState<LastInspectedOutcome|null>(null)
+  const reset=useCallback(()=>{pendingStepRef.current=null;setStepPending(false);const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);setTerminalOutcome(null);setRequestedGeneration(null);setObservedPath('Inspect a creature, then choose Next action to observe its perception and decision path.');persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}const controller=controllerRef.current;if(controller){pendingPulseResetRef.current=true;controller.send({type:'reset',config:clean})}setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
   const finishGeneration=()=>{const interrupted=pendingStepRef.current!==null;pendingStepRef.current=null;setStepPending(false);if(interrupted)setObservedPath('Manual step interrupted; choose Next action to retry.');setPlaying(false);controllerRef.current?.send({type:'finish'})}
   const nextAction=()=>{const controller=controllerRef.current;if(!controller||stepPending||pendingStepRef.current!==null)return;const stepId=++nextStepIdRef.current;pendingStepRef.current=stepId;setStepPending(true);setObservedPath('Next action pending…');setPlaying(false);setActionStatus('Playback paused.');controller.send({type:'step',stepId})}
-  const selectIndividual=(individualId:number|null)=>{setSelectedIndividualId(individualId);controllerRef.current?.send({type:'inspect',individualId})}
+  const selectIndividual=(individualId:number|null)=>{setTerminalOutcome(null);setSelectedIndividualId(individualId);controllerRef.current?.send({type:'inspect',individualId})}
   const intervene=(kind:InterventionKind)=>{controllerRef.current?.send({type:'intervene',kind});setActionStatus(kind==='resource-bloom'?'Resource bloom released.':kind==='drought'?'Drought applied.':'Founder migration released.')}
 
   const handleSnapshot=useCallback((nextWorld:World,meta?:SimulationSnapshotMeta)=>{setWorld(nextWorld);setRevision(n=>n+1);if(pendingPulseResetRef.current){pendingPulseResetRef.current=false;setLivePulseRun(n=>n+1)}if(pendingStepRef.current!==null&&meta?.stepResult&&meta.stepId===pendingStepRef.current){pendingStepRef.current=null;setStepPending(false);if(meta.stepContext)setObservedPath(formatObservedPath(nextWorld,meta.stepResult,meta.stepContext));else setObservedPath('Observed path unavailable; retry Next action.');setActionStatus(formatStepCompletion(nextWorld,meta))}},[])
@@ -181,7 +206,12 @@ function App(){
   useEffect(()=>{const visibility=()=>{if(document.hidden){resumeOnVisibleRef.current=playingRef.current;if(resumeOnVisibleRef.current)controllerRef.current?.send({type:'pause'})}else{const shouldResume=resumeOnVisibleRef.current&&playingRef.current&&!extinctRef.current;resumeOnVisibleRef.current=false;if(shouldResume)controllerRef.current?.send({type:'play'})}};document.addEventListener('visibilitychange',visibility);return()=>document.removeEventListener('visibilitychange',visibility)},[])
 
   useEffect(()=>{if(extinct)setPlaying(false)},[extinct])
-  useEffect(()=>{if(selectedIndividualId!==null&&!world.creatures.some(creature=>creature.alive&&creature.individualId===selectedIndividualId)){setSelectedIndividualId(null);if(world.inspectedIndividualId!==null)controllerRef.current?.send({type:'inspect',individualId:null})}},[world,selectedIndividualId])
+  useEffect(()=>{
+    if(selectedIndividualId===null||world.creatures.some(creature=>creature.alive&&creature.individualId===selectedIndividualId))return
+    setTerminalOutcome(resolveTerminalOutcome({selectedIndividualId,creatures:world.creatures,recordedOutcome:world.lastInspectedOutcome,currentGeneration:world.generation}))
+    setSelectedIndividualId(null)
+    if(world.inspectedIndividualId!==null)controllerRef.current?.send({type:'inspect',individualId:null})
+  },[world,selectedIndividualId])
 
   return <div className="app-shell">
     <header className="topbar" aria-hidden={experimentOpen||(settingsOpen&&isNarrow)||undefined}>
@@ -208,6 +238,7 @@ function App(){
           {selected.perceptionDiagnostics&&<div className="perception-summary" role="group" aria-label="Selected creature perception telemetry"><strong>Perception window {selected.perceptionDiagnostics.reactionWindow}</strong><span>Creatures {selected.perceptionDiagnostics.creatures.detected}/{selected.perceptionDiagnostics.creatures.total}</span><span>Food {selected.perceptionDiagnostics.food.detected}/{selected.perceptionDiagnostics.food.total}</span><span>Missed: {selected.perceptionDiagnostics.creatures.fov+selected.perceptionDiagnostics.food.fov} view · {selected.perceptionDiagnostics.creatures.occlusion+selected.perceptionDiagnostics.food.occlusion} blocked · {selected.perceptionDiagnostics.creatures.detection+selected.perceptionDiagnostics.food.detection} uncertain</span></div>}
           {selected.decisionSummary&&<div className="utility-breakdown"><strong>Decision: {selected.decisionSummary.chosen}</strong><span>{selected.decisionSummary.reason}</span><small style={{display:'block',marginTop:4,color:'var(--muted)'}}>Relative utility ranks only the current candidates; it is not probability or biological fitness.</small><table><caption className="sr-only">Current candidate relative utilities; higher ranks as preferred, not probability or biological fitness</caption><thead><tr><th>Candidate</th><th>Relative utility</th><th>Reason</th></tr></thead><tbody>{selected.decisionSummary.candidates.map((candidate,i)=><tr key={`${candidate.type}-${candidate.targetId}-${i}`}><td>{candidate.type}</td><td>{candidate.score.toFixed(2)}</td><td>{candidate.reason}</td></tr>)}</tbody></table></div>}
         </section>}
+        {terminalOutcome&&!selected&&<Suspense fallback={null}><TerminalOutcome outcome={terminalOutcome} onDismiss={()=>selectIndividual(null)}/></Suspense>}
         <div className="transport" role="group" aria-label="Playback controls">
           <button className="play" disabled={extinct} onClick={()=>setPlaying(v=>!v)} aria-label={extinct?'Playback unavailable: population extinct':playing?'Pause simulation':'Play simulation'}>{playing?'Ⅱ':'▶'}</button>
           <button onClick={nextAction} disabled={nextActionUnavailable||stepPending} aria-label={nextActionCopy.ariaLabel} title={nextActionCopy.title}>{nextActionCopy.buttonLabel}</button>

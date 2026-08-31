@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { formatNextActionCopy, type NextActionCopyInput } from './App'
+import { formatNextActionCopy, resolveTerminalOutcome, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
+import type { LastInspectedOutcome } from './simulation/types'
 
 const ready = (overrides: Partial<NextActionCopyInput> = {}): NextActionCopyInput => ({
   extinct: false,
@@ -7,6 +8,20 @@ const ready = (overrides: Partial<NextActionCopyInput> = {}): NextActionCopyInpu
   pending: false,
   selectedIndividualId: null,
   selectedIsActive: false,
+  ...overrides,
+})
+
+const terminal = (overrides: Partial<LastInspectedOutcome> = {}): LastInspectedOutcome => ({
+  individualId: 17,
+  generation: 4,
+  cause: 'hunted',
+  ...overrides,
+})
+
+const creature = (overrides: Partial<TerminalOutcomeCreature> = {}): TerminalOutcomeCreature => ({
+  individualId: 17,
+  alive: false,
+  deathCause: null,
   ...overrides,
 })
 
@@ -52,5 +67,65 @@ describe('next action control copy', () => {
 
     expect(copy.buttonLabel).not.toContain('17')
     expect(copy.ariaLabel).not.toContain('Individual 17')
+  })
+})
+
+describe('terminal outcome resolution', () => {
+  it('accepts a matching recorded outcome, including after later generations', () => {
+    const record = terminal({ generation: 2 })
+
+    expect(resolveTerminalOutcome({
+      selectedIndividualId: 17,
+      creatures: [],
+      recordedOutcome: record,
+      currentGeneration: 5,
+    })).toEqual(record)
+  })
+
+  it('rejects a stale or future record that cannot describe the selected individual', () => {
+    expect(resolveTerminalOutcome({
+      selectedIndividualId: 17,
+      creatures: [creature()],
+      recordedOutcome: terminal({ individualId: 18 }),
+      currentGeneration: 4,
+    })).toBeNull()
+    expect(resolveTerminalOutcome({
+      selectedIndividualId: 17,
+      creatures: [],
+      recordedOutcome: terminal({ generation: 5 }),
+      currentGeneration: 4,
+    })).toBeNull()
+  })
+
+  it('falls back to the selected dead creature cause when the record is absent', () => {
+    for (const cause of ['hunted', 'energy'] as const) {
+      expect(resolveTerminalOutcome({
+        selectedIndividualId: 17,
+        creatures: [creature({ deathCause: cause })],
+        recordedOutcome: null,
+        currentGeneration: 4,
+      })).toEqual({ individualId: 17, generation: 4, cause })
+    }
+  })
+
+  it('does not resolve living or nonselected creatures into a terminal outcome', () => {
+    expect(resolveTerminalOutcome({
+      selectedIndividualId: 17,
+      creatures: [creature({ alive: true })],
+      recordedOutcome: terminal(),
+      currentGeneration: 4,
+    })).toBeNull()
+    expect(resolveTerminalOutcome({
+      selectedIndividualId: 17,
+      creatures: [creature({ individualId: 18, deathCause: 'energy' })],
+      recordedOutcome: terminal({ individualId: 18 }),
+      currentGeneration: 4,
+    })).toBeNull()
+    expect(resolveTerminalOutcome({
+      selectedIndividualId: null,
+      creatures: [creature({ deathCause: 'energy' })],
+      recordedOutcome: terminal(),
+      currentGeneration: 4,
+    })).toBeNull()
   })
 })
