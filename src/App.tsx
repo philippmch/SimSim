@@ -3,7 +3,7 @@ import { ARENA_FOCUS_OPTIONS, ARENA_HUNT_CONTACT_KEY, ARENA_PATCH_STOCK_KEY, ARE
 import type { CreatureState } from './components/ArenaCanvas'
 import { GenerationAccounting } from './components/GenerationAccounting'
 import { GenerationForecast } from './components/GenerationForecast'
-import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
+import { createWorld, formatLatestWorldEvent, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
 import { defaultConfig,MAX_FOOD,MAX_POPULATION, sanitizeConfig } from './simulation/config'
 import { createController } from './simulation/controller'
 import type { SimulationController,SimulationSnapshotMeta } from './simulation/controller'
@@ -225,7 +225,7 @@ function App(){
           <button onClick={()=>intervene('resource-bloom')} disabled={world.food.length>=MAX_FOOD} title={world.food.length>=MAX_FOOD?'Food is at the safety cap':'Add a deterministic pulse of food'}>Resource bloom</button>
           <button onClick={()=>intervene('drought')} disabled={!world.food.length} title={!world.food.length?'There is no food to remove':'Remove 40% of current food'}>Drought</button>
           <button onClick={()=>intervene('founder-migration')} disabled={living>=MAX_POPULATION} title={living>=MAX_POPULATION?'Population is at the safety cap':'Add up to eight genetically varied founders'}>Founder migration</button>
-          <output aria-live="polite">{world.events.at(-1)?.summary??'The ecosystem is undisturbed.'}</output>
+          <output aria-live="polite">{formatLatestWorldEvent(world.events.at(-1),world.generation)}</output>
         </div>
         {dirty&&<div className="pending" role="status">Changes are staged and will take effect when you choose <strong>Apply &amp; restart</strong>.</div>}
 

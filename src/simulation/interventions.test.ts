@@ -1,5 +1,5 @@
 import{describe,expect,it}from'vitest'
-import{applyIntervention,createWorld,finishGeneration,getLineageAnalytics,getSelectionTakeaway,setInspectedIndividual,SIMULATION_TIMESTEP,tick}from'./engine'
+import{applyIntervention,createWorld,finishGeneration,formatLatestWorldEvent,getLineageAnalytics,getSelectionTakeaway,setInspectedIndividual,SIMULATION_TIMESTEP,tick}from'./engine'
 import{defaultConfig,MAX_FOOD,MAX_POPULATION}from'./config'
 import type{GenerationLedger,SelectionSummary}from'./types'
 
@@ -7,6 +7,37 @@ const summary=(mean:number|null):SelectionSummary=>Object.fromEntries(['speed','
 const ledger=(start:number,survivor:number,reproducer:number):GenerationLedger=>({generation:3,startPopulation:3,outcomes:{survived:3,hunted:0,energy:0,unfed:0,late:0,aged:0},foodAtStart:10,foodProduced:0,foodRemoved:0,foodConsumed:0,foodRemaining:10,preyConsumed:0,attackAttempts:0,attackSuccesses:0,attackFailures:0,birthsEligible:2,birthsAdmitted:2,birthsCapped:0,selection:{start:summary(start),survivor:summary(survivor),reproducer:summary(reproducer)},selectionByOutcome:{survived:summary(start),hunted:summary(null),energy:summary(null),unfed:summary(null),late:summary(null),aged:summary(null)}})
 
 describe('live interventions',()=>{
+  it('explains the latest shock provenance and keeps a reset run empty',()=>{
+    const world=createWorld({...defaultConfig,seed:919,foodPerDay:0})
+    expect(formatLatestWorldEvent(world.events.at(-1),world.generation)).toBe('No shocks recorded in this run yet.')
+    applyIntervention(world,'drought')
+    const event=world.events.at(-1)!
+    expect(formatLatestWorldEvent(event,world.generation)).toBe(`Current generation · Generation 1 · day 0.00 · ${event.summary}`)
+    const reset=createWorld({...defaultConfig,seed:919,foodPerDay:0})
+    expect(formatLatestWorldEvent(reset.events.at(-1),reset.generation)).toBe('No shocks recorded in this run yet.')
+  })
+
+  it('marks a retained shock as earlier after the generation advances',()=>{
+    const world=createWorld({...defaultConfig,seed:919,foodPerDay:0})
+    applyIntervention(world,'drought')
+    const event=world.events.at(-1)!
+    finishGeneration(world)
+    expect(formatLatestWorldEvent(event,world.generation)).toBe(`Earlier generation · Generation 1 · day 0.00 · ${event.summary}`)
+  })
+
+  it('keeps no-op and future or corrupt event records truthful',()=>{
+    const world=createWorld({...defaultConfig,seed:919,foodPerDay:0})
+    applyIntervention(world,'drought')
+    const event=world.events.at(-1)!
+    expect(event.summary).toBe('Drought found no food to remove.')
+    expect(formatLatestWorldEvent(event,world.generation)).toContain(event.summary)
+    expect(formatLatestWorldEvent({...event,generation:world.generation+1},world.generation)).toContain('Later generation · Generation 2 · day 0.00')
+    expect(formatLatestWorldEvent({...event,generation:Number.NaN,day:Number.NaN},world.generation)).toContain('Generation provenance unavailable · Generation unavailable · day unavailable')
+    expect(formatLatestWorldEvent({...event,generation:-1},world.generation)).toContain('Generation provenance unavailable · Generation unavailable')
+    expect(formatLatestWorldEvent({...event,generation:1.5},world.generation)).toContain('Generation provenance unavailable · Generation unavailable')
+    expect(formatLatestWorldEvent(event,1.5)).toContain('Generation provenance unavailable · Generation 1')
+  })
+
   it('replays the same command sequence deterministically',()=>{
     const a=createWorld({...defaultConfig,seed:919}),b=createWorld({...defaultConfig,seed:919})
     for(const kind of ['resource-bloom','drought','founder-migration','resource-bloom']as const){applyIntervention(a,kind);applyIntervention(b,kind)}

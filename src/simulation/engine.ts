@@ -1,5 +1,5 @@
 import { END_CAUSES } from './types'
-import type { BiologicalTrait,Config,Creature,GenerationLedger,HistoryPoint,InheritanceSummary,InterventionKind,LineageAnalytics,SelectionSummary,Trait,World } from './types'
+import type { BiologicalTrait,Config,Creature,GenerationLedger,HistoryPoint,InheritanceSummary,InterventionKind,LineageAnalytics,SelectionSummary,Trait,World,WorldEvent } from './types'
 import { clamp,distance,random } from './random'
 import { advanceFoodBudget,createEnvironment,effectiveFoodRegrowthRate,enforceAdvancedPatchCapacity,spawnFood,spawnRegrownFood,syncPatchStocks } from './environment'
 import { decide,type Decision } from './behavior'
@@ -58,6 +58,16 @@ export function createWorld(config:Config=defaultConfig):World{
 export function setInspectedIndividual(world:World,individualId:number|null){
   world.inspectedIndividualId=individualId
   for(const creature of world.creatures)if(creature.individualId!==individualId){delete creature.decisionSummary;delete creature.perceptionDiagnostics}
+}
+
+export function formatLatestWorldEvent(event:WorldEvent|null|undefined,currentGeneration:number):string{
+  if(!event)return'No shocks recorded in this run yet.'
+  const hasGeneration=Number.isInteger(event.generation)&&event.generation>=1,hasCurrentGeneration=Number.isInteger(currentGeneration)&&currentGeneration>=1
+  const provenance=!hasGeneration||!hasCurrentGeneration?'Generation provenance unavailable':event.generation===currentGeneration?'Current generation':event.generation<currentGeneration?'Earlier generation':'Later generation'
+  const generation=hasGeneration?`Generation ${event.generation}`:'Generation unavailable'
+  const day=Number.isFinite(event.day)&&event.day>=0?`day ${event.day.toFixed(2)}`:'day unavailable'
+  const summary=typeof event.summary==='string'&&event.summary.length>0?event.summary:'Event summary unavailable.'
+  return`${provenance} · ${generation} · ${day} · ${summary}`
 }
 
 function recordEvent(world:World,kind:InterventionKind,summary:string,count:number){
