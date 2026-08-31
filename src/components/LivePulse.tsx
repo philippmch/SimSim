@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useReducer } from 'react'
 import type { Creature, Config, World } from '../simulation/types'
 
 /** Counters that are reset when a generation ends. Keep these labels tied to the engine fields. */
@@ -50,6 +50,20 @@ export interface LivePulseSummary {
   foundersArrived: number
   stateChanges: LivePulseStateChanges
 }
+
+export interface LivePulseTrailEntry {
+  sequence: number
+  generation: number | null
+  dayTime: number | null
+  tickIndex: number | null
+  text: string
+}
+
+export type LivePulseTrailAction =
+  | { type: 'snapshot', summary: LivePulseSummary, dayTime: unknown, tickIndex: unknown }
+  | { type: 'reset' }
+
+export const MAX_LIVE_PULSE_TRAIL_ENTRIES = 5
 
 const COUNTER_LABELS: Record<LivePulseCounterKey, (count: number) => string> = {
   dayFoodProduced: () => 'food added/grown',
@@ -235,6 +249,37 @@ function formatStateChange(count: number, state: LivePulseState): string {
   return `${countText(count, 'creature')} shifted to ${STATE_LABELS[state]}`
 }
 
+function positiveFinite(value: unknown): value is number {
+  return finiteNumber(value) && value > 0
+}
+
+function discreteEventParts(summary: LivePulseSummary): string[] {
+  const events: string[] = []
+  const counterDeltas = summary.counterDeltas !== null && typeof summary.counterDeltas === 'object'
+    ? summary.counterDeltas as Partial<LivePulseCounterDeltas>
+    : {}
+  for (const key of COUNTER_FORMAT_ORDER) {
+    const delta = counterDeltas[key]
+    if (positiveFinite(delta)) {
+      const displayCount = Number(formatNumber(delta))
+      events.push(`+${formatNumber(delta)} ${COUNTER_LABELS[key](displayCount)}`)
+    }
+  }
+  if (positiveFinite(summary.deaths)) {
+    const huntedDeaths = positiveFinite(summary.huntedDeaths) ? summary.huntedDeaths : 0
+    const energyDeaths = positiveFinite(summary.energyDeaths) ? summary.energyDeaths : 0
+    const otherDeaths = positiveFinite(summary.otherDeaths) ? summary.otherDeaths : 0
+    if (huntedDeaths > 0) events.push(countText(huntedDeaths, 'hunted death'))
+    if (energyDeaths > 0) events.push(countText(energyDeaths, 'energy death'))
+    const classifiedDeaths = huntedDeaths + energyDeaths + otherDeaths
+    const unclassified = Math.max(otherDeaths, summary.deaths - classifiedDeaths)
+    if (unclassified > 0) events.push(countText(unclassified, 'creature death'))
+  }
+  if (positiveFinite(summary.reachedHome)) events.push(countText(summary.reachedHome, 'creature reached home', 'creatures reached home'))
+  if (positiveFinite(summary.foundersArrived)) events.push(countText(summary.foundersArrived, 'founder arrived', 'founders arrived'))
+  return events
+}
+
 function formatLivePulseParts(summary: LivePulseSummary): string[] {
   if (summary.status === 'baseline') return ['Waiting for the next simulation update.']
   if (summary.status === 'boundary') return [`Generation ${summary.previousGeneration ?? '?'} ended → Generation ${summary.generation} started; interval counters reset.`]
@@ -242,23 +287,7 @@ function formatLivePulseParts(summary: LivePulseSummary): string[] {
   const parts: string[] = ['Since last update']
   const seconds = formatSeconds(summary.elapsedSeconds)
   if (seconds) parts.push(seconds)
-  const events: string[] = []
-  for (const key of COUNTER_FORMAT_ORDER) {
-    const delta = summary.counterDeltas[key]
-    if (delta !== null && delta > 0) {
-      const displayCount = Number(formatNumber(delta))
-      events.push(`+${formatNumber(delta)} ${COUNTER_LABELS[key](displayCount)}`)
-    }
-  }
-  if (summary.deaths > 0) {
-    if (summary.huntedDeaths > 0) events.push(countText(summary.huntedDeaths, 'hunted death'))
-    if (summary.energyDeaths > 0) events.push(countText(summary.energyDeaths, 'energy death'))
-    const classifiedDeaths = summary.huntedDeaths + summary.energyDeaths + summary.otherDeaths
-    const unclassified = Math.max(summary.otherDeaths, summary.deaths - classifiedDeaths)
-    if (unclassified > 0) events.push(countText(unclassified, 'creature death'))
-  }
-  if (summary.reachedHome > 0) events.push(countText(summary.reachedHome, 'creature reached home', 'creatures reached home'))
-  if (summary.foundersArrived > 0) events.push(countText(summary.foundersArrived, 'founder arrived', 'founders arrived'))
+  const events = discreteEventParts(summary)
 
   const stateEntries = STATE_FORMAT_ORDER.filter(state => summary.stateChanges[state] > 0)
   const visibleStates = stateEntries.slice(0, MAX_STATE_CLAUSES)
@@ -284,19 +313,105 @@ export function formatLivePulse(summary: LivePulseSummary): string {
   return formatLivePulseParts(summary).join(' · ')
 }
 
+function trailEventText(summary: LivePulseSummary): string | null {
+  if (summary.status === 'boundary') {
+    return `Generation ${finiteNumber(summary.previousGeneration) ? summary.previousGeneration : '?'} ended → Generation ${finiteNumber(summary.generation) ? summary.generation : '?'} started`
+  }
+  if (summary.status !== 'same-generation') return null
+  const resources: string[] = []
+  const hunts: string[] = []
+  const population: string[] = []
+  const counterDeltas = summary.counterDeltas !== null && typeof summary.counterDeltas === 'object'
+    ? summary.counterDeltas as Partial<LivePulseCounterDeltas>
+    : {}
+  for (const key of COUNTER_FORMAT_ORDER) {
+    const delta = counterDeltas[key]
+    if (!positiveFinite(delta)) continue
+    const event = `+${formatNumber(delta)} ${COUNTER_LABELS[key](Number(formatNumber(delta)))}`
+    if (key === 'dayFoodProduced' || key === 'dayFoodRemoved' || key === 'dayFoodConsumed') resources.push(event)
+    else hunts.push(event)
+  }
+  if (positiveFinite(summary.deaths)) {
+    const huntedDeaths = positiveFinite(summary.huntedDeaths) ? summary.huntedDeaths : 0
+    const energyDeaths = positiveFinite(summary.energyDeaths) ? summary.energyDeaths : 0
+    const otherDeaths = positiveFinite(summary.otherDeaths) ? summary.otherDeaths : 0
+    if (huntedDeaths > 0) population.push(countText(huntedDeaths, 'hunted death'))
+    if (energyDeaths > 0) population.push(countText(energyDeaths, 'energy death'))
+    const classifiedDeaths = huntedDeaths + energyDeaths + otherDeaths
+    const unclassified = Math.max(otherDeaths, summary.deaths - classifiedDeaths)
+    if (unclassified > 0) population.push(countText(unclassified, 'creature death'))
+  }
+  if (positiveFinite(summary.reachedHome)) population.push(countText(summary.reachedHome, 'creature reached home', 'creatures reached home'))
+  if (positiveFinite(summary.foundersArrived)) population.push(countText(summary.foundersArrived, 'founder arrived', 'founders arrived'))
+  const families = [
+    resources.length ? `Resources: ${resources.join(', ')}` : null,
+    hunts.length ? `Hunts: ${hunts.join(', ')}` : null,
+    population.length ? `Population: ${population.join(', ')}` : null,
+  ].filter((family): family is string => family !== null)
+  return families.length ? families.join(' · ') : null
+}
+
+/** Retain only noteworthy simulation intervals; baseline/reset actions deliberately clear prior context. */
+export function reduceLivePulseTrail(state: readonly LivePulseTrailEntry[], action: LivePulseTrailAction): readonly LivePulseTrailEntry[] {
+  if (action.type === 'reset' || action.summary.status === 'baseline') return []
+  const text = trailEventText(action.summary)
+  if (!text) return state
+  const latestSequence = state.reduce((latest, entry) => positiveFinite(entry?.sequence) ? Math.max(latest, entry.sequence) : latest, 0)
+  const entry: LivePulseTrailEntry = {
+    sequence: latestSequence + 1,
+    generation: finiteNumber(action.summary.generation) ? action.summary.generation : null,
+    dayTime: finiteNumber(action.dayTime) && action.dayTime >= 0 ? action.dayTime : null,
+    tickIndex: finiteNumber(action.tickIndex) && action.tickIndex >= 0 ? action.tickIndex : null,
+    text,
+  }
+  return [entry, ...state].slice(0, MAX_LIVE_PULSE_TRAIL_ENTRIES)
+}
+
+export function formatLivePulseTrailEntry(entry: LivePulseTrailEntry): string {
+  const generation = finiteNumber(entry.generation) ? formatNumber(entry.generation) : '?'
+  const day = finiteNumber(entry.dayTime) && entry.dayTime >= 0 ? entry.dayTime.toFixed(2) : '?'
+  return `Generation ${generation} · day ${day} · ${entry.text}`
+}
+
+interface LivePulseViewState {
+  world: LivePulseWorld
+  summary: LivePulseSummary
+  trail: readonly LivePulseTrailEntry[]
+}
+
+function initialViewState(world: LivePulseWorld): LivePulseViewState {
+  return { world, summary: deriveLivePulse(null, world), trail: [] }
+}
+
+function advanceViewState(state: LivePulseViewState, world: LivePulseWorld): LivePulseViewState {
+  if (state.world === world) return state
+  const summary = deriveLivePulse(state.world, world)
+  const trail = reduceLivePulseTrail(state.trail, { type: 'snapshot', summary, dayTime: world.dayTime, tickIndex: world.tickIndex })
+  return { world, summary, trail }
+}
+
 export function LivePulse({ world }: { world: World }) {
-  const previousWorldRef = useRef<LivePulseWorld | null>(null)
-  const summary = deriveLivePulse(previousWorldRef.current, world)
-  const text = formatLivePulse(summary)
+  const [view, advance] = useReducer(advanceViewState, world, initialViewState)
   useEffect(() => {
-    previousWorldRef.current = world
+    advance(world)
   }, [world])
 
+  const { summary, trail } = view
+  const text = formatLivePulse(summary)
   const parts = formatLivePulseParts(summary)
-  return <div className="ecology-line activity-line" role="group" aria-label={`Live simulation pulse. ${text}`}>
-    <strong>Live pulse</strong>
-    {parts.map((part, index) => <span key={`${index}-${part}`}>{part}</span>)}
-  </div>
+  const trailTexts = trail.map(formatLivePulseTrailEntry)
+  return <>
+    <div className="ecology-line activity-line" role="group" aria-label={`Live simulation pulse. ${text}`}>
+      <strong>Live pulse</strong>
+      {parts.map((part, index) => <span key={`${index}-${part}`}>{part}</span>)}
+    </div>
+    {trail.length > 0 && <div className="ecology-line activity-line" role="group" aria-label="Recent simulation activity, newest first">
+      <strong>Recent activity</strong>
+      <ol aria-label="Recent simulation activity, newest first" style={{ flex: '1 1 100%', minWidth: 0, margin: 0, padding: 0, listStyle: 'none' }}>
+        {trail.map((entry, index) => <li key={entry.sequence} style={{ minWidth: 0, whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{trailTexts[index]}</li>)}
+      </ol>
+    </div>}
+  </>
 }
 
 export default LivePulse

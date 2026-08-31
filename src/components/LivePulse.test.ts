@@ -3,9 +3,13 @@ import { defaultConfig } from '../simulation/config'
 import {
   deriveLivePulse,
   formatLivePulse,
+  formatLivePulseTrailEntry,
   LIVE_PULSE_COUNTER_KEYS,
+  MAX_LIVE_PULSE_TRAIL_ENTRIES,
+  reduceLivePulseTrail,
   type LivePulseCreature,
   type LivePulseSummary,
+  type LivePulseTrailEntry,
   type LivePulseWorld,
 } from './LivePulse'
 
@@ -32,6 +36,22 @@ const world = (overrides: Partial<LivePulseWorld> = {}): LivePulseWorld => ({
   dayAttackSuccesses: 0,
   dayAttackFailures: 0,
   dayAttackContested: 0,
+  ...overrides,
+})
+
+const pulseSummary = (overrides: Partial<LivePulseSummary> = {}): LivePulseSummary => ({
+  status: 'same-generation',
+  generation: 1,
+  previousGeneration: 1,
+  elapsedSeconds: .05,
+  counterDeltas: { dayFoodProduced: 0, dayFoodRemoved: 0, dayFoodConsumed: 0, dayPreyConsumed: 0, dayAttackAttempts: 0, dayAttackSuccesses: 0, dayAttackFailures: 0, dayAttackContested: 0 },
+  deaths: 0,
+  huntedDeaths: 0,
+  energyDeaths: 0,
+  otherDeaths: 0,
+  reachedHome: 0,
+  foundersArrived: 0,
+  stateChanges: { safe: 0, exploring: 0, foraging: 0, hunting: 0, fleeing: 0, returning: 0 },
   ...overrides,
 })
 
@@ -239,5 +259,105 @@ describe('live pulse derivation', () => {
 
     expect(previous).toEqual(previousBefore)
     expect(current).toEqual(currentBefore)
+  })
+})
+
+describe('live pulse recent-activity trail', () => {
+  const record = (state: readonly LivePulseTrailEntry[], summary: LivePulseSummary, dayTime = .25, tickIndex = 10) => (
+    reduceLivePulseTrail(state, { type: 'snapshot', summary, dayTime, tickIndex })
+  )
+
+  it('ignores movement and state-only chatter without replacing retained activity', () => {
+    const retained = record([], pulseSummary({ counterDeltas: { ...pulseSummary().counterDeltas, dayFoodConsumed: 1 } }))
+    const stateOnly = pulseSummary({ stateChanges: { ...pulseSummary().stateChanges, hunting: 3 } })
+    const unchanged = record(retained, stateOnly, .3, 12)
+
+    expect(unchanged).toBe(retained)
+    expect(unchanged).toHaveLength(1)
+    expect(unchanged[0].text).toContain('Resources: +1 food eaten')
+  })
+
+  it.each([
+    ['food counters', pulseSummary({ counterDeltas: { ...pulseSummary().counterDeltas, dayFoodProduced: 2 } }), 'food added/grown'],
+    ['attacks', pulseSummary({ counterDeltas: { ...pulseSummary().counterDeltas, dayAttackAttempts: 2 } }), 'attack attempts'],
+    ['deaths', pulseSummary({ deaths: 1, huntedDeaths: 1 }), 'hunted death'],
+    ['home arrivals', pulseSummary({ reachedHome: 2 }), 'creatures reached home'],
+    ['founder arrivals', pulseSummary({ foundersArrived: 1 }), 'founder arrived'],
+  ])('retains %s with generation-and-day provenance', (_name, summary, expected) => {
+    const trail = record([], summary, 1.375, 55)
+
+    expect(trail).toHaveLength(1)
+    expect(trail[0]).toMatchObject({ sequence: 1, generation: 1, dayTime: 1.375, tickIndex: 55 })
+    expect(formatLivePulseTrailEntry(trail[0])).toContain(`Generation 1 · day 1.38 ·`)
+    expect(trail[0].text).toContain(expected)
+  })
+
+  it('keeps the five newest salient intervals in newest-first order', () => {
+    let trail: readonly LivePulseTrailEntry[] = []
+    for (let day = 1; day <= MAX_LIVE_PULSE_TRAIL_ENTRIES + 1; day++) {
+      trail = record(trail, pulseSummary({ counterDeltas: { ...pulseSummary().counterDeltas, dayFoodRemoved: day } }), day, day * 4)
+    }
+
+    expect(trail).toHaveLength(MAX_LIVE_PULSE_TRAIL_ENTRIES)
+    expect(trail.map(entry => entry.dayTime)).toEqual([6, 5, 4, 3, 2])
+    expect(trail.map(entry => entry.text)).toEqual([
+      'Resources: +6 food removed',
+      'Resources: +5 food removed',
+      'Resources: +4 food removed',
+      'Resources: +3 food removed',
+      'Resources: +2 food removed',
+    ])
+    expect(trail.map(entry => entry.sequence)).toEqual([6, 5, 4, 3, 2])
+  })
+
+  it('retains generation boundaries alongside earlier salient intervals', () => {
+    const earlier = record([], pulseSummary({ counterDeltas: { ...pulseSummary().counterDeltas, dayFoodConsumed: 1 } }), 3.9, 156)
+    const boundary = pulseSummary({ status: 'boundary', generation: 2, previousGeneration: 1, elapsedSeconds: null })
+    const trail = record(earlier, boundary, 0, 0)
+
+    expect(trail).toHaveLength(2)
+    expect(formatLivePulseTrailEntry(trail[0])).toBe('Generation 2 · day 0.00 · Generation 1 ended → Generation 2 started')
+    expect(trail[1]).toBe(earlier[0])
+  })
+
+  it('assigns distinct sequence keys to salient same-cursor interventions', () => {
+    const first = record([], pulseSummary({ foundersArrived: 1 }), 0, 0)
+    const second = record(first, pulseSummary({ foundersArrived: 1 }), 0, 0)
+
+    expect(second.map(entry => entry.sequence)).toEqual([2, 1])
+    expect(second.map(entry => entry.tickIndex)).toEqual([0, 0])
+  })
+
+  it('clears on explicit reset and baseline snapshots', () => {
+    const retained = record([], pulseSummary({ foundersArrived: 1 }))
+
+    expect(reduceLivePulseTrail(retained, { type: 'reset' })).toEqual([])
+    expect(record(retained, pulseSummary({ status: 'baseline' }))).toEqual([])
+  })
+
+  it('handles omitted legacy counters and corrupt provenance without throwing', () => {
+    const legacy = pulseSummary()
+    delete (legacy as Partial<LivePulseSummary>).counterDeltas
+    expect(record([], legacy)).toEqual([])
+
+    const corrupt = pulseSummary({ generation: Number.NaN, deaths: 1 })
+    delete (corrupt as Partial<LivePulseSummary>).counterDeltas
+    const trail = record([], corrupt, Number.POSITIVE_INFINITY, Number.NaN)
+
+    expect(trail[0]).toMatchObject({ sequence: 1, generation: null, dayTime: null, tickIndex: null, text: 'Population: 1 creature death' })
+    expect(formatLivePulseTrailEntry(trail[0])).toBe('Generation ? · day ? · Population: 1 creature death')
+  })
+
+  it('groups crowded retained entries into at most three readable families', () => {
+    const summary = pulseSummary({
+      counterDeltas: { ...pulseSummary().counterDeltas, dayFoodConsumed: 2, dayAttackAttempts: 3, dayAttackSuccesses: 1 },
+      reachedHome: 4,
+    })
+    const trail = record([], summary)
+
+    expect(trail[0].text).toBe('Resources: +2 food eaten · Hunts: +3 attack attempts, +1 attack success · Population: 4 creatures reached home')
+    expect(trail[0].text.split(' · ')).toHaveLength(3)
+    expect(formatLivePulse(summary)).toContain('+1 attack success')
+    expect(formatLivePulse(summary)).toContain('4 creatures reached home')
   })
 })
