@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { formatNextActionCopy, formatPerceptionTelemetry, resolveTerminalOutcome, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
+import { formatNextActionCopy, resolveTerminalOutcome, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
+import { formatPerceptionTelemetry } from './components/CreatureInspector'
 import type { LastInspectedOutcome, PerceptionDiagnostics } from './simulation/types'
 
 const ready = (overrides: Partial<NextActionCopyInput> = {}): NextActionCopyInput => ({
