@@ -181,7 +181,7 @@ function App(){
   useEffect(()=>{const visibility=()=>{if(document.hidden){resumeOnVisibleRef.current=playingRef.current;if(resumeOnVisibleRef.current)controllerRef.current?.send({type:'pause'})}else{const shouldResume=resumeOnVisibleRef.current&&playingRef.current&&!extinctRef.current;resumeOnVisibleRef.current=false;if(shouldResume)controllerRef.current?.send({type:'play'})}};document.addEventListener('visibilitychange',visibility);return()=>document.removeEventListener('visibilitychange',visibility)},[])
 
   useEffect(()=>{if(extinct)setPlaying(false)},[extinct])
-  useEffect(()=>{if(selectedIndividualId!==null&&!world.creatures.some(creature=>creature.alive&&creature.individualId===selectedIndividualId)){setSelectedIndividualId(null);controllerRef.current?.send({type:'inspect',individualId:null})}},[world,selectedIndividualId])
+  useEffect(()=>{if(selectedIndividualId!==null&&!world.creatures.some(creature=>creature.alive&&creature.individualId===selectedIndividualId)){setSelectedIndividualId(null);if(world.inspectedIndividualId!==null)controllerRef.current?.send({type:'inspect',individualId:null})}},[world,selectedIndividualId])
 
   return <div className="app-shell">
     <header className="topbar" aria-hidden={experimentOpen||(settingsOpen&&isNarrow)||undefined}>

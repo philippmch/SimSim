@@ -6,6 +6,83 @@ import type { BiologicalTrait } from './types'
 const traitValues=(speed:number,size:number,sense:number,aggression:number,caution:number,exploration:number):Record<BiologicalTrait,number>=>({speed,size,sense,aggression,caution,exploration})
 
 describe('selection simulation', () => {
+  it('starts every run, including a reset-created run, without an inspected outcome',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1})
+    expect(world.lastInspectedOutcome).toBeNull()
+    finishGeneration(world)
+    const reset=createWorld(world.config)
+    expect(reset.lastInspectedOutcome).toBeNull()
+  })
+
+  it('records an inspected energy death during the day before clearing inspection',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0,obstacleCount:0})
+    const inspected=world.creatures[0]
+    inspected.energy=0
+    setInspectedIndividual(world,inspected.individualId)
+    tick(world,SIMULATION_TIMESTEP)
+
+    expect(inspected).toMatchObject({alive:false,deathCause:'energy'})
+    expect(world.inspectedIndividualId).toBeNull()
+    expect(world.lastInspectedOutcome).toEqual({individualId:inspected.individualId,generation:1,cause:'energy'})
+    tick(world,SIMULATION_TIMESTEP)
+    expect(world.lastInspectedOutcome).toEqual({individualId:inspected.individualId,generation:1,cause:'energy'})
+  })
+
+  it('records an inspected hunted death during the day before clearing inspection',()=>{
+    const world=createWorld({...defaultConfig,...CLASSIC_MODES,initialPopulation:3,foodPerDay:0,predatorRatio:1.2,obstacleCount:0})
+    const [hunter,inspected]=world.creatures
+    for(const creature of world.creatures){creature.x=.5;creature.y=.5;creature.sense=.5;creature.angle=0}
+    hunter.size=2
+    inspected.size=1
+    setInspectedIndividual(world,inspected.individualId)
+    tick(world,SIMULATION_TIMESTEP)
+
+    expect(inspected).toMatchObject({alive:false,deathCause:'hunted'})
+    expect(world.inspectedIndividualId).toBeNull()
+    expect(world.lastInspectedOutcome).toEqual({individualId:inspected.individualId,generation:1,cause:'hunted'})
+  })
+
+  it('records each terminal generation cause for the inspected individual',()=>{
+    const terminal=(cause:'hunted'|'energy'|'unfed'|'late'|'aged')=>{
+      const world=createWorld({...defaultConfig,...(cause==='aged'?{}:CLASSIC_MODES),initialPopulation:1,foodPerDay:0,maxAge:1})
+      const inspected=world.creatures[0]
+      setInspectedIndividual(world,inspected.individualId)
+      if(cause==='hunted'||cause==='energy'){inspected.alive=false;inspected.deathCause=cause}
+      else if(cause==='unfed'){inspected.food=0;inspected.home=false}
+      else if(cause==='late'){inspected.food=1;inspected.home=false}
+      else{inspected.age=world.config.maxAge;inspected.home=true}
+      finishGeneration(world)
+      expect(world.inspectedIndividualId).toBeNull()
+      expect(world.lastInspectedOutcome).toEqual({individualId:inspected.individualId,generation:1,cause})
+    }
+
+    for(const cause of ['hunted','energy','unfed','late','aged'] as const)terminal(cause)
+  })
+
+  it('keeps a survivor inspected and leaves the terminal outcome empty',()=>{
+    const world=createWorld({...defaultConfig,...CLASSIC_MODES,initialPopulation:1,foodPerDay:0})
+    const inspected=world.creatures[0]
+    inspected.home=true
+    inspected.food=1
+    setInspectedIndividual(world,inspected.individualId)
+    finishGeneration(world)
+
+    expect(world.inspectedIndividualId).toBe(inspected.individualId)
+    expect(world.lastInspectedOutcome).toBeNull()
+  })
+
+  it('clears a stale outcome whenever inspection is explicitly changed or cleared',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:2,foodPerDay:0})
+    const [first,second]=world.creatures
+    world.lastInspectedOutcome={individualId:first.individualId,generation:1,cause:'energy'}
+
+    setInspectedIndividual(world,second.individualId)
+    expect(world.lastInspectedOutcome).toBeNull()
+    world.lastInspectedOutcome={individualId:second.individualId,generation:1,cause:'hunted'}
+    setInspectedIndividual(world,null)
+    expect(world.lastInspectedOutcome).toBeNull()
+  })
+
   it('schedules perception and decisions for every reaction branch',()=>{
     expect(scheduleDecision('perfect',4,4,false,false)).toEqual({perceive:true,decide:true})
     expect(scheduleDecision('realistic',3,3,false,false)).toEqual({perceive:false,decide:false})

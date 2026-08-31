@@ -59,6 +59,8 @@ export interface InheritanceTraitSummary{parentMean:number|null;offspringMean:nu
 export interface InheritanceSummary{offspringCount:number;changedTraitValues:number;traits:Record<BiologicalTrait,InheritanceTraitSummary>}
 export const END_CAUSES=['survived','hunted','energy','unfed','late','aged'] as const
 export type EndCause=(typeof END_CAUSES)[number]
+export type TerminalEndCause=Exclude<EndCause,'survived'>
+export interface LastInspectedOutcome{individualId:number;generation:number;cause:TerminalEndCause}
 export type AttackAttemptBasis='claims'|'admitted'
 export interface GenerationLedger{generation:number;startPopulation:number;outcomes:Record<EndCause,number>;foodAtStart:number;foodProduced:number;foodRemoved:number;foodConsumed:number;foodRemaining:number;preyConsumed:number;attackAttempts:number;attackSuccesses:number;attackFailures:number;/** Optional for legacy ledgers retained before contested-attack telemetry. */attackContested?:number;/** Optional for legacy ledgers retained before attempt-basis telemetry. */attackAttemptBasis?:AttackAttemptBasis;birthsEligible:number;birthsAdmitted:number;birthsCapped:number;selection:{start:SelectionSummary;survivor:SelectionSummary;reproducer:SelectionSummary};selectionByOutcome:Record<EndCause,SelectionSummary>;inheritance?:InheritanceSummary}
 export type InterventionKind='resource-bloom'|'drought'|'founder-migration'
@@ -70,7 +72,7 @@ export interface World {
   config:Config;generation:number;dayTime:number;tickIndex:number
   creatures:Creature[];food:Food[];history:HistoryPoint[];environment:Environment
   rngState:number;nextId:number;dayHunted:number
-  nextIndividualId:number;nextLineageId:number;inspectedIndividualId:number|null
+  nextIndividualId:number;nextLineageId:number;inspectedIndividualId:number|null;lastInspectedOutcome:LastInspectedOutcome|null
   dayFoodProduced:number;dayFoodRemoved:number;dayFoodConsumed:number;dayPreyConsumed:number;dayAttackAttempts:number;dayAttackSuccesses:number;dayAttackFailures:number;dayAttackContested:number;generationFoodStart:number;ledger:GenerationLedger[]
   events:WorldEvent[]
   lastReport:{survived:number;born:number;starved:number;hunted:number;energy:number;unfed:number;late:number;aged:number;capped:number}

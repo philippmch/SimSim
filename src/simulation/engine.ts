@@ -1,5 +1,5 @@
 import { END_CAUSES } from './types'
-import type { BiologicalTrait,Config,Creature,GenerationLedger,HistoryPoint,InheritanceSummary,InterventionKind,LineageAnalytics,SelectionSummary,Trait,World,WorldEvent } from './types'
+import type { BiologicalTrait,Config,Creature,GenerationLedger,HistoryPoint,InheritanceSummary,InterventionKind,LastInspectedOutcome,LineageAnalytics,SelectionSummary,TerminalEndCause,Trait,World,WorldEvent } from './types'
 import { clamp,distance,random } from './random'
 import { advanceFoodBudget,createEnvironment,effectiveFoodRegrowthRate,enforceAdvancedPatchCapacity,spawnFood,spawnRegrownFood,syncPatchStocks } from './environment'
 import { decide,type Decision } from './behavior'
@@ -48,7 +48,7 @@ function averages(creatures:Creature[],generation:number):HistoryPoint{const n=c
 
 export function createWorld(config:Config=defaultConfig):World{
   config=sanitizeConfig(config)
-  const world={config:{...config},generation:1,dayTime:0,tickIndex:0,creatures:[],food:[],history:[],ledger:[],events:[],environment:null as never,rngState:(config.seed||1)>>>0,nextId:1,nextIndividualId:1,nextLineageId:1,inspectedIndividualId:null,dayHunted:0,dayFoodProduced:0,dayFoodRemoved:0,dayFoodConsumed:0,dayPreyConsumed:0,dayAttackAttempts:0,dayAttackSuccesses:0,dayAttackFailures:0,dayAttackContested:0,generationFoodStart:0,lastReport:{survived:config.initialPopulation,born:0,starved:0,hunted:0,energy:0,unfed:0,late:0,aged:0,capped:0}} as World
+  const world={config:{...config},generation:1,dayTime:0,tickIndex:0,creatures:[],food:[],history:[],ledger:[],events:[],environment:null as never,rngState:(config.seed||1)>>>0,nextId:1,nextIndividualId:1,nextLineageId:1,inspectedIndividualId:null,lastInspectedOutcome:null,dayHunted:0,dayFoodProduced:0,dayFoodRemoved:0,dayFoodConsumed:0,dayPreyConsumed:0,dayAttackAttempts:0,dayAttackSuccesses:0,dayAttackFailures:0,dayAttackContested:0,generationFoodStart:0,lastReport:{survived:config.initialPopulation,born:0,starved:0,hunted:0,energy:0,unfed:0,late:0,aged:0,capped:0}} as World
   world.environment=createEnvironment(world,config)
   world.creatures=Array.from({length:config.initialPopulation},()=>makeCreature(world,{},undefined,true))
   world.food=spawnFood(world,Math.round(world.environment.foodBudget));enforceAdvancedPatchCapacity(world);syncPatchStocks(world);world.generationFoodStart=world.food.length;world.history=[averages(world.creatures,0)]
@@ -56,8 +56,13 @@ export function createWorld(config:Config=defaultConfig):World{
 }
 
 export function setInspectedIndividual(world:World,individualId:number|null){
+  world.lastInspectedOutcome=null
   world.inspectedIndividualId=individualId
   for(const creature of world.creatures)if(creature.individualId!==individualId){delete creature.decisionSummary;delete creature.perceptionDiagnostics}
+}
+
+function recordInspectedOutcome(world:World,individualId:number,generation:number,cause:TerminalEndCause){
+  world.lastInspectedOutcome={individualId,generation,cause} satisfies LastInspectedOutcome
 }
 
 export function formatLatestWorldEvent(event:WorldEvent|null|undefined,currentGeneration:number):string{
@@ -213,7 +218,14 @@ export function tick(world:World,dt:number,boundaryConfig?:Config){
   for(const id of killed){const prey=byId.get(id);if(prey&&!prey.home){prey.alive=false;prey.deathCause='hunted'}}
   world.dayHunted+=killed.size
   if(advanced){const step=advanceResourceDynamics({patches:world.environment.patches},{ecologyMode:'energy-regrowth',patchCapacity:world.config.patchCapacity,foodRegrowthRate:effectiveFoodRegrowthRate(world.environment,world.config),foodPatchSpread:world.config.foodPatchSpread,maxFood:180},{seed:world.config.seed,generation:world.generation,dt,generationDuration:world.config.dayLength,currentFoodCount:world.food.length});world.environment.patches=step.state.patches;const produced=spawnRegrownFood(world,step.placements);world.food.push(...produced);world.dayFoodProduced+=produced.length}
-  if(world.inspectedIndividualId!==null&&!world.creatures.some(creature=>creature.alive&&creature.individualId===world.inspectedIndividualId))setInspectedIndividual(world,null)
+  if(world.inspectedIndividualId!==null){
+    const inspectedIndividualId=world.inspectedIndividualId,inspected=world.creatures.find(creature=>creature.individualId===inspectedIndividualId)
+    if(!inspected?.alive){
+      const cause=inspected?.deathCause
+      setInspectedIndividual(world,null)
+      if(cause)recordInspectedOutcome(world,inspectedIndividualId,world.generation,cause)
+    }
+  }
   world.dayTime+=dt;world.tickIndex++
   if(world.dayTime>=world.config.dayLength){finishGeneration(world,boundaryConfig);return true}return false
 }
@@ -227,6 +239,13 @@ function mutate(world:World,value:number,trait:Trait){const c=world.config
   return clamp(result,trait==='sense'?.035:trait==='speed'||trait==='size'?.3:0,trait==='sense'?.6:trait==='speed'||trait==='size'?2.8:1)}
 
 export function finishGeneration(world:World,boundaryConfig:Config=world.config){const start=[...world.creatures].sort((a,b)=>a.individualId-b.individualId),settlement=settleLifecycle(start,world.config,{seed:world.config.seed,generation:world.generation,maxPopulation:MAX_POPULATION}),survivors=settlement.survivors.map(item=>item.individual),birthParents=settlement.admittedParents,outcomes=settlement.outcomeCounts,selectionByOutcome=Object.fromEntries(END_CAUSES.map(cause=>[cause,selectionSummary(settlement.outcomes.filter(outcome=>outcome.cause===cause).map(outcome=>outcome.individual))])) as Record<typeof END_CAUSES[number],SelectionSummary>
+  if(world.inspectedIndividualId!==null){
+    const inspectedIndividualId=world.inspectedIndividualId,inspectedOutcome=settlement.outcomes.find(outcome=>outcome.individual.individualId===inspectedIndividualId)
+    if(inspectedOutcome&&inspectedOutcome.cause!=='survived'){
+      setInspectedIndividual(world,null)
+      recordInspectedOutcome(world,inspectedIndividualId,world.generation,inspectedOutcome.cause)
+    }
+  }
   const next:Creature[]=settlement.survivors.map(({individual:c,nextAge,settledEnergy})=>makeCreature(world,{speed:c.speed,size:c.size,sense:c.sense,aggression:c.aggression,caution:c.caution,exploration:c.exploration,age:nextAge,energy:settledEnergy},{individualId:c.individualId,lineageId:c.lineageId,parentIndividualId:c.parentIndividualId,birthGeneration:c.birthGeneration}))
   const newbornPairs:{parent:Creature;offspring:Creature}[]=[]
   for(const {parent:c,energy} of settlement.births){const offspring=makeCreature(world,{speed:mutate(world,c.speed,'speed'),size:mutate(world,c.size,'size'),sense:mutate(world,c.sense,'sense'),aggression:mutate(world,c.aggression,'aggression'),caution:mutate(world,c.caution,'caution'),exploration:mutate(world,c.exploration,'exploration'),age:0,energy},{lineageId:c.lineageId,parentIndividualId:c.individualId,birthGeneration:world.generation+1});next.push(offspring);newbornPairs.push({parent:c,offspring})}
