@@ -68,7 +68,7 @@ describe('generation forecast', () => {
     expect(formatGenerationForecastEquation(singular)).toBe('1 creature evaluated → 1 survived + 0 newborns = 1 in the next population')
     expect(formatGenerationForecastBirths(singular)).toBe('0 eligible parents · 0 admitted newborns · 0 births blocked by the population cap')
     expect(formatGenerationForecastLosses(singular)).toBe('No current losses')
-    expect(formatGenerationForecastLosses({ ...singular, losses: { hunted: 1, energy: 2, unfed: 3, late: 4, aged: 5 } })).toBe('Hunted: 1 · Energy depleted: 2 · Returned without enough food: 3 · Missed return deadline: 4 · Old age: 5')
+    expect(formatGenerationForecastLosses({ ...singular, losses: { hunted: 1, energy: 2, unfed: 3, late: 4, aged: 5 } })).toBe('Hunted: 1 · Energy depleted: 2 · No food at settlement: 3 · Missed return deadline: 4 · Old age: 5')
   })
 
   it('is deterministic and leaves the world untouched', () => {

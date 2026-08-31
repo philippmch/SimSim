@@ -9,7 +9,7 @@ const OUTCOME_LABELS:Record<EndCause,string>={
   survived:'Survived',
   hunted:'Hunted',
   energy:'Energy depleted',
-  unfed:'Returned without enough food',
+  unfed:'No food at settlement',
   late:'Missed return deadline',
   aged:'Old age',
 }

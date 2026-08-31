@@ -68,9 +68,11 @@ describe('generation history timeline',()=>{
     expect(formatTimelineSummary(withoutEvents)).toContain('mean age unavailable')
     expect(formatTimelineSummary(withoutEvents)).not.toContain('retained events')
     const [withEvents]=buildHistoryTimeline([ledger(1)],[point(1,4,8,3)],[{generation:1,day:2,kind:'drought',summary:'retained',count:1}])
+    const settlementLosses={...withEvents.outcomes,unfed:1,late:1}
     expect(formatTimelineSummary(withEvents)).toContain('1 retained event')
-    expect(formatTimelineSummary({...withEvents,nextMeanEnergy:8.125,outcomes:{...withEvents.outcomes,unfed:1}})).toContain('mean energy 8.13')
-    expect(formatTimelineSummary({...withEvents,nextMeanEnergy:8.125,outcomes:{...withEvents.outcomes,unfed:1}})).toContain('1 returned unfed')
+    expect(formatTimelineSummary({...withEvents,nextMeanEnergy:8.125,outcomes:settlementLosses})).toContain('mean energy 8.13')
+    expect(formatTimelineSummary({...withEvents,outcomes:settlementLosses})).toContain('1 no food at settlement')
+    expect(formatTimelineSummary({...withEvents,outcomes:settlementLosses})).toContain('1 missed return deadline')
   })
 
   it('follows latest and clamps unavailable generation requests',()=>{

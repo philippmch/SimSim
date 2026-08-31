@@ -7,7 +7,7 @@ export type ForecastLossCause = (typeof FORECAST_LOSS_CAUSES)[number]
 export const FORECAST_LOSS_LABELS: Record<ForecastLossCause, string> = {
   hunted: 'Hunted',
   energy: 'Energy depleted',
-  unfed: 'Returned without enough food',
+  unfed: 'No food at settlement',
   late: 'Missed return deadline',
   aged: 'Old age',
 }

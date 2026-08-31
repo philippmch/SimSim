@@ -64,7 +64,7 @@ export function resolveTimelineGeneration(entries:readonly HistoryTimelineEntry[
   return entries.reduce((closest,entry)=>Math.abs(entry.generation-requestedGeneration)<Math.abs(closest.generation-requestedGeneration)?entry:closest).generation
 }
 
-const TIMELINE_OUTCOME_LABELS:Record<EndCause,string>={survived:'survived',hunted:'hunted',energy:'energy depleted',unfed:'returned unfed',late:'returned late',aged:'old age'}
+const TIMELINE_OUTCOME_LABELS:Record<EndCause,string>={survived:'survived',hunted:'hunted',energy:'energy depleted',unfed:'no food at settlement',late:'missed return deadline',aged:'old age'}
 const timelineValue=(value:number|null)=>value===null||!Number.isFinite(value)?'unavailable':Number.isInteger(value)?String(value):value.toFixed(2).replace(/\.?0+$/,'')
 
 /** Concise text shared by the visible timeline summary and its range's aria-valuetext. */

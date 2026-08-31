@@ -90,7 +90,7 @@ describe('generation journal helpers',()=>{
     const review=deriveGenerationReview(makeLedger(7))!
     expect(review.evaluatedPopulation).toBe(5)
     expect(review).toMatchObject({nextPopulation:4,populationChange:-1})
-    expect(review.outcomes.map(outcome=>outcome.label)).toEqual(['Survived','Hunted','Energy depleted','Returned without enough food','Missed return deadline','Old age'])
+    expect(review.outcomes.map(outcome=>outcome.label)).toEqual(['Survived','Hunted','Energy depleted','No food at settlement','Missed return deadline','Old age'])
     expect(review.outcomes.reduce((sum,outcome)=>sum+outcome.count,0)).toBe(review.evaluatedPopulation)
     expect(review.resource).toMatchObject({start:12,produced:5,removed:3,consumed:4,remaining:10,expected:10,reconciled:true})
     expect(review.attacks).toEqual({attempts:2,attemptBasis:'claims',wins:1,failures:0,contested:1,preyConsumed:1})
