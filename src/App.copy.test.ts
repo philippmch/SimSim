@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { formatNextActionCopy, resolveTerminalOutcome, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
-import type { LastInspectedOutcome } from './simulation/types'
+import { formatNextActionCopy, formatPerceptionTelemetry, resolveTerminalOutcome, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
+import type { LastInspectedOutcome, PerceptionDiagnostics } from './simulation/types'
 
 const ready = (overrides: Partial<NextActionCopyInput> = {}): NextActionCopyInput => ({
   extinct: false,
@@ -127,5 +127,35 @@ describe('terminal outcome resolution', () => {
       recordedOutcome: terminal(),
       currentGeneration: 4,
     })).toBeNull()
+  })
+})
+
+describe('perception telemetry copy', () => {
+  const diagnostics: PerceptionDiagnostics = {
+    mode: 'realistic',
+    reactionWindow: 7,
+    creatures: { total: 5, detected: 3, range: 1, fov: 0, occlusion: 1, detection: 0 },
+    food: { total: 4, detected: 2, range: 0, fov: 1, occlusion: 0, detection: 1 },
+  }
+
+  it('names the creature cohort and reconciles combined not-detected buckets', () => {
+    expect(formatPerceptionTelemetry(diagnostics)).toEqual({
+      creatures: 'Other active creatures detected 3/5',
+      food: 'Food detected 2/4',
+      notDetected: 'Not detected: 4 total · 1 out of range · 1 outside view · 1 blocked · 1 detection miss',
+    })
+  })
+
+  it('uses plural detection misses while preserving zero rejection buckets', () => {
+    expect(formatPerceptionTelemetry({
+      ...diagnostics,
+      creatures: { total: 2, detected: 0, range: 1, fov: 0, occlusion: 0, detection: 1 },
+      food: { total: 0, detected: 0, range: 0, fov: 0, occlusion: 0, detection: 0 },
+    }).notDetected).toBe('Not detected: 2 total · 1 out of range · 0 outside view · 0 blocked · 1 detection miss')
+    expect(formatPerceptionTelemetry({
+      ...diagnostics,
+      creatures: { total: 3, detected: 0, range: 0, fov: 0, occlusion: 0, detection: 3 },
+      food: { total: 0, detected: 0, range: 0, fov: 0, occlusion: 0, detection: 0 },
+    }).notDetected).toContain('3 detection misses')
   })
 })
