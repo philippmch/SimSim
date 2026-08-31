@@ -16,6 +16,7 @@ const InsightsPanel=lazy(()=>import('./components/InsightsPanel'))
 const LivePulse=lazy(()=>import('./components/LivePulse'))
 const TerminalOutcome=lazy(()=>import('./components/TerminalOutcome'))
 const CreatureInspector=lazy(()=>import('./components/CreatureInspector'))
+const PopulationStory=lazy(()=>import('./components/PopulationStory'))
 const creatureStates=Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]
 
 const copyConfig=(c:Config):Config=>({...c})
@@ -278,14 +279,7 @@ function App(){
           <GenerationForecast world={world}/>
           <GenerationAccounting world={world}/>
           <Suspense fallback={<section className="evolution-story generation-journal" aria-busy="true"><p className="journal-empty" role="status">Opening generation journal…</p></section>}><GenerationJournal ledgers={world.ledger} events={world.events} requestedGeneration={requestedGeneration} onRequestedGenerationChange={setRequestedGeneration}/></Suspense>
-          <section className="evolution-story" aria-labelledby="evolution-story-title">
-            <div className="story-head"><div><h2 id="evolution-story-title">Current population · lineages</h2><p>Live lineage data: who is here now. Historical outcomes and selection live in the journal above.</p></div><dl><div><dt>Living lineages</dt><dd>{lineage.livingLineages}</dd></div><div><dt>Effective diversity</dt><dd>{lineage.effectiveDiversity.toFixed(2)}</dd></div></dl></div>
-            <div className="story-grid">
-              <div><h3>Leading lineages</h3>{lineage.topLineages.length?<ol>{lineage.topLineages.map(item=><li key={item.lineageId}><span>Lineage {item.lineageId}</span><b>{item.count}</b><small>{Math.round(item.share*100)}%</small><i style={{width:`${item.share*100}%`}}/></li>)}</ol>:<p>No living lineages.</p>}</div>
-              <div><h3>How to read this</h3><p>Each bar is the share of the living population carrying that lineage. Effective diversity is higher when several lineages remain common.</p></div>
-              <div><h3>Live vs historical</h3><p>This panel describes the current population. Choose a completed generation above to inspect its outcomes, resource balance, births, attacks, selection, and shocks.</p></div>
-            </div>
-          </section>
+          <Suspense fallback={<section className="evolution-story" aria-busy="true"><p className="journal-empty" role="status">Opening population story…</p></section>}><PopulationStory lineage={lineage}/></Suspense>
           <Suspense fallback={<section className="evolution-story generation-journal" aria-busy="true"><p className="journal-empty" role="status">Opening insights…</p></section>}><InsightsPanel world={world} requestedGeneration={requestedGeneration} onSelectGeneration={setRequestedGeneration}/></Suspense>
         </section>
       </section>
