@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildGenerationDelta, buildHistoryTimeline, buildSpeedHistogram, formatGenerationDelta, formatTimelineSummary, historyCoordinate, MAX_TIMELINE_ENTRIES, resolveTimelineGeneration, SPEED_HISTOGRAM_DOMAIN, traitColor } from './Charts'
+import { BEHAVIOR_HISTORY_CONTEXT, buildGenerationDelta, buildHistoryTimeline, buildSpeedHistogram, formatGenerationDelta, formatTimelineSummary, historyCoordinate, MAX_TIMELINE_ENTRIES, resolveTimelineGeneration, SPEED_HISTOGRAM_DOMAIN, traitColor } from './Charts'
 import { speedColor } from './ArenaCanvas'
 import type { GenerationLedger, HistoryPoint, WorldEvent } from '../simulation/types'
 
@@ -41,6 +41,11 @@ describe('trait histogram colors',()=>{
 })
 
 describe('generation history timeline',()=>{
+  it('states that behavior history combines survivors and newborns',()=>{
+    expect(BEHAVIOR_HISTORY_CONTEXT).toBe('Mean behavior traits in each next population; survivors and newborns combined.')
+    expect(BEHAVIOR_HISTORY_CONTEXT).not.toContain('Inherited')
+  })
+
   it('excludes generation zero and joins history by generation rather than index',()=>{
     const entries=buildHistoryTimeline([ledger(2,1),ledger(4,2)],[point(0,99),point(4,40),point(2,20)],[])
     expect(entries.map(entry=>entry.generation)).toEqual([2,4])
