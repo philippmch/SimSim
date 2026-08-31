@@ -13,7 +13,7 @@ export function nextActionMaxTicks(reactionTime:number){
   return Math.max(1,Math.ceil(reactionTime/SIMULATION_TIMESTEP)+2)
 }
 
-export type NextActionStop='beat'|'generation-boundary'|'no-active'|'bounded'
+export type NextActionStop='beat'|'generation-boundary'|'no-active'|'selected-inactive'|'bounded'
 export interface NextActionResult{ticks:number;stop:NextActionStop}
 export interface NextActionContext{selectedIndividualId:number|null;selectedWasActive:boolean}
 
@@ -38,14 +38,31 @@ export function advanceToNextAction(world:World):NextActionResult{
   const initial=active()
   if(!initial.length)return{ticks:0,stop:'no-active'}
 
+  // A selected active creature is the subject of a manual step. Other actors
+  // may be in a later (or earlier) reaction window after an intervention such
+  // as founder migration, so their windows must not hold the selected actor
+  // back. An inspected creature that is already home/dead is intentionally
+  // treated like no selection so the historical all-active behavior remains
+  // unchanged.
+  const selectedIndividualId=world.inspectedIndividualId
+  const selected=selectedIndividualId===null?undefined:initial.find(creature=>creature.individualId===selectedIndividualId)
+  const selectedWasActive=Boolean(selected)
+  const selectedIsActive=()=>selectedWasActive&&active().some(creature=>creature.individualId===selectedIndividualId)
+  const selectedBecameInactive=()=>{
+    if(!selectedWasActive||selectedIsActive())return undefined
+    return active().length?'selected-inactive':'no-active'
+  }
+
   const reactionTime=world.config.reactionTime
   const startingGeneration=world.generation
   if(world.config.perceptionMode==='perfect'||!Number.isFinite(reactionTime)||reactionTime<=0){
     tick(world,SIMULATION_TIMESTEP)
-    return{ticks:1,stop:world.generation===startingGeneration?'beat':'generation-boundary'}
+    if(world.generation!==startingGeneration)return{ticks:1,stop:'generation-boundary'}
+    const selectedStop=selectedBecameInactive()
+    return{ticks:1,stop:selectedStop??'beat'}
   }
 
-  const initialWindow=Math.max(...initial.map(creature=>creature.reactionWindow))
+  const initialWindow=selected?selected.reactionWindow:Math.max(...initial.map(creature=>creature.reactionWindow))
   const targetWindow=initialWindow<0?0:initialWindow+1
   const maxTicks=nextActionMaxTicks(reactionTime)
   let ticks=0
@@ -55,7 +72,12 @@ export function advanceToNextAction(world:World):NextActionResult{
     if(world.generation!==startingGeneration)return{ticks,stop:'generation-boundary'}
     const remaining=active()
     if(!remaining.length)return{ticks,stop:'no-active'}
-    if(remaining.every(creature=>creature.reactionWindow>=targetWindow))return{ticks,stop:'beat'}
+    const selectedStop=selectedBecameInactive()
+    if(selectedStop)return{ticks,stop:selectedStop}
+    if(selected){
+      const current=remaining.find(creature=>creature.individualId===selectedIndividualId)
+      if(current&&current.reactionWindow>=targetWindow)return{ticks,stop:'beat'}
+    }else if(remaining.every(creature=>creature.reactionWindow>=targetWindow))return{ticks,stop:'beat'}
   }
   return{ticks,stop:'bounded'}
 }

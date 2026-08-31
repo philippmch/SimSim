@@ -332,6 +332,49 @@ describe('arena clarity helpers', () => {
     expect(bounded).toContain('perception recorded 1/2 creatures and 2/4 food')
   })
 
+  it('distinguishes a selected creature stopping from the whole population stopping', () => {
+    const home = observedWorld()
+    home.creatures[0].home = true
+    const homePath = formatObservedPath(home, { ticks: 1, stop: 'selected-inactive' }, observedContext(home))
+    expect(homePath).toContain('reached home; other active creatures remain')
+    expect(homePath).toContain('manual step stopped for this selection')
+    expect(homePath).toContain('other active creatures remain')
+    expect(homePath).not.toContain('No active creatures remain')
+    expect(homePath).not.toContain('beat')
+
+    const dead = observedWorld()
+    dead.creatures[0].alive = false
+    const deadPath = formatObservedPath(dead, { ticks: 1, stop: 'selected-inactive' }, observedContext(dead))
+    expect(deadPath).toContain('died; other active creatures remain')
+    expect(deadPath).not.toContain('No active creatures remain')
+
+    const missing = observedWorld()
+    missing.creatures = missing.creatures.slice(1)
+    const missingPath = formatObservedPath(missing, { ticks: 1, stop: 'selected-inactive' }, observedContext(missing))
+    expect(missingPath).toContain('became unavailable; other active creatures remain')
+    expect(missingPath).toContain('other active creatures remain')
+  })
+
+  it('keeps the selected terminal outcome when no active creatures remain', () => {
+    const dead = observedWorld()
+    const deadContext = observedContext(dead)
+    dead.creatures[0].alive = false
+    dead.creatures[1].home = true
+    const deadPath = formatObservedPath(dead, { ticks: 1, stop: 'no-active' }, deadContext)
+    expect(deadPath).toContain('selected creature died')
+    expect(deadPath).toContain('No active creatures remain; 1 living creature is home')
+
+    const home = observedWorld()
+    const homeContext = observedContext(home)
+    home.creatures[0].home = true
+    home.creatures[1].home = true
+    delete home.creatures[0].perceptionDiagnostics
+    delete home.creatures[0].decisionSummary
+    const homePath = formatObservedPath(home, { ticks: 1, stop: 'no-active' }, homeContext)
+    expect(homePath).toContain('selected creature reached home during this step')
+    expect(homePath).toContain('No active creatures remain; 2 living creatures are home')
+  })
+
   it('reports a generation boundary without fabricating a missing ledger', () => {
     const world = observedWorld()
     world.generation = 3

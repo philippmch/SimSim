@@ -21,6 +21,7 @@ function formatStepCompletion(world:World,meta:SimulationSnapshotMeta){
   const result=meta.stepResult
   if(!result)return''
   if(result.stop==='generation-boundary')return`Generation ${world.generation} started.`
+  if(result.stop==='selected-inactive')return'Selected creature is no longer active; other active creatures remain.'
   if(result.stop==='no-active')return'No active creatures remain.'
   if(result.stop==='bounded')return'Reaction window bound reached.'
   return'Next action beat reached.'

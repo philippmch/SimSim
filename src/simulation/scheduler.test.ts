@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest'
-import {createWorld,defaultConfig,setInspectedIndividual,SIMULATION_TIMESTEP} from './engine'
+import {applyIntervention,createWorld,defaultConfig,setInspectedIndividual,SIMULATION_TIMESTEP} from './engine'
 import {MAX_TICKS_PER_PULSE,advanceToNextAction,captureNextActionContext,nextActionMaxTicks,scheduledTicks} from './scheduler'
 
 describe('bounded scheduler',()=>{
@@ -110,5 +110,79 @@ describe('bounded scheduler',()=>{
     expect(selected.decisionSummary).toEqual(selectedCopy.decisionSummary)
     expect(selected.perceptionDiagnostics).toEqual(selectedCopy.perceptionDiagnostics)
     expect(selected.decisionSummary).not.toBe(heldDecision)
+  })
+
+  it('steps an inspected founder migration on its own first reaction window',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:2,foodPerDay:0,reactionTime:.15})
+    const established=world.creatures[0]
+    established.reactionWindow=4
+    expect(applyIntervention(world,'founder-migration')).toBeGreaterThan(0)
+    const newcomer=world.creatures.at(-1)!
+    setInspectedIndividual(world,newcomer.individualId)
+    expect(newcomer.reactionWindow).toBe(-1)
+
+    const result=advanceToNextAction(world)
+
+    expect(result).toEqual({ticks:1,stop:'beat'})
+    expect(newcomer.reactionWindow).toBe(0)
+  })
+
+  it('targets an inspected established creature instead of unrelated later windows',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:3,foodPerDay:0,reactionTime:.15})
+    const [selected,unrelated,later]=world.creatures
+    selected.reactionWindow=0
+    unrelated.reactionWindow=8
+    later.reactionWindow=8
+    setInspectedIndividual(world,selected.individualId)
+
+    const result=advanceToNextAction(world)
+
+    expect(result.stop).toBe('beat')
+    expect(result.ticks).toBe(7)
+    expect(selected.reactionWindow).toBe(1)
+  })
+
+  it('reports selected home and death separately while other actors remain active',()=>{
+    const homeWorld=createWorld({...defaultConfig,initialPopulation:2,foodPerDay:0})
+    const home=homeWorld.creatures[0]
+    setInspectedIndividual(homeWorld,home.individualId)
+    Object.assign(home,{x:home.homeX,y:home.homeY,returning:true,mode:'returning'})
+
+    expect(advanceToNextAction(homeWorld)).toEqual({ticks:1,stop:'selected-inactive'})
+    expect(home.home).toBe(true)
+    expect(homeWorld.creatures.some(creature=>creature.alive&&!creature.home)).toBe(true)
+
+    const deathWorld=createWorld({...defaultConfig,initialPopulation:2,foodPerDay:0})
+    const doomed=deathWorld.creatures[0]
+    setInspectedIndividual(deathWorld,doomed.individualId)
+    doomed.energy=0
+
+    expect(advanceToNextAction(deathWorld)).toEqual({ticks:1,stop:'selected-inactive'})
+    expect(doomed.alive).toBe(false)
+    expect(deathWorld.creatures.some(creature=>creature.alive&&!creature.home)).toBe(true)
+  })
+
+  it('returns selected-inactive in perfect and zero-reaction paths',()=>{
+    for(const overrides of [{perceptionMode:'perfect' as const,reactionTime:.15},{perceptionMode:'realistic' as const,reactionTime:0}]){
+      const world=createWorld({...defaultConfig,initialPopulation:2,foodPerDay:0,...overrides})
+      const selected=world.creatures[0]
+      setInspectedIndividual(world,selected.individualId)
+      Object.assign(selected,{x:selected.homeX,y:selected.homeY,returning:true,mode:'returning'})
+
+      expect(advanceToNextAction(world)).toEqual({ticks:1,stop:'selected-inactive'})
+    }
+  })
+
+  it('keeps all-active scheduling when an inspected creature is not active',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:3,foodPerDay:0,reactionTime:.15})
+    const [home,unrelated,later]=world.creatures
+    home.home=true
+    setInspectedIndividual(world,home.individualId)
+    unrelated.reactionWindow=8
+    later.reactionWindow=8
+
+    const result=advanceToNextAction(world)
+
+    expect(result).toEqual({ticks:nextActionMaxTicks(world.config.reactionTime),stop:'bounded'})
   })
 })

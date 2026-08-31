@@ -159,17 +159,37 @@ function formatObservedGenerationBoundary(world: World): string {
 export function formatObservedPath(world: World, result: NextActionResult, context: NextActionContext): string {
   if (result.stop === 'generation-boundary') return `Observed path: ${formatObservedGenerationBoundary(world)}`
   const inspected = inspectedCreature(world, context.selectedIndividualId)
+  if (result.stop === 'selected-inactive') {
+    const outcome = !inspected
+      ? 'became unavailable'
+      : !inspected.alive
+        ? 'died'
+        : inspected.home
+          ? 'reached home'
+          : 'is no longer active'
+    return `Observed path: The selected creature ${outcome}; other active creatures remain. The manual step stopped for this selection.`
+  }
   if (context.selectedIndividualId !== null && !context.selectedWasActive) {
     return inspected?.home
       ? 'Observed path: The inspected creature was already home at step start; no new decision path was observed.'
       : 'Observed path: The selected creature was not active at step start; no new decision path was observed.'
   }
   if (result.stop === 'no-active') {
-    if (context.selectedWasActive && inspected?.alive && (inspected.perceptionDiagnostics || inspected.decisionSummary)) return `Observed path: ${formatObservedCreaturePath(world, context)}`
     const living = world.creatures.filter(creature => creature.alive)
-    return living.length
-      ? `Observed path: No active creatures remain; ${observedQuantity(living.length, 'living creature')} ${living.length === 1 ? 'is' : 'are'} home.`
-      : 'Observed path: No active creatures remain; the population is extinct.'
+    const aggregate = living.length
+      ? `No active creatures remain; ${observedQuantity(living.length, 'living creature')} ${living.length === 1 ? 'is' : 'are'} home.`
+      : 'No active creatures remain; the population is extinct.'
+    if (context.selectedWasActive) {
+      if (!inspected) return `Observed path: The selected creature became unavailable. ${aggregate}`
+      if (!inspected.alive) return `Observed path: The selected creature died. ${aggregate}`
+      if (inspected.home) {
+        const selectedOutcome = inspected.perceptionDiagnostics || inspected.decisionSummary
+          ? formatObservedCreaturePath(world, context)
+          : 'The selected creature reached home during this step.'
+        return `Observed path: ${selectedOutcome} ${aggregate}`
+      }
+    }
+    return `Observed path: ${aggregate}`
   }
   const prefix = result.stop === 'bounded'
     ? `Observed path: Step stopped at the ${observedQuantity(result.ticks, 'tick')} reaction-window bound. `
