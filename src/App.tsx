@@ -147,6 +147,7 @@ function App(){
   const [settingsOpen,setSettingsOpen]=useState(false)
   const [experimentOpen,setExperimentOpen]=useState(false)
   const [isNarrow,setIsNarrow]=useState(()=>window.matchMedia('(max-width: 1050px)').matches)
+  const [arenaKeysOpen,setArenaKeysOpen]=useState(()=>!window.matchMedia('(max-width: 1050px)').matches)
   const settingsToggleRef=useRef<HTMLButtonElement>(null)
   const experimentToggleRef=useRef<HTMLButtonElement>(null)
   const settingsRef=useRef<HTMLElement>(null)
@@ -202,7 +203,7 @@ function App(){
 
   useEffect(()=>{
     const query=window.matchMedia('(max-width: 1050px)')
-    const change=()=>setIsNarrow(query.matches)
+    const change=()=>{setIsNarrow(query.matches);setArenaKeysOpen(!query.matches)}
     query.addEventListener('change',change)
     return()=>query.removeEventListener('change',change)
   },[])
@@ -249,10 +250,11 @@ function App(){
         <div className="arena-wrap">
           <ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual} arenaFocus={arenaFocus}/>
           <div className="arena-badge" style={{pointerEvents:'none'}}><strong>{arenaDayLabel}</strong><small>Generation {world.generation}</small><small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} food across ${world.environment.patches.length} resource patches`:`${world.food.length} / ${Math.round(world.environment.foodBudget)} seasonal food`}</small>{showArenaQuickStart(world.ledger.length)&&ARENA_QUICK_START.map(line=><small key={line}>{line}</small>)}</div>
-          <div className="arena-keys">
+          <details className="arena-keys" style={{border:0,paddingTop:0,marginTop:0}} open={arenaKeysOpen||!isNarrow} onToggle={event=>{if(isNarrow)setArenaKeysOpen(event.currentTarget.open)}}>
+            <summary className="state-key" aria-label={arenaKeysOpen?'Hide arena key':'Show arena key'} style={{display:isNarrow?'flex':'none',pointerEvents:'auto',touchAction:'manipulation',cursor:'pointer',listStyle:'none'}}>{arenaKeysOpen?'Hide key':'Show key'}</summary>
             <div className="state-key" role="group" aria-label="Creature action and overlay key"><strong>Outline = action · number = current count · body color = speed</strong>{world.config.ecologyMode==='energy-regrowth'&&<strong>{ARENA_PATCH_STOCK_KEY}</strong>}{selected&&<strong>{ARENA_SELECTED_OVERLAY_KEY}</strong>}{selected?.mode==='hunting'&&<strong>{ARENA_HUNT_CONTACT_KEY}</strong>}<label htmlFor="arena-focus" style={{pointerEvents:'auto',display:'inline-flex',alignItems:'center',gap:5,flexBasis:'100%',justifyContent:'flex-end',fontWeight:700}}><span>Focus</span><select id="arena-focus" aria-label="Focus creatures by current action" value={arenaFocus} onChange={event=>setArenaFocus(event.target.value as 'all'|CreatureState)} style={{pointerEvents:'auto',touchAction:'manipulation',minWidth:0,maxWidth:'170px',minHeight:'28px',fontSize:'10px',lineHeight:1.2,padding:'3px 5px',border:0,borderRadius:'5px',backgroundColor:'var(--paper)',color:'var(--ink)',colorScheme:'light dark'}}>{ARENA_FOCUS_OPTIONS.map(option=><option key={option.value} value={option.value}>{formatArenaFocusOption(option.value,option.value==='all'?living:stateCounts[option.value])}</option>)}</select></label><small style={{flexBasis:'100%',textAlign:'right',fontSize:'9px',lineHeight:1.35,color:arenaFocus==='all'?'#a7bbb2':'#f6dd83'}}>{formatArenaFocusDescription(arenaFocus,arenaFocusCount,living,selectedOutsideArenaFocus)}</small>{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/><b>{stateCounts[state]}</b>{' '}{metadata.label}</span>)}</div>
             <div className="legend"><span>Body color = speed</span><i/><small>slower</small><small>faster</small></div>
-          </div>
+          </details>
           {extinct&&<div className="extinct" role="status"><strong>Population extinct</strong><span>Use Founder migration to rescue this run, or adjust the parameters and restart.</span></div>}
         </div>
         {selected&&<section className="inspector" aria-label={`Selected individual ${selected.individualId}`}>
