@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type React from 'react'
 import type { NextActionContext, NextActionResult } from '../simulation/scheduler'
+import { MAX_POPULATION } from '../simulation/config'
 import type { Mode, TargetType, World } from '../simulation/types'
 
 interface Props { world: World; revision: number;selectedIndividualId:number|null;onSelect:(individualId:number|null)=>void;arenaFocus:ArenaFocus }
@@ -13,6 +14,8 @@ export type ArenaPlaybackStatus = 'Running'|'Paused'|'Extinct'
 export const ARENA_PATCH_STOCK_KEY = 'Patch arcs = current food stock.'
 export const ARENA_SELECTED_OVERLAY_KEY = 'Selected: gold ring = focus; gold area = sight; dash = target; colored rings = memory; dotted rings = kin.'
 export const ARENA_HUNT_CONTACT_KEY = 'Hunts resolve against the nearest eligible prey at contact, which may differ from the dashed pursuit target.'
+export const ARENA_FOCUS_TARGET_PATH_KEY = 'Active matches with a held target show dashed paths; decisions can persist between reaction windows.'
+export const ARENA_SAFE_FOCUS_TARGET_PATH_KEY = 'Safe-at-home creatures have no active target paths.'
 export const ARENA_QUICK_START = [
   'Try this: pause → inspect a creature → finish generation.',
   'Then change one parameter and restart to compare.',
@@ -44,6 +47,16 @@ export function arenaCreatureAlpha(focus: ArenaFocus, state: CreatureState, sele
   return focus === 'all' || selected || focus === state ? 1 : ARENA_FOCUS_DIM_ALPHA
 }
 
+export type ArenaTargetPathCreature = Pick<World['creatures'][number], 'individualId' | 'x' | 'y' | 'alive' | 'home' | 'mode' | 'targetType' | 'targetX' | 'targetY'>
+
+/** Whether a creature has a safe-to-draw held-target path in the current action focus. */
+export function arenaTargetPathEligible(focus: ArenaFocus, creature: ArenaTargetPathCreature, selectedIndividualId: number | null = null): boolean {
+  if (focus === 'all' || !creature.alive || creature.home || creature.targetType === null) return false
+  if (selectedIndividualId !== null && creature.individualId === selectedIndividualId) return false
+  if ((creature.home ? 'safe' : creature.mode) !== focus) return false
+  return [creature.x, creature.y, creature.targetX, creature.targetY].every(Number.isFinite)
+}
+
 export function arenaLineageRingAlpha(): number {
   return 1
 }
@@ -51,10 +64,11 @@ export function arenaLineageRingAlpha(): number {
 export function formatArenaFocusDescription(focus: ArenaFocus, matchingCount?: number, livingCount?: number, selectedNonMatch=false): string {
   const counted=Number.isFinite(matchingCount)&&Number.isFinite(livingCount)
   if(focus==='all')return counted?`All living creatures are shown (${Math.max(0,Math.trunc(livingCount!))}).`:'All creatures are shown.'
-  if(!counted)return`Focus: ${ARENA_FOCUS_LABELS[focus]}; other creatures are dimmed.`
+  const pathDescription=focus==='safe'?ARENA_SAFE_FOCUS_TARGET_PATH_KEY:ARENA_FOCUS_TARGET_PATH_KEY
+  if(!counted)return`Focus: ${ARENA_FOCUS_LABELS[focus]}; other creatures are dimmed. ${pathDescription}`
   const total=Math.max(0,Math.trunc(livingCount!)),matching=Math.min(total,Math.max(0,Math.trunc(matchingCount!))),kept=selectedNonMatch&&matching<total?1:0,dimmed=total-matching-kept
   const summary=`Focus: ${ARENA_FOCUS_LABELS[focus]}; ${matching} ${matching===1?'creature matches':'creatures match'} and ${dimmed} ${dimmed===1?'other is':'others are'} dimmed.`
-  return kept?`${summary} The selected creature stays highlighted.`:summary
+  return `${kept?`${summary} The selected creature stays highlighted.`:summary} ${pathDescription}`
 }
 
 export function formatArenaFocusOption(focus: ArenaFocus, count: number): string {
@@ -233,10 +247,11 @@ export function formatArenaAccessibleDescription(input: ArenaAccessibleDescripti
     : `${input.foodCount} food remaining from a ${Math.round(input.foodBudget)}-item generation pulse across ${input.patchCount} patches`
   const overlayDescription = formatArenaOverlayDescription(input.ecologyMode, input.hasSelectedCreature, input.selectedIsHunting)
   const focusDescription = formatArenaFocusDescription(input.focus ?? 'all',input.focusCount,input.livingCreatures,input.selectedOutsideFocus)
+  const allFocusPathDescription = input.focus === 'all' ? ' Choose an action focus to reveal dashed current held-target paths for active matches; decisions can persist between reaction windows.' : ''
   const selectionHint = input.hasSelectedCreature
     ? ''
     : 'Select a creature to reveal its focus, sight, target, memory, and same-lineage overlays.'
-  return `Simulation arena, generation ${input.generation}, ${input.livingCreatures} living creatures: ${input.stateSummary}. ${resourceLabel}. ${input.obstacleCount} obstacles. ${overlayDescription ? `${overlayDescription} ` : ''}${focusDescription} ${selectionHint} Creature body color shows speed and the bright body outline shows its current action. Click a creature or use the inspector list to select it.`
+  return `Simulation arena, generation ${input.generation}, ${input.livingCreatures} living creatures: ${input.stateSummary}. ${resourceLabel}. ${input.obstacleCount} obstacles. ${overlayDescription ? `${overlayDescription} ` : ''}${focusDescription}${allFocusPathDescription} ${selectionHint} Creature body color shows speed and the bright body outline shows its current action. Click a creature or use the inspector list to select it.`
 }
 
 export const CREATURE_STATE_METADATA = {
@@ -412,6 +427,12 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect,arenaF
       ctx.strokeStyle=palette.fieldBorder;ctx.lineWidth=1;ctx.stroke()
       ctx.save();ctx.setLineDash([4,8]);ctx.strokeStyle=palette.fieldGrid;ctx.strokeRect(pad+10,pad+10,w-pad*2-20,h-pad*2-20);ctx.restore()
       const sx=(x:number)=>pad+x*(w-pad*2), sy=(y:number)=>pad+y*(h-pad*2)
+      const renderableCreatures=world.creatures.filter(c=>c.alive).slice(0,MAX_POPULATION)
+      if(arenaFocus!=='all')for(const c of renderableCreatures)if(arenaTargetPathEligible(arenaFocus,c,selectedIndividualId)){
+        const fromX=sx(c.x),fromY=sy(c.y),targetX=sx(c.targetX),targetY=sy(c.targetY)
+        const color=CREATURE_STATE_METADATA[arenaFocus].color
+        ctx.save();ctx.globalAlpha=.52;ctx.strokeStyle=color;ctx.lineWidth=1.25;ctx.setLineDash([5,5]);ctx.beginPath();ctx.moveTo(fromX,fromY);ctx.lineTo(targetX,targetY);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=color;ctx.beginPath();ctx.arc(targetX,targetY,Math.max(2.5,Math.min(w,h)*.009),0,Math.PI*2);ctx.fill();ctx.restore()
+      }
       const selected=world.creatures.find(creature=>creature.individualId===selectedIndividualId&&creature.alive)
       if(selected){
         const x=sx(selected.x),y=sy(selected.y),rx=selected.sense*(w-pad*2),ry=selected.sense*(h-pad*2),half=world.config.fieldOfView/360*Math.PI
@@ -439,7 +460,7 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect,arenaF
         const g=ctx.createRadialGradient(x-r*.25,y-r*.35,1,x,y,r);g.addColorStop(0,palette.foodStart);g.addColorStop(.4,palette.foodMiddle);g.addColorStop(1,palette.foodEnd)
         ctx.fillStyle=g;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill()
       }
-      const sorted=[...world.creatures].filter(c=>c.alive).sort((a,b)=>a.y-b.y)
+      const sorted=renderableCreatures.sort((a,b)=>a.y-b.y)
       for(const c of sorted){
         const x=sx(c.x),y=sy(c.y),base=Math.max(7,Math.min(w,h)*.017*c.size), height=base*1.55
         const stateKey=c.home?'safe':c.mode

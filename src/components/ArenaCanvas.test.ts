@@ -5,12 +5,15 @@ import {
   ARENA_FOCUS_DIM_ALPHA,
   ARENA_FOCUS_LABELS,
   ARENA_FOCUS_OPTIONS,
+  ARENA_SAFE_FOCUS_TARGET_PATH_KEY,
+  ARENA_FOCUS_TARGET_PATH_KEY,
   ARENA_LIGHT_PALETTE,
   ARENA_HUNT_CONTACT_KEY,
   ARENA_PATCH_STOCK_KEY,
   ARENA_QUICK_START,
   ARENA_SELECTED_OVERLAY_KEY,
   arenaCanvasPalette,
+  arenaTargetPathEligible,
   listenToArenaColorScheme,
   type ArenaColorSchemeQuery,
   arenaPlaybackStatus,
@@ -26,6 +29,7 @@ import {
   formatSelectedTarget,
   showArenaQuickStart,
   type ArenaAccessibleDescriptionInput,
+  type ArenaTargetPathCreature,
 } from './ArenaCanvas'
 import { createWorld, defaultConfig } from '../simulation/engine'
 import { advanceToNextAction } from '../simulation/scheduler'
@@ -167,6 +171,23 @@ describe('arena clarity helpers', () => {
     expect(formatArenaFocusOption('all', -3)).toBe('All creatures (0)')
   })
 
+  it('only enables held-target paths for finite, active creatures in the selected focus', () => {
+    const creature = (overrides: Partial<ArenaTargetPathCreature> = {}): ArenaTargetPathCreature => ({
+      individualId: 7, x: .2, y: .3, alive: true, home: false, mode: 'hunting', targetType: 'prey', targetX: .7, targetY: .8, ...overrides,
+    })
+    expect(arenaTargetPathEligible('all', creature())).toBe(false)
+    expect(arenaTargetPathEligible('foraging', creature())).toBe(false)
+    expect(arenaTargetPathEligible('hunting', creature())).toBe(true)
+    expect(arenaTargetPathEligible('hunting', creature({ alive: false }))).toBe(false)
+    expect(arenaTargetPathEligible('hunting', creature({ home: true }))).toBe(false)
+    expect(arenaTargetPathEligible('hunting', creature({ targetType: null }))).toBe(false)
+    expect(arenaTargetPathEligible('hunting', creature({ targetX: Number.NaN }))).toBe(false)
+    expect(arenaTargetPathEligible('hunting', creature({ targetY: Number.POSITIVE_INFINITY }))).toBe(false)
+    expect(arenaTargetPathEligible('hunting', creature({ x: Number.NEGATIVE_INFINITY }))).toBe(false)
+    expect(arenaTargetPathEligible('hunting', creature(), 7)).toBe(false)
+    expect(arenaTargetPathEligible('hunting', creature(), 8)).toBe(true)
+  })
+
   it('keeps same-lineage relationship rings readable around dimmed bodies', () => {
     expect(arenaCreatureAlpha('hunting', 'foraging')).toBe(ARENA_FOCUS_DIM_ALPHA)
     expect(arenaLineageRingAlpha()).toBe(1)
@@ -184,6 +205,10 @@ describe('arena clarity helpers', () => {
     expect(formatArenaFocusDescription('foraging',1,7)).toContain('1 creature matches and 6 others are dimmed.')
     const selectedOutside = formatArenaAccessibleDescription(descriptionInput({focus:'hunting',focusCount:2,livingCreatures:7,hasSelectedCreature:true,selectedOutsideFocus:true}))
     expect(selectedOutside).toContain('2 creatures match and 4 others are dimmed. The selected creature stays highlighted.')
+    expect(hunting).toContain(ARENA_FOCUS_TARGET_PATH_KEY)
+    expect(formatArenaFocusDescription('safe',2,7)).toContain(ARENA_SAFE_FOCUS_TARGET_PATH_KEY)
+    expect(formatArenaFocusDescription('safe',2,7)).not.toContain(ARENA_FOCUS_TARGET_PATH_KEY)
+    expect(all).toContain('Choose an action focus to reveal dashed current held-target paths for active matches')
   })
 
   it('gives extinction status precedence and formats day progress consistently', () => {
