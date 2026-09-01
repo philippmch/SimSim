@@ -29,6 +29,77 @@ export function buildSpeedHistogram(values:number[],bins=12){
 
 export const MAX_TIMELINE_ENTRIES=40
 export const BEHAVIOR_HISTORY_CONTEXT='Mean behavior traits in each next population; survivors and newborns combined.'
+export const GENERATION_JOURNAL_TARGET_ID='generation-journal'
+export const GENERATION_REVIEW_TARGET_ID='generation-review'
+export const GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE='data-generation-journal-focus-pending'
+
+export interface GenerationJournalJumpTarget {
+  disabled?:boolean
+  scrollIntoView:(options?:ScrollIntoViewOptions)=>void
+  focus:(options?:FocusOptions)=>void
+  setAttribute?:(name:string,value:string)=>void
+  removeAttribute?:(name:string)=>void
+  hasAttribute?:(name:string)=>boolean
+}
+
+export interface GenerationJournalJumpDocument {
+  getElementById:(id:string)=>GenerationJournalJumpTarget|null
+  activeElement?:GenerationJournalJumpTarget|null
+}
+
+export interface GenerationJournalJumpOptions {
+  document?:GenerationJournalJumpDocument
+  scheduleFocus?:(callback:()=>void)=>void
+}
+
+export const GENERATION_JOURNAL_SCROLL_OPTIONS:ScrollIntoViewOptions={behavior:'auto',block:'center',inline:'nearest'}
+
+const scheduleGenerationJournalFocus=(callback:()=>void)=>{
+  if(typeof requestAnimationFrame==='function')requestAnimationFrame(()=>callback())
+  else setTimeout(callback,0)
+}
+
+const journalReviewEnabled=(target:GenerationJournalJumpTarget|null):target is GenerationJournalJumpTarget=>Boolean(target&&!target.disabled)
+const markGenerationJournalFocusPending=(target:GenerationJournalJumpTarget)=>target.setAttribute?.(GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE,'true')
+const clearGenerationJournalFocusPending=(target:GenerationJournalJumpTarget|null)=>target?.removeAttribute?.(GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE)
+const hasGenerationJournalFocusPending=(target:GenerationJournalJumpTarget|null)=>Boolean(target?.hasAttribute?.(GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE))
+
+/** Complete a deferred journal jump after its lazy review selector mounts. */
+export function completePendingGenerationJournalFocus(options:Pick<GenerationJournalJumpOptions,'document'>={}):boolean{
+  const documentRef:GenerationJournalJumpDocument|null=options.document??(typeof document==='undefined'?null:document as unknown as GenerationJournalJumpDocument)
+  if(!documentRef)return false
+  const journal=documentRef.getElementById(GENERATION_JOURNAL_TARGET_ID)
+  if(!hasGenerationJournalFocusPending(journal))return false
+  if(documentRef.activeElement!==journal){clearGenerationJournalFocusPending(journal);return false}
+  const review=documentRef.getElementById(GENERATION_REVIEW_TARGET_ID)
+  if(!journalReviewEnabled(review))return false
+  review.focus({preventScroll:true})
+  clearGenerationJournalFocusPending(journal)
+  return true
+}
+
+/** Open the selected generation's journal review only when the user explicitly requests it. */
+export function openGenerationJournalReview(options:GenerationJournalJumpOptions={}):boolean{
+  const documentRef:GenerationJournalJumpDocument|null=options.document??(typeof document==='undefined'?null:document as unknown as GenerationJournalJumpDocument)
+  if(!documentRef)return false
+  const journal=documentRef.getElementById(GENERATION_JOURNAL_TARGET_ID),review=documentRef.getElementById(GENERATION_REVIEW_TARGET_ID),enabledReview=journalReviewEnabled(review),pending=!enabledReview&&Boolean(journal),scrollTarget=enabledReview?review:journal
+  if(!scrollTarget)return false
+  scrollTarget.scrollIntoView(GENERATION_JOURNAL_SCROLL_OPTIONS)
+  if(pending){
+    markGenerationJournalFocusPending(scrollTarget)
+    scrollTarget.focus({preventScroll:true})
+  }
+  const scheduleFocus=options.scheduleFocus??scheduleGenerationJournalFocus
+  scheduleFocus(()=>{
+    if(pending){completePendingGenerationJournalFocus({document:documentRef});return}
+    const currentReview=documentRef.getElementById(GENERATION_REVIEW_TARGET_ID),currentJournal=documentRef.getElementById(GENERATION_JOURNAL_TARGET_ID)
+    if(journalReviewEnabled(currentReview)){
+      currentReview.focus({preventScroll:true})
+      clearGenerationJournalFocusPending(currentJournal)
+    }
+  })
+  return true
+}
 
 const HISTORY_TRAITS:BiologicalTrait[]=['speed','size','sense','aggression','caution','exploration']
 const HISTORY_TRAIT_FIELDS:Record<BiologicalTrait,keyof HistoryPoint>={speed:'avgSpeed',size:'avgSize',sense:'avgSense',aggression:'avgAggression',caution:'avgCaution',exploration:'avgExploration'}
@@ -232,6 +303,7 @@ export function HistoryChart({world,requestedGeneration,onSelectGeneration}:Hist
   return <><div className="history-scrubber journal-controls" aria-label="History generation selector">
     <label className="metric-select" htmlFor="history-generation">Inspect generation <input id="history-generation" type="range" min={0} max={Math.max(0,entries.length-1)} step={1} value={selectedIndex} disabled={entries.length<2} aria-valuetext={formatTimelineSummary(selectedEntry)} onChange={event=>{const entry=entries[Number(event.target.value)];if(entry)onSelectGeneration(entry.generation)}}/></label>
     <output className="journal-equation">{formatTimelineSummary(selectedEntry)} · {requestedGeneration===null?'Following latest completed generation':`Pinned to generation ${selectedEntry.generation}`}</output>
+    <button type="button" className="settings-toggle journal-pin" aria-label={`Open journal review for generation ${selectedEntry.generation}`} onClick={()=>openGenerationJournalReview()}>Open journal review</button>
   </div>{shockNotice&&<div className="journal-events"><p className={shockNavigator.groups.length?'journal-kicker':'journal-warning'}>{shockNotice}</p>{shockNavigator.groups.length>0&&<div className="history-scrubber journal-controls" role="group" aria-label="Retained shocks by generation">{shockNavigator.groups.map(group=>{const selected=group.generation===selectedGeneration;return <button key={group.generation} type="button" className="settings-toggle journal-latest" aria-label={group.ariaLabel} aria-current={selected?'true':undefined} aria-pressed={selected} onClick={()=>onSelectGeneration(group.generation)}>{group.label}{group.partial?' · partial':''}</button>})}</div>}</div>}<div className="history-facets" role="group" aria-label={`Evolution history from generation ${start} to ${end}. Selected generation ${selectedEntry.generation}. Each row uses its own labeled scale. Population is a count; energy and age are observed means in each next population, descriptive, not causal.`}>
     <p className="journal-kicker">Energy and age are observed means in each next population; descriptive, not causal.</p>
     {series.map(s=>{

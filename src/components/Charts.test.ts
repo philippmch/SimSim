@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { BEHAVIOR_HISTORY_CONTEXT, buildGenerationDelta, buildHistoryTimeline, buildObservedNonnegativeDomain, buildRetainedShockNavigator, buildSpeedHistogram, formatGenerationDelta, formatRetainedShockNavigatorNotice, formatTimelineSummary, HistoryChart, historyCoordinate, MAX_TIMELINE_ENTRIES, RETAINED_SHOCK_ARIA_LABEL_LIMIT, RETAINED_SHOCK_CONTEXT, RETAINED_SHOCK_ORDER_NOTE, resolveTimelineGeneration, safeNonnegativeHistoryValue, SPEED_HISTOGRAM_DOMAIN, traitColor } from './Charts'
+import { BEHAVIOR_HISTORY_CONTEXT, buildGenerationDelta, buildHistoryTimeline, buildObservedNonnegativeDomain, buildRetainedShockNavigator, buildSpeedHistogram, completePendingGenerationJournalFocus, formatGenerationDelta, formatRetainedShockNavigatorNotice, formatTimelineSummary, GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE, GENERATION_JOURNAL_SCROLL_OPTIONS, HistoryChart, historyCoordinate, MAX_TIMELINE_ENTRIES, openGenerationJournalReview, RETAINED_SHOCK_ARIA_LABEL_LIMIT, RETAINED_SHOCK_CONTEXT, RETAINED_SHOCK_ORDER_NOTE, resolveTimelineGeneration, safeNonnegativeHistoryValue, SPEED_HISTOGRAM_DOMAIN, traitColor } from './Charts'
 import { speedColor } from './ArenaCanvas'
 import type { GenerationLedger, HistoryPoint, World, WorldEvent } from '../simulation/types'
 
@@ -9,6 +9,8 @@ const ledger=(generation:number,birthsAdmitted=generation%3):GenerationLedger=>(
 const point=(generation:number,population:number,avgEnergy:number|null=10,avgAge:number|null=2):HistoryPoint=>({generation,population,avgSpeed:1,avgSize:1,avgSense:.2,avgAggression:.4,avgCaution:.5,avgExploration:.6,sdSpeed:0,sdSize:0,sdSense:0,sdAggression:0,sdCaution:0,sdExploration:0,avgEnergy,avgAge})
 const shock=(generation:number,day:number,kind:WorldEvent['kind']='drought',summary=`${kind} recorded`,count=1):WorldEvent=>({generation,day,kind,summary,count})
 const chartWorld=(events:readonly WorldEvent[],generations=[1,2]):World=>({ledger:generations.map(generation=>ledger(generation)),history:generations.map(generation=>point(generation,generation*10)),events:[...events]} as unknown as World)
+type JournalTargetSpy={disabled?:boolean;attributes:Set<string>;scrollCalls:ScrollIntoViewOptions[];focusCalls:FocusOptions[];scrollIntoView:(options?:ScrollIntoViewOptions)=>void;focus:(options?:FocusOptions)=>void;setAttribute:(name:string,value:string)=>void;removeAttribute:(name:string)=>void;hasAttribute:(name:string)=>boolean}
+const journalTarget=(disabled=false):JournalTargetSpy=>({disabled,attributes:new Set(),scrollCalls:[],focusCalls:[],scrollIntoView(options){this.scrollCalls.push(options??{})},focus(options){this.focusCalls.push(options??{})},setAttribute(name){this.attributes.add(name)},removeAttribute(name){this.attributes.delete(name)},hasAttribute(name){return this.attributes.has(name)}})
 
 describe('speed histogram',()=>{
   it('includes the full valid speed domain with accurate final-bin bounds',()=>{
@@ -48,6 +50,66 @@ describe('generation history timeline',()=>{
   it('states that behavior history combines survivors and newborns',()=>{
     expect(BEHAVIOR_HISTORY_CONTEXT).toBe('Mean behavior traits in each next population; survivors and newborns combined.')
     expect(BEHAVIOR_HISTORY_CONTEXT).not.toContain('Inherited')
+  })
+
+  it('opens the selected journal review by scrolling immediately and scheduling focus on the enabled select',()=>{
+    const review=journalTarget(),journal=journalTarget(),documentRef={getElementById:(id:string)=>id==='generation-review'?review:id==='generation-journal'?journal:null}
+    const scheduled:(()=>void)[]=[]
+    expect(openGenerationJournalReview({document:documentRef,scheduleFocus:callback=>{scheduled.push(callback)}})).toBe(true)
+    expect(review.scrollCalls).toEqual([GENERATION_JOURNAL_SCROLL_OPTIONS])
+    expect(journal.scrollCalls).toEqual([])
+    expect(review.focusCalls).toEqual([])
+    expect(scheduled).toHaveLength(1)
+    scheduled[0]()
+    expect(review.focusCalls).toEqual([{preventScroll:true}])
+  })
+
+  it('uses the stable journal target when the review select is disabled or missing',()=>{
+    for(const review of [journalTarget(true),null]){
+      const journal=journalTarget(),documentRef={activeElement:null as JournalTargetSpy|null,getElementById:(id:string)=>id==='generation-review'?review:id==='generation-journal'?journal:null}
+      const scheduled:(()=>void)[]=[]
+      expect(openGenerationJournalReview({document:documentRef,scheduleFocus:callback=>{scheduled.push(callback)}})).toBe(true)
+      expect(journal.scrollCalls).toEqual([GENERATION_JOURNAL_SCROLL_OPTIONS])
+      expect(journal.focusCalls).toEqual([{preventScroll:true}])
+      expect(journal.hasAttribute(GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE)).toBe(true)
+      documentRef.activeElement=journal
+      expect(scheduled).toHaveLength(1)
+      scheduled[0]()
+      expect(journal.focusCalls).toHaveLength(1)
+      expect(journal.hasAttribute(GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE)).toBe(true)
+    }
+  })
+
+  it('transfers pending focus to the review select when it mounts and clears the marker',()=>{
+    const journal=journalTarget(),reviewTarget={current:null as JournalTargetSpy|null},documentRef={activeElement:null as JournalTargetSpy|null,getElementById:(id:string)=>id==='generation-review'?reviewTarget.current:id==='generation-journal'?journal:null},scheduled:(()=>void)[]=[]
+    expect(openGenerationJournalReview({document:documentRef,scheduleFocus:callback=>{scheduled.push(callback)}})).toBe(true)
+    documentRef.activeElement=journal
+    const review=journalTarget()
+    reviewTarget.current=review
+    scheduled[0]()
+    expect(review.focusCalls).toEqual([{preventScroll:true}])
+    expect(journal.hasAttribute(GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE)).toBe(false)
+    expect(completePendingGenerationJournalFocus({document:documentRef})).toBe(false)
+  })
+
+  it('clears a pending marker without stealing focus after the user moves away',()=>{
+    const journal=journalTarget(),reviewTarget={current:null as JournalTargetSpy|null},other=journalTarget(),documentRef={activeElement:null as JournalTargetSpy|null,getElementById:(id:string)=>id==='generation-review'?reviewTarget.current:id==='generation-journal'?journal:null},scheduled:(()=>void)[]=[]
+    expect(openGenerationJournalReview({document:documentRef,scheduleFocus:callback=>{scheduled.push(callback)}})).toBe(true)
+    documentRef.activeElement=journal
+    const review=journalTarget()
+    reviewTarget.current=review
+    documentRef.activeElement=other
+    expect(completePendingGenerationJournalFocus({document:documentRef})).toBe(false)
+    expect(review.focusCalls).toEqual([])
+    expect(journal.hasAttribute(GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE)).toBe(false)
+    scheduled[0]()
+    expect(review.focusCalls).toEqual([])
+  })
+
+  it('returns false without scheduling when neither journal target exists',()=>{
+    let scheduled=false
+    expect(openGenerationJournalReview({document:{getElementById:()=>null},scheduleFocus:()=>{scheduled=true}})).toBe(false)
+    expect(scheduled).toBe(false)
   })
 
   it('excludes generation zero and joins history by generation rather than index',()=>{
@@ -127,6 +189,14 @@ describe('energy and age history facets',()=>{
     expect(markup).toContain('0.00–3.75')
     expect(markup).not.toContain('Population mean')
     expect(markup).not.toContain('<strong>Population mean</strong>')
+  })
+
+  it('renders a named journal-review button only when timeline entries exist',()=>{
+    const markup=renderToStaticMarkup(createElement(HistoryChart,{world:chartWorld([]),requestedGeneration:2,onSelectGeneration:()=>{}}))
+    expect(markup).toContain('>Open journal review</button>')
+    expect(markup).toContain('aria-label="Open journal review for generation 2"')
+    const emptyMarkup=renderToStaticMarkup(createElement(HistoryChart,{world:chartWorld([],[]),requestedGeneration:null,onSelectGeneration:()=>{}}))
+    expect(emptyMarkup).not.toContain('Open journal review')
   })
 
   it('renders unavailable malformed values without leaking nonfinite text or path coordinates',()=>{

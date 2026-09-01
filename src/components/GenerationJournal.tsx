@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { getSelectionTakeaway, MAX_WORLD_EVENTS, meetsStandardizedEffectThreshold, SELECTION_PATTERN_MIN_COUNT, SELECTION_PATTERN_THRESHOLD, snapStandardizedEffect } from '../simulation/engine'
 import { END_CAUSES } from '../simulation/types'
 import type { AttackAttemptBasis, BiologicalTrait, EndCause, GenerationLedger, InheritanceTraitSummary, SelectionSummary, WorldEvent } from '../simulation/types'
+import { completePendingGenerationJournalFocus } from './Charts'
 
 export const MAX_JOURNAL_ENTRIES = 40
 
@@ -341,12 +342,13 @@ export function GenerationJournal({ledgers,events,requestedGeneration,onRequeste
   useEffect(()=>{
     if(requestedGeneration!==null&&selection.selectedGeneration!==requestedGeneration)onRequestedGenerationChange(selection.selectedGeneration)
   },[onRequestedGenerationChange,requestedGeneration,selection.entries.length,selection.selectedGeneration])
+  useEffect(()=>{completePendingGenerationJournalFocus()},[selection.entries.length,selection.selectedGeneration])
 
   const chooseGeneration=(value:string)=>onRequestedGenerationChange(value===''?null:Number(value))
   const pinCurrent=()=>onRequestedGenerationChange(pinCurrentGeneration(ledgers,requestedGeneration))
   const followLatest=()=>onRequestedGenerationChange(null)
 
-  return <section className="evolution-story generation-journal" aria-labelledby="generation-journal-title">
+  return <div className="evolution-story generation-journal">
     <div className="story-head">
       <div><h2 id="generation-journal-title">Generation journal</h2><p>Review one completed generation at a time. Older reviews stay pinned while the run continues.</p></div>
       <div className="journal-controls">
@@ -374,7 +376,7 @@ export function GenerationJournal({ledgers,events,requestedGeneration,onRequeste
       {pressureFingerprints.length>0&&<div className="event-story journal-events pressure-patterns"><h3>Outcome trait patterns</h3><p className="journal-kicker">Compared with the evaluated cohort; associations are descriptive, not proof of cause.</p><ul>{pressureFingerprints.map(fingerprint=>{const comparison=fingerprint.comparison,means=comparison?formatAdaptivePair(comparison.outcomeMean,comparison.baselineMean):null;return <li key={fingerprint.cause}><span>{fingerprint.label} · n={fingerprint.count}</span>{comparison&&means?<strong>{comparison.traitLabel}: {means[0]} vs cohort {means[1]} ({comparison.direction})</strong>:<strong>Trait comparison unavailable.</strong>}<span>{fingerprint.interpretation}</span></li>})}</ul></div>}
       <div className="event-story journal-events"><h3>Ecosystem events · generation {review.generation}</h3>{eventReview.events.length?<>{eventReview.status==='partial'&&<p className="journal-kicker">Showing retained events; earlier events from this generation may no longer be available.</p>}<ul>{eventReview.events.map((event,index)=><li key={`${isValidJournalEventGeneration(journalEventField(event,'generation'))?journalEventField(event,'generation'):'unknown'}-${isValidJournalEventDay(journalEventField(event,'day'))?journalEventField(event,'day'):'unavailable'}-${journalEventSortKind(event)}-${index}`}><span>{formatJournalEventDay(journalEventField(event,'day'))}</span><strong>{formatJournalEventSummary(journalEventField(event,'summary'))}</strong></li>)}</ul></>:<p className="journal-kicker">{eventReview.status==='unknown'?'Event history is unavailable for this generation.':'No shocks occurred in this generation.'}</p>}</div>
     </>}
-  </section>
+  </div>
 }
 
 export default GenerationJournal

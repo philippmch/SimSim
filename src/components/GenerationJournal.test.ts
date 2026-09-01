@@ -141,6 +141,10 @@ describe('generation journal helpers',()=>{
       {generation:2,day:1,kind:null,summary:null,count:1},
     ] as unknown as WorldEvent[]
     const markup=renderToStaticMarkup(createElement(GenerationJournal,{ledgers:[makeLedger(2)],events,requestedGeneration:null,onRequestedGenerationChange:()=>{}}))
+    expect(markup).not.toContain('id="generation-journal"')
+    expect(markup).toContain('<div class="evolution-story generation-journal">')
+    expect(markup).not.toContain('aria-labelledby="generation-journal-title"')
+    expect(markup).toContain('id="generation-review"')
     expect(markup).toContain(JOURNAL_EVENT_DAY_UNAVAILABLE)
     expect(markup).toContain(JOURNAL_EVENT_SUMMARY_UNAVAILABLE)
     expect(markup.match(/Event summary unavailable\./g)).toHaveLength(2)
