@@ -2,12 +2,13 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { ARENA_FOCUS_OPTIONS, ARENA_HUNT_CONTACT_KEY, ARENA_PATCH_STOCK_KEY, ARENA_QUICK_START, ARENA_SELECTED_OVERLAY_KEY, ArenaCanvas, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress, formatArenaFocusDescription, formatArenaFocusOption, formatArenaPlaybackDetail, formatObservedPath, formatSelectedTarget, showArenaQuickStart } from './components/ArenaCanvas'
 import type { ArenaPlaybackStatus, CreatureState } from './components/ArenaCanvas'
 import { GenerationForecast } from './components/GenerationForecast'
-import { createWorld, formatLatestWorldEvent, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
+import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
 import { MAX_FOOD,MAX_FOUNDER_MIGRATION_BATCH,MAX_POPULATION, sanitizeConfig } from './simulation/config'
 import { createController } from './simulation/controller'
 import type { SimulationController,SimulationSnapshotMeta } from './simulation/controller'
 import { experimentUrl,loadInitialConfig,persistExperiment } from './simulation/share'
 import type { Config,InterventionKind,LastInspectedOutcome, World } from './simulation/types'
+import InterventionFeed from './components/InterventionFeed'
 
 const ExperimentPanel=lazy(()=>import('./components/ExperimentPanel').then(module=>({default:module.ExperimentPanel})))
 const GenerationJournal=lazy(()=>import('./components/GenerationJournal'))
@@ -323,8 +324,8 @@ function App(){
           <button onClick={()=>intervene('resource-bloom')} disabled={world.food.length>=MAX_FOOD} title={world.food.length>=MAX_FOOD?'Food is at the safety cap':'Add a deterministic pulse of food'}>Resource bloom</button>
           <button onClick={()=>intervene('drought')} disabled={!world.food.length} title={!world.food.length?'There is no food to remove':'Remove 40% of current food'}>Drought</button>
           <button onClick={()=>intervene('founder-migration')} disabled={founderMigrationCopy.available===0} title={founderMigrationCopy.title} aria-label={founderMigrationCopy.ariaLabel}>{founderMigrationCopy.buttonLabel}</button>
-          <output aria-live="polite">{formatLatestWorldEvent(world.events.at(-1),world.generation)}</output>
         </div>
+        <InterventionFeed events={world.events}/>
         {dirty&&<div className="pending" role="status">Changes are staged and will take effect when you choose <strong>Apply &amp; restart</strong>.</div>}
 
         <section className="dashboard" aria-label="Live statistics">

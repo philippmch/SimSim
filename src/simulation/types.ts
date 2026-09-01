@@ -78,7 +78,7 @@ export interface LastInspectedOutcome{individualId:number;generation:number;caus
 export type AttackAttemptBasis='claims'|'admitted'
 export interface GenerationLedger{generation:number;startPopulation:number;outcomes:Record<EndCause,number>;foodAtStart:number;foodProduced:number;foodRemoved:number;foodConsumed:number;foodRemaining:number;preyConsumed:number;attackAttempts:number;attackSuccesses:number;attackFailures:number;/** Optional for legacy ledgers retained before contested-attack telemetry. */attackContested?:number;/** Optional for legacy ledgers retained before attempt-basis telemetry. */attackAttemptBasis?:AttackAttemptBasis;birthsEligible:number;birthsAdmitted:number;birthsCapped:number;selection:{start:SelectionSummary;survivor:SelectionSummary;reproducer:SelectionSummary};selectionByOutcome:Record<EndCause,SelectionSummary>;inheritance?:InheritanceSummary}
 export type InterventionKind='resource-bloom'|'drought'|'founder-migration'
-export interface WorldEvent{generation:number;day:number;kind:InterventionKind;summary:string;count:number}
+export interface WorldEvent{generation:number;day:number;kind:InterventionKind;summary:string;count:number;/** Optional for retained legacy records created before live-announcement sequencing. */sequence?:number}
 export interface LineageShare{lineageId:number;count:number;share:number}
 export interface SelectionShift{trait:BiologicalTrait;survivor:number|null;reproducer:number|null}
 export interface LineageAnalytics{livingLineages:number;effectiveDiversity:number;topLineages:LineageShare[];latestGeneration:number|null;selectionShifts:SelectionShift[]}

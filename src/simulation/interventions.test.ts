@@ -44,6 +44,26 @@ describe('live interventions',()=>{
     expect(a).toEqual(b)
   })
 
+  it('sequences identical same-cursor shock records monotonically',()=>{
+    const world=createWorld({...defaultConfig,seed:920})
+    applyIntervention(world,'founder-migration')
+    applyIntervention(world,'founder-migration')
+    expect(world.events.map(event=>event.sequence)).toEqual([1,2])
+    expect(world.events[0].summary).toBe(world.events[1].summary)
+  })
+
+  it('rebases the retained event window before the safe sequence ceiling can collide',()=>{
+    const world=createWorld({...defaultConfig,seed:921})
+    world.events=[
+      {generation:1,day:0,kind:'founder-migration',summary:'8 new founders migrated into the population.',count:8,sequence:Number.MAX_SAFE_INTEGER-1},
+      {generation:1,day:0,kind:'founder-migration',summary:'8 new founders migrated into the population.',count:8,sequence:Number.MAX_SAFE_INTEGER},
+    ]
+    applyIntervention(world,'founder-migration')
+    applyIntervention(world,'founder-migration')
+    expect(world.events.map(event=>event.sequence)).toEqual([1,2,3,4])
+    expect(new Set(world.events.map(event=>event.sequence)).size).toBe(world.events.length)
+  })
+
   it('maintains food stock, capacity, population, and bounded events',()=>{
     const world=createWorld({...defaultConfig,seed:44,initialPopulation:MAX_POPULATION-2,patchCapacity:12})
     expect(applyIntervention(world,'founder-migration')).toBe(2)
@@ -57,6 +77,7 @@ describe('live interventions',()=>{
     for(let i=0;i<70;i++)applyIntervention(world,'drought')
     expect(world.events).toHaveLength(60)
     expect(world.events.at(-1)).toMatchObject({kind:'drought',generation:1,count:0})
+    expect(world.events.at(-1)!.sequence!-world.events[0].sequence!).toBe(59)
   })
 
   it('pluralizes founder arrivals and uses the shared migration batch cap',()=>{

@@ -90,7 +90,9 @@ export function formatLatestWorldEvent(event:WorldEvent|null|undefined,currentGe
 
 function recordEvent(world:World,kind:InterventionKind,summary:string,count:number){
   world.events??=[]
-  world.events.push({generation:world.generation,day:Number(world.dayTime.toFixed(2)),kind,summary,count})
+  let latestSequence=world.events.reduce((latest,event)=>{const candidate=(event as Partial<WorldEvent>|null)?.sequence;return typeof candidate==='number'&&Number.isSafeInteger(candidate)&&candidate>=1?Math.max(latest,candidate):latest},0)
+  if(latestSequence===Number.MAX_SAFE_INTEGER){world.events=world.events.slice(-MAX_WORLD_EVENTS).map((event,index)=>({...event,sequence:index+1}));latestSequence=world.events.length}
+  world.events.push({generation:world.generation,day:Number(world.dayTime.toFixed(2)),kind,summary,count,sequence:latestSequence+1})
   if(world.events.length>MAX_WORLD_EVENTS)world.events=world.events.slice(-MAX_WORLD_EVENTS)
 }
 
