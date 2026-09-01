@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, PlaybackPhaseStatus, resolveTerminalOutcome, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
+import { formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveTerminalOutcome, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
 import { formatPerceptionTelemetry } from './components/CreatureInspector'
 import { createWorld, defaultConfig } from './simulation/engine'
 import type { LastInspectedOutcome, PerceptionDiagnostics } from './simulation/types'
@@ -224,5 +224,14 @@ describe('generation accounting loading state', () => {
     expect(markup).toContain('Generation accounting')
     expect(markup).toContain('Loading generation accounting…')
     expect(markup.match(/aria-busy="true"/g)).toHaveLength(2)
+  })
+})
+
+describe('parameters loading state', () => {
+  it('keeps the static settings shell useful while the controls load', () => {
+    const markup = renderToStaticMarkup(createElement(ParametersPanelFallback))
+    expect(markup).toContain('role="status"')
+    expect(markup).toContain('aria-busy="true"')
+    expect(markup).toContain('Opening parameter controls…')
   })
 })
