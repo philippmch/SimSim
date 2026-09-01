@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { meetsStandardizedEffectThreshold, SELECTION_PATTERN_THRESHOLD } from '../simulation/engine'
 import type { BiologicalTrait, GenerationLedger, InheritanceTraitSummary, SelectionSummary, TraitMoments, WorldEvent } from '../simulation/types'
 import { clampJournalGeneration, deriveGenerationInterpretation, deriveGenerationReview, deriveInheritanceAudit, deriveJournalEvents, derivePressureFingerprints, filterJournalEvents, formatAdaptivePair, formatAttackAttemptLabel, formatAttackBasisNote, getJournalEventStatus, getRecentGenerationLedgers, MAX_JOURNAL_ENTRIES, pinCurrentGeneration, resolveJournalSelection } from './GenerationJournal'
 
@@ -212,6 +213,8 @@ describe('generation journal helpers',()=>{
     const weak=makeLedger(10,{outcomes:{survived:3,hunted:0,energy:0,unfed:0,late:0,aged:0},selection:{start:baseline,survivor:selection(1),reproducer:selection(1)},selectionByOutcome:{survived:profile({speed:{mean:1.05,variance:.04,sd:.2}}),hunted:selection(null),energy:selection(null),unfed:selection(null),late:selection(null),aged:selection(null)}})
     expect(derivePressureFingerprints(weak)[0]).toMatchObject({status:'no-standout'})
     expect(derivePressureFingerprints(weak)[0].comparison?.standardizedDelta).toBeCloseTo(.25)
+    expect(derivePressureFingerprints(weak)[0].interpretation).toContain(`No outcome pattern reached the ${SELECTION_PATTERN_THRESHOLD} baseline-SD threshold.`)
+    expect(derivePressureFingerprints(weak)[0].interpretation).toContain('+0.25 baseline SD')
 
     const few=makeLedger(11,{outcomes:{survived:2,hunted:0,energy:0,unfed:0,late:0,aged:0},selection:{start:baseline,survivor:selection(1),reproducer:selection(1)},selectionByOutcome:{survived:profile({speed:{mean:1.5,variance:.04,sd:.2}}),hunted:selection(null),energy:selection(null),unfed:selection(null),late:selection(null),aged:selection(null)}})
     expect(derivePressureFingerprints(few)[0].status).toBe('too-few')
@@ -220,6 +223,35 @@ describe('generation journal helpers',()=>{
     expect(derivePressureFingerprints(noSpread)[0]).toMatchObject({status:'baseline-unavailable',comparison:{outcomeMean:1.5,baselineMean:1,standardizedDelta:null}})
     const missingSpread=makeLedger(12,{outcomes:{survived:3,hunted:0,energy:0,unfed:0,late:0,aged:0},selection:{start:profile({speed:{mean:1,variance:null,sd:null}}),survivor:selection(1),reproducer:selection(1)},selectionByOutcome:{survived:profile({speed:{mean:1.5,variance:.04,sd:.2}}),hunted:selection(null),energy:selection(null),unfed:selection(null),late:selection(null),aged:selection(null)}})
     expect(derivePressureFingerprints(missingSpread)[0].status).toBe('baseline-unavailable')
+  })
+
+  it('keeps the outcome pattern boundary at the shared 0.5 baseline-SD constant',()=>{
+    const outcomeLedger=(generation:number,effect:number,startMean=1,startSd=.2)=>{
+      const baseline=profile({speed:{mean:startMean,variance:startSd**2,sd:startSd}})
+      return makeLedger(generation,{outcomes:{survived:3,hunted:0,energy:0,unfed:0,late:0,aged:0},selection:{start:baseline,survivor:selection(1),reproducer:selection(1)},selectionByOutcome:{survived:profile({speed:{mean:startMean+effect*startSd,variance:startSd**2,sd:startSd}}),hunted:selection(null),energy:selection(null),unfed:selection(null),late:selection(null),aged:selection(null)}})
+    }
+    const justBelow=derivePressureFingerprints(outcomeLedger(30,.49))[0]
+    expect(justBelow.status).toBe('no-standout')
+    expect(justBelow.interpretation).toContain('+0.49 baseline SD')
+    expect(justBelow.interpretation).toContain(`No outcome pattern reached the ${SELECTION_PATTERN_THRESHOLD} baseline-SD threshold.`)
+    const atThreshold=derivePressureFingerprints(outcomeLedger(31,.5))[0]
+    expect(atThreshold.status).toBe('pattern')
+    expect(atThreshold.interpretation).toContain('Possible pattern — descriptive, not causal')
+    expect(atThreshold.interpretation).toContain('+0.5 baseline SD')
+    const exactPatternPositive=.7-.2,exactPatternNegative=-(.7-.2)
+    expect(exactPatternPositive).toBeLessThan(SELECTION_PATTERN_THRESHOLD)
+    expect(exactPatternNegative).toBeGreaterThan(-SELECTION_PATTERN_THRESHOLD)
+    expect(meetsStandardizedEffectThreshold(exactPatternPositive,SELECTION_PATTERN_THRESHOLD)).toBe(true)
+    expect(meetsStandardizedEffectThreshold(exactPatternNegative,SELECTION_PATTERN_THRESHOLD)).toBe(true)
+    const positive=derivePressureFingerprints(outcomeLedger(32,exactPatternPositive,.4,1))[0]
+    const negative=derivePressureFingerprints(outcomeLedger(33,exactPatternNegative,.4,1))[0]
+    expect(positive.status).toBe('pattern')
+    expect(negative.status).toBe('pattern')
+    expect(positive.interpretation).toContain('Possible pattern — descriptive, not causal')
+    expect(negative.interpretation).toContain('Possible pattern — descriptive, not causal')
+    const nearBoundary=derivePressureFingerprints(outcomeLedger(34,SELECTION_PATTERN_THRESHOLD-.0001))[0]
+    expect(nearBoundary.status).toBe('no-standout')
+    expect(nearBoundary.interpretation).toContain('+0.4999 baseline SD')
   })
 
   it('omits empty outcomes and stays honest when old runtime data lacks profiles',()=>{

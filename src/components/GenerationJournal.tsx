@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
-import { getSelectionTakeaway, MAX_WORLD_EVENTS } from '../simulation/engine'
+import { getSelectionTakeaway, MAX_WORLD_EVENTS, meetsStandardizedEffectThreshold, SELECTION_PATTERN_MIN_COUNT, SELECTION_PATTERN_THRESHOLD, snapStandardizedEffect } from '../simulation/engine'
 import { END_CAUSES } from '../simulation/types'
 import type { AttackAttemptBasis, BiologicalTrait, EndCause, GenerationLedger, InheritanceTraitSummary, SelectionSummary, WorldEvent } from '../simulation/types'
 
@@ -166,8 +166,8 @@ export function derivePressureFingerprints(ledger:GenerationLedger|undefined):Pr
       const bestMagnitude=Math.abs(best.standardizedDelta??best.delta),candidateMagnitude=Math.abs(candidate.standardizedDelta??candidate.delta)
       return candidateMagnitude>bestMagnitude?candidate:best
     })
-    const status:PressureFingerprintStatus=count<3?'too-few':!standardized.length?'baseline-unavailable':Math.abs(strongest.standardizedDelta??0)>=.5?'pattern':'no-standout'
-    const interpretation=status==='pattern'?`Possible pattern — descriptive, not causal: this group was ${strongest.direction} on average (${formatSignedEffect(strongest.standardizedDelta??0)} baseline SD).`:status==='too-few'?'Too few observations to read a pattern.':status==='baseline-unavailable'?'Baseline spread unavailable, so this comparison cannot be standardized.':'No trait stood out (standardized difference < 0.5).'
+    const status:PressureFingerprintStatus=count<SELECTION_PATTERN_MIN_COUNT?'too-few':!standardized.length?'baseline-unavailable':meetsStandardizedEffectThreshold(strongest.standardizedDelta??0,SELECTION_PATTERN_THRESHOLD)?'pattern':'no-standout'
+    const interpretation=status==='pattern'?`Possible pattern — descriptive, not causal: this group was ${strongest.direction} on average (${formatSignedEffect(strongest.standardizedDelta??0)} baseline SD).`:status==='too-few'?'Too few observations to read a pattern.':status==='baseline-unavailable'?'Baseline spread unavailable, so this comparison cannot be standardized.':`No outcome pattern reached the ${SELECTION_PATTERN_THRESHOLD} baseline-SD threshold. Strongest observed difference was ${formatSignedEffect(strongest.standardizedDelta??0)} baseline SD.`
     return[{cause,label,count,comparison:strongest,status,interpretation}]
   })
 }
@@ -263,7 +263,15 @@ export function formatAdaptivePair(first:number,second:number):[string,string]{
   return[first.toFixed(6),second.toFixed(6)]
 }
 
-const formatSignedEffect=(value:number)=>`${value>=0?'+':''}${value.toFixed(1)}`
+const formatSignedEffect=(value:number)=>{
+  const displayEffect=snapStandardizedEffect(value),magnitude=Math.abs(displayEffect)
+  let decimals=1
+  if(magnitude<SELECTION_PATTERN_THRESHOLD){
+    decimals=2
+    while(decimals<12&&Number(magnitude.toFixed(decimals))>=SELECTION_PATTERN_THRESHOLD)decimals++
+  }
+  return`${displayEffect>=0?'+':'-'}${magnitude.toFixed(decimals)}`
+}
 
 export function GenerationJournal({ledgers,events,requestedGeneration,onRequestedGenerationChange}:GenerationJournalProps){
   const previousLatestGeneration=useRef<number|null>(null)
