@@ -2,6 +2,7 @@ import type {Config,EcologyMode,PerceptionMode,PredationMode} from './types'
 
 export const CONFIG_VERSION=4
 export const MAX_POPULATION=120
+export const MAX_FOUNDER_MIGRATION_BATCH=8
 export const MAX_FOOD=180
 export const MAX_HISTORY_POINTS=240
 /** Fresh experiments opt into the v4 mechanics; legacy imports override these modes. */

@@ -4,7 +4,7 @@ import { clamp,distance,random } from './random'
 import { advanceFoodBudget,createEnvironment,effectiveFoodRegrowthRate,enforceAdvancedPatchCapacity,spawnFood,spawnRegrownFood,syncPatchStocks } from './environment'
 import { decide,type Decision } from './behavior'
 import { proposeMotion } from './motion'
-import {defaultConfig,MAX_FOOD,MAX_HISTORY_POINTS,MAX_POPULATION,sanitizeConfig} from './config'
+import {defaultConfig,MAX_FOOD,MAX_FOUNDER_MIGRATION_BATCH,MAX_HISTORY_POINTS,MAX_POPULATION,sanitizeConfig} from './config'
 import {perceiveCanonical,reactionWindowFor} from './perception'
 import {collectAttackClaims,resolveAttackClaims} from './predation'
 import {advanceResourceDynamics,consumeResourceStock} from './resourceDynamics'
@@ -117,9 +117,9 @@ export function applyIntervention(world:World,kind:InterventionKind){
     return count
   }
   const available=Math.max(0,MAX_POPULATION-world.creatures.filter(creature=>creature.alive).length)
-  const count=Math.min(8,available)
+  const count=Math.min(MAX_FOUNDER_MIGRATION_BATCH,available)
   for(let i=0;i<count;i++)world.creatures.push(makeCreature(world,{},undefined,true))
-  recordEvent(world,kind,count?`${count} new founders migrated into the population.`:'Migration was capped; the population is full.',count)
+  recordEvent(world,kind,count?`${count} new founder${count===1?'':'s'} migrated into the population.`:'Migration was capped; the population is full.',count)
   return count
 }
 

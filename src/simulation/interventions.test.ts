@@ -1,6 +1,6 @@
 import{describe,expect,it}from'vitest'
 import{applyIntervention,createWorld,finishGeneration,formatLatestWorldEvent,getLineageAnalytics,getSelectionTakeaway,meetsStandardizedEffectThreshold,SELECTION_PATTERN_MIN_COUNT,SELECTION_PATTERN_THRESHOLD,SELECTION_SIGNAL_THRESHOLD,setInspectedIndividual,SIMULATION_TIMESTEP,tick}from'./engine'
-import{defaultConfig,MAX_FOOD,MAX_POPULATION}from'./config'
+import{defaultConfig,MAX_FOOD,MAX_FOUNDER_MIGRATION_BATCH,MAX_POPULATION}from'./config'
 import type{BiologicalTrait,GenerationLedger,SelectionSummary}from'./types'
 
 const summary=(mean:number|null):SelectionSummary=>Object.fromEntries(['speed','size','sense','aggression','caution','exploration'].map(trait=>[trait,{mean,variance:mean===null?null:0,sd:mean===null?null:0}]))as SelectionSummary
@@ -57,6 +57,33 @@ describe('live interventions',()=>{
     for(let i=0;i<70;i++)applyIntervention(world,'drought')
     expect(world.events).toHaveLength(60)
     expect(world.events.at(-1)).toMatchObject({kind:'drought',generation:1,count:0})
+  })
+
+  it('pluralizes founder arrivals and uses the shared migration batch cap',()=>{
+    const singular=createWorld({...defaultConfig,seed:45,initialPopulation:MAX_POPULATION-1})
+    expect(applyIntervention(singular,'founder-migration')).toBe(1)
+    expect(singular.events.at(-1)).toMatchObject({kind:'founder-migration',count:1,summary:'1 new founder migrated into the population.'})
+
+    const batched=createWorld({...defaultConfig,seed:46,initialPopulation:MAX_POPULATION-MAX_FOUNDER_MIGRATION_BATCH-2})
+    expect(applyIntervention(batched,'founder-migration')).toBe(MAX_FOUNDER_MIGRATION_BATCH)
+    expect(batched.events.at(-1)?.summary).toBe(`${MAX_FOUNDER_MIGRATION_BATCH} new founders migrated into the population.`)
+    expect(applyIntervention(batched,'founder-migration')).toBe(2)
+    expect(batched.events.at(-1)?.summary).toBe('2 new founders migrated into the population.')
+    expect(applyIntervention(batched,'founder-migration')).toBe(0)
+    expect(batched.events.at(-1)?.summary).toBe('Migration was capped; the population is full.')
+  })
+
+  it('admits the full shared batch at exactly 112 living creatures and rescues dead cohorts',()=>{
+    const exact=createWorld({...defaultConfig,seed:47,initialPopulation:MAX_POPULATION-MAX_FOUNDER_MIGRATION_BATCH})
+    expect(exact.creatures.filter(creature=>creature.alive)).toHaveLength(MAX_POPULATION-MAX_FOUNDER_MIGRATION_BATCH)
+    expect(applyIntervention(exact,'founder-migration')).toBe(MAX_FOUNDER_MIGRATION_BATCH)
+    expect(exact.creatures.filter(creature=>creature.alive)).toHaveLength(MAX_POPULATION)
+
+    const rescue=createWorld({...defaultConfig,seed:48,initialPopulation:3})
+    for(const creature of rescue.creatures)creature.alive=false
+    expect(applyIntervention(rescue,'founder-migration')).toBe(MAX_FOUNDER_MIGRATION_BATCH)
+    expect(rescue.creatures.filter(creature=>creature.alive)).toHaveLength(MAX_FOUNDER_MIGRATION_BATCH)
+    expect(rescue.creatures).toHaveLength(3+MAX_FOUNDER_MIGRATION_BATCH)
   })
 
   it('clears inspection when the selected creature dies',()=>{

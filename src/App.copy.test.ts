@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveTerminalOutcome, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
+import { formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveTerminalOutcome, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
 import { formatPerceptionTelemetry } from './components/CreatureInspector'
 import { createWorld, defaultConfig } from './simulation/engine'
+import { MAX_FOUNDER_MIGRATION_BATCH, MAX_POPULATION } from './simulation/config'
 import type { LastInspectedOutcome, PerceptionDiagnostics } from './simulation/types'
 
 const ready = (overrides: Partial<NextActionCopyInput> = {}): NextActionCopyInput => ({
@@ -123,6 +124,41 @@ describe('next action control copy', () => {
 
     expect(copy.buttonLabel).not.toContain('17')
     expect(copy.ariaLabel).not.toContain('Individual 17')
+  })
+})
+
+describe('founder migration control copy', () => {
+  const liveConfig = (founderPhysicalVariation = defaultConfig.founderPhysicalVariation, founderBehaviorVariation = defaultConfig.founderBehaviorVariation) => ({ founderPhysicalVariation, founderBehaviorVariation })
+
+  it('shows the exact available batch and clamps live population counts safely', () => {
+    expect(MAX_FOUNDER_MIGRATION_BATCH).toBe(8)
+    expect(formatFounderMigrationCopy({ livingCreatures: 0, liveConfig: liveConfig(0, 0) })).toMatchObject({ available: 8, buttonLabel: 'Founder migration (up to 8)' })
+    expect(formatFounderMigrationCopy({ livingCreatures: 112, liveConfig: liveConfig(0, 0) })).toMatchObject({ available: 8, buttonLabel: 'Founder migration (up to 8)' })
+    expect(formatFounderMigrationCopy({ livingCreatures: 119, liveConfig: liveConfig(0, 0) })).toMatchObject({ available: 1, buttonLabel: 'Founder migration (up to 1)' })
+    for (const livingCreatures of [MAX_POPULATION, MAX_POPULATION + 20, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const copy = formatFounderMigrationCopy({ livingCreatures, liveConfig: liveConfig(0, 0) })
+      expect(copy).toMatchObject({ available: 0, buttonLabel: 'Founder migration (full)' })
+      expect(copy.title.toLowerCase()).toContain(`population is at ${MAX_POPULATION}/${MAX_POPULATION}`)
+      expect(copy.ariaLabel.toLowerCase()).toContain(`population is at ${MAX_POPULATION}/${MAX_POPULATION}`)
+    }
+    expect(formatFounderMigrationCopy({ livingCreatures: -20, liveConfig: liveConfig(0, 0) }).buttonLabel).toBe('Founder migration (up to 8)')
+  })
+
+  it('describes live founder variation without genetic claims or staged-config leakage', () => {
+    const clonal = formatFounderMigrationCopy({ livingCreatures: 10, liveConfig: liveConfig(0, 0) })
+    const varied = formatFounderMigrationCopy({ livingCreatures: 10, liveConfig: liveConfig(.2, .3) })
+    expect(clonal.title).toContain('clonal founders')
+    expect(clonal.ariaLabel).toContain('clonal founders')
+    expect(varied.title).toContain('founders with configured trait variation')
+    expect(varied.ariaLabel).toContain('founders with configured trait variation')
+    expect(`${clonal.buttonLabel} ${clonal.title} ${clonal.ariaLabel} ${varied.buttonLabel} ${varied.title} ${varied.ariaLabel}`).not.toMatch(/genetic/i)
+
+    const stagedDraft = liveConfig(.2, .3)
+    const liveWorldConfig = liveConfig(0, 0)
+    const copy = formatFounderMigrationCopy({ livingCreatures: 10, liveConfig: liveWorldConfig })
+    expect(copy.title).toContain('clonal founders')
+    expect(copy.title).not.toContain('configured trait variation')
+    expect(stagedDraft).not.toEqual(liveWorldConfig)
   })
 })
 

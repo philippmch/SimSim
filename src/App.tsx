@@ -3,7 +3,7 @@ import { ARENA_FOCUS_OPTIONS, ARENA_HUNT_CONTACT_KEY, ARENA_PATCH_STOCK_KEY, ARE
 import type { ArenaPlaybackStatus, CreatureState } from './components/ArenaCanvas'
 import { GenerationForecast } from './components/GenerationForecast'
 import { createWorld, formatLatestWorldEvent, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
-import { MAX_FOOD,MAX_POPULATION, sanitizeConfig } from './simulation/config'
+import { MAX_FOOD,MAX_FOUNDER_MIGRATION_BATCH,MAX_POPULATION, sanitizeConfig } from './simulation/config'
 import { createController } from './simulation/controller'
 import type { SimulationController,SimulationSnapshotMeta } from './simulation/controller'
 import { experimentUrl,loadInitialConfig,persistExperiment } from './simulation/share'
@@ -112,6 +112,47 @@ export function formatNextActionCopy(input: NextActionCopyInput): NextActionCopy
   }
 }
 
+export interface FounderMigrationCopyInput {
+  livingCreatures: number
+  liveConfig: Pick<Config, 'founderPhysicalVariation' | 'founderBehaviorVariation'>
+}
+
+export interface FounderMigrationCopy {
+  available: number
+  buttonLabel: string
+  ariaLabel: string
+  title: string
+}
+
+function clampFounderLivingCount(value: number): number {
+  if (!Number.isFinite(value)) return MAX_POPULATION
+  return Math.max(0, Math.min(MAX_POPULATION, Math.ceil(value)))
+}
+
+export function formatFounderMigrationCopy(input: FounderMigrationCopyInput): FounderMigrationCopy {
+  const living = clampFounderLivingCount(input.livingCreatures)
+  const available = Math.max(0, Math.min(MAX_FOUNDER_MIGRATION_BATCH, MAX_POPULATION - living))
+  const clonal = input.liveConfig.founderPhysicalVariation === 0 && input.liveConfig.founderBehaviorVariation === 0
+  const noun = available === 1 ? 'founder' : 'founders'
+  const founderDescription = clonal ? `clonal ${noun}` : `${noun} with configured trait variation`
+  const population = `population is at ${living}/${MAX_POPULATION}`
+  if (available === 0) {
+    return {
+      available,
+      buttonLabel: 'Founder migration (full)',
+      ariaLabel: `Founder migration unavailable: ${population}; no ${founderDescription} can be added.`,
+      title: `Population is at ${living}/${MAX_POPULATION}; no ${founderDescription} can be added.`,
+    }
+  }
+  const description = `Add up to ${available} ${founderDescription}; ${population}.`
+  return {
+    available,
+    buttonLabel: `Founder migration (up to ${available})`,
+    ariaLabel: `Founder migration: ${description}`,
+    title: description,
+  }
+}
+
 export type TerminalOutcomeCreature=Pick<World['creatures'][number],'individualId'|'alive'|'deathCause'>
 
 export interface TerminalOutcomeResolverInput{
@@ -188,6 +229,7 @@ function App(){
   const nextActionCopy=formatNextActionCopy({extinct,hasActiveCreatures,pending:stepPending,selectedIndividualId,selectedIsActive:Boolean(selected&&!selected.home),livingCreatures:living})
   const arenaDayLabel=formatArenaDayProgress(world.dayTime,world.config.dayLength,arenaStatus)
   const dayProgress=Math.max(0,Math.min(100,Math.round(world.dayTime/world.config.dayLength*100)))
+  const founderMigrationCopy=formatFounderMigrationCopy({livingCreatures:living,liveConfig:world.config})
   const closeSettings=useCallback(()=>setSettingsOpen(false),[])
   const closeExperiment=useCallback(()=>{setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
   const replayExperiment=useCallback((config:Config)=>{setDraft(sanitizeConfig(config));setActionStatus('Control seed staged. Choose Apply & restart to replay it live.');setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
@@ -280,7 +322,7 @@ function App(){
           <span><strong>Live shocks</strong><small>No restart needed</small></span>
           <button onClick={()=>intervene('resource-bloom')} disabled={world.food.length>=MAX_FOOD} title={world.food.length>=MAX_FOOD?'Food is at the safety cap':'Add a deterministic pulse of food'}>Resource bloom</button>
           <button onClick={()=>intervene('drought')} disabled={!world.food.length} title={!world.food.length?'There is no food to remove':'Remove 40% of current food'}>Drought</button>
-          <button onClick={()=>intervene('founder-migration')} disabled={living>=MAX_POPULATION} title={living>=MAX_POPULATION?'Population is at the safety cap':'Add up to eight genetically varied founders'}>Founder migration</button>
+          <button onClick={()=>intervene('founder-migration')} disabled={founderMigrationCopy.available===0} title={founderMigrationCopy.title} aria-label={founderMigrationCopy.ariaLabel}>{founderMigrationCopy.buttonLabel}</button>
           <output aria-live="polite">{formatLatestWorldEvent(world.events.at(-1),world.generation)}</output>
         </div>
         {dirty&&<div className="pending" role="status">Changes are staged and will take effect when you choose <strong>Apply &amp; restart</strong>.</div>}
