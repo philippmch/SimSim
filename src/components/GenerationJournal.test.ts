@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { meetsStandardizedEffectThreshold, SELECTION_PATTERN_THRESHOLD } from '../simulation/engine'
 import type { BiologicalTrait, GenerationLedger, InheritanceTraitSummary, SelectionSummary, TraitMoments, WorldEvent } from '../simulation/types'
-import { clampJournalGeneration, deriveGenerationInterpretation, deriveGenerationReview, deriveInheritanceAudit, deriveJournalEvents, derivePressureFingerprints, filterJournalEvents, formatAdaptivePair, formatAttackAttemptLabel, formatAttackBasisNote, getJournalEventStatus, getRecentGenerationLedgers, MAX_JOURNAL_ENTRIES, pinCurrentGeneration, resolveJournalSelection } from './GenerationJournal'
+import GenerationJournal, { clampJournalGeneration, deriveGenerationInterpretation, deriveGenerationReview, deriveInheritanceAudit, deriveJournalEvents, derivePressureFingerprints, filterJournalEvents, formatAdaptivePair, formatAttackAttemptLabel, formatAttackBasisNote, formatJournalEventDay, formatJournalEventSummary, getJournalEventStatus, getRecentGenerationLedgers, isValidJournalEventDay, isValidJournalEventGeneration, isValidJournalEventKind, JOURNAL_EVENT_DAY_UNAVAILABLE, JOURNAL_EVENT_SUMMARY_UNAVAILABLE, MAX_JOURNAL_ENTRIES, pinCurrentGeneration, resolveJournalSelection } from './GenerationJournal'
 
 const moments=(mean:number|null)=>({mean,variance:mean===null?null:0,sd:mean===null?null:0})
 const selection=(mean:number|null)=>({speed:moments(mean),size:moments(mean),sense:moments(mean),aggression:moments(mean),caution:moments(mean),exploration:moments(mean)})
@@ -68,6 +70,36 @@ describe('generation journal helpers',()=>{
     expect(filterJournalEvents(events,2).some(event=>event.kind==='founder-migration'&&event.count===2)).toBe(true)
   })
 
+  it('keeps matching events with malformed fields while sorting and formatting them safely',()=>{
+    const events=[
+      {generation:2,day:4,kind:'drought',summary:'later',count:1},
+      {generation:2,day:Number.NaN,kind:'drought',summary:'unknown day',count:1},
+      {generation:2,day:1,kind:'resource-bloom',summary:'first',count:1},
+      {generation:2,day:1,kind:'legacy-shock',summary:'unknown kind',count:1},
+      {generation:2,day:2,kind:'drought',summary:'   ',count:1},
+      {generation:2,day:3,kind:'founder-migration',summary:null,count:1},
+      {generation:'2',day:0,kind:'drought',summary:'wrong generation type',count:1},
+    ] as unknown as WorldEvent[]
+    const filtered=filterJournalEvents(events,2)
+    expect(filtered).toHaveLength(6)
+    expect(filtered.map(event=>event.summary)).toEqual(['first','unknown kind','   ',null,'later','unknown day'])
+    expect(filtered.map(event=>event.day)).toEqual([1,1,2,3,4,Number.NaN])
+    expect(isValidJournalEventGeneration(2)).toBe(true)
+    expect(isValidJournalEventGeneration(0)).toBe(false)
+    expect(isValidJournalEventGeneration(1.5)).toBe(false)
+    expect(isValidJournalEventGeneration(Number.NaN)).toBe(false)
+    expect(isValidJournalEventDay(0)).toBe(true)
+    expect(isValidJournalEventDay(-1)).toBe(false)
+    expect(isValidJournalEventDay(Number.NaN)).toBe(false)
+    expect(isValidJournalEventKind('drought')).toBe(true)
+    expect(isValidJournalEventKind('legacy-shock')).toBe(false)
+    expect(formatJournalEventDay(1.234)).toBe('Day 1.23')
+    expect(formatJournalEventDay(Number.NaN)).toBe(JOURNAL_EVENT_DAY_UNAVAILABLE)
+    expect(formatJournalEventSummary('  Drought removed food.  ')).toBe('Drought removed food.')
+    expect(formatJournalEventSummary('   ')).toBe(JOURNAL_EVENT_SUMMARY_UNAVAILABLE)
+    expect(formatJournalEventSummary(null)).toBe(JOURNAL_EVENT_SUMMARY_UNAVAILABLE)
+  })
+
   it('labels an old review conservatively once the independent event buffer is full',()=>{
     const events:Array<WorldEvent>=Array.from({length:60},(_,index)=>({generation:5,day:index,kind:'drought',summary:'retained shock',count:1}))
     expect(getJournalEventStatus(events,4)).toBe('unknown')
@@ -85,6 +117,33 @@ describe('generation journal helpers',()=>{
     expect(partial.events).toHaveLength(5)
     expect(partial.events[0]).toMatchObject({generation:4,day:5})
     expect(getJournalEventStatus(events,5)).toBe('events')
+  })
+
+  it('ignores malformed generations when inferring partial, none, or unknown history',()=>{
+    const events=[
+      {generation:Number.NaN,day:0,kind:'drought',summary:'malformed generation',count:1},
+      ...Array.from({length:59},(_,index)=>({generation:5,day:index+1,kind:'resource-bloom' as const,summary:'retained shock',count:1})),
+    ] as unknown as WorldEvent[]
+    expect(getJournalEventStatus(events,5)).toBe('partial')
+    expect(getJournalEventStatus(events,6)).toBe('none')
+    expect(getJournalEventStatus(events,4)).toBe('unknown')
+    expect(getJournalEventStatus(events,Number.NaN)).toBe('unknown')
+
+    const onlyMalformed=Array.from({length:60},()=>({generation:-1,day:0,kind:'drought',summary:'malformed generation',count:1})) as unknown as WorldEvent[]
+    expect(getJournalEventStatus(onlyMalformed,1)).toBe('unknown')
+    expect(getJournalEventStatus(onlyMalformed,999)).toBe('unknown')
+  })
+
+  it('renders invalid event day and summary as unavailable without SSR failure',()=>{
+    const events=[
+      null,
+      {generation:2,day:Number.POSITIVE_INFINITY,kind:'drought',summary:'   ',count:1},
+      {generation:2,day:1,kind:null,summary:null,count:1},
+    ] as unknown as WorldEvent[]
+    const markup=renderToStaticMarkup(createElement(GenerationJournal,{ledgers:[makeLedger(2)],events,requestedGeneration:null,onRequestedGenerationChange:()=>{}}))
+    expect(markup).toContain(JOURNAL_EVENT_DAY_UNAVAILABLE)
+    expect(markup).toContain(JOURNAL_EVENT_SUMMARY_UNAVAILABLE)
+    expect(markup.match(/Event summary unavailable\./g)).toHaveLength(2)
   })
 
   it('derives reconciled outcomes, resources, attacks, births, and selection text',()=>{

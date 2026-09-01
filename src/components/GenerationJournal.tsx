@@ -112,10 +112,55 @@ export function pinCurrentGeneration(ledgers:readonly GenerationLedger[],request
 
 export const pinJournalToLatest=pinCurrentGeneration
 
+const JOURNAL_EVENT_KINDS:readonly WorldEvent['kind'][]=['resource-bloom','drought','founder-migration']
+const isJournalRecord=(value:unknown):value is Record<string,unknown>=>typeof value==='object'&&value!==null
+const journalEventField=(event:unknown,field:string):unknown=>isJournalRecord(event)?event[field]:undefined
+
+/** Completed generations and event provenance use positive whole-number generations. */
+export function isValidJournalEventGeneration(value:unknown):value is number{
+  return typeof value==='number'&&Number.isSafeInteger(value)&&value>=1
+}
+
+/** Event days are elapsed, finite, non-negative numbers; malformed legacy values stay visible as unavailable. */
+export function isValidJournalEventDay(value:unknown):value is number{
+  return typeof value==='number'&&Number.isFinite(value)&&value>=0
+}
+
+/** Keep event kinds observationally known before using them as sort keys. */
+export function isValidJournalEventKind(value:unknown):value is WorldEvent['kind']{
+  return typeof value==='string'&&JOURNAL_EVENT_KINDS.includes(value as WorldEvent['kind'])
+}
+
+export const JOURNAL_EVENT_DAY_UNAVAILABLE='Day unavailable'
+export const JOURNAL_EVENT_SUMMARY_UNAVAILABLE='Event summary unavailable.'
+
+export function formatJournalEventDay(value:unknown):string{
+  return isValidJournalEventDay(value)?`Day ${value.toFixed(2)}`:JOURNAL_EVENT_DAY_UNAVAILABLE
+}
+
+export function formatJournalEventSummary(value:unknown):string{
+  if(typeof value!=='string')return JOURNAL_EVENT_SUMMARY_UNAVAILABLE
+  const summary=value.trim()
+  return summary?summary:JOURNAL_EVENT_SUMMARY_UNAVAILABLE
+}
+
+const journalEventsArray=(events:readonly WorldEvent[]|unknown):readonly unknown[]=>Array.isArray(events)?events:[]
+const journalEventSortDay=(event:unknown)=>isValidJournalEventDay(journalEventField(event,'day'))?journalEventField(event,'day') as number:Number.POSITIVE_INFINITY
+const journalEventSortKind=(event:unknown)=>isValidJournalEventKind(journalEventField(event,'kind'))?journalEventField(event,'kind') as string:'\uffff'
+
 /** Events are world-level, so keep only shocks that happened during the reviewed generation. */
 export function filterJournalEvents(events:readonly WorldEvent[],generation:number|null){
-  if(generation===null)return []
-  return events.filter(event=>event.generation===generation).sort((a,b)=>a.day-b.day||a.kind.localeCompare(b.kind))
+  if(!isValidJournalEventGeneration(generation))return []
+  return journalEventsArray(events)
+    .map((event,index)=>({event,index}))
+    .filter(({event})=>isValidJournalEventGeneration(journalEventField(event,'generation'))&&journalEventField(event,'generation')===generation)
+    .sort((a,b)=>{
+      const aDay=journalEventSortDay(a.event),bDay=journalEventSortDay(b.event)
+      if(aDay!==bDay)return aDay<bDay?-1:1
+      const kindOrder=journalEventSortKind(a.event).localeCompare(journalEventSortKind(b.event))
+      return kindOrder||a.index-b.index
+    })
+    .map(({event})=>event as WorldEvent)
 }
 
 export type JournalEventStatus='events'|'partial'|'none'|'unknown'
@@ -127,13 +172,18 @@ export interface JournalEventReview {
 
 /** Distinguish a known empty generation from an older generation beyond the event buffer. */
 export function getJournalEventStatus(events:readonly WorldEvent[],generation:number|null,retentionLimit=MAX_WORLD_EVENTS):JournalEventStatus{
-  if(generation===null)return'unknown'
-  const matches=filterJournalEvents(events,generation)
-  const limit=Math.max(1,Math.floor(retentionLimit))
-  const bufferFull=events.length>=limit
-  const oldestGeneration=events.length?Math.min(...events.map(event=>event.generation)):null
+  if(!isValidJournalEventGeneration(generation))return'unknown'
+  const safeEvents=journalEventsArray(events)
+  const matches=filterJournalEvents(safeEvents as WorldEvent[],generation)
+  const limit=Number.isFinite(retentionLimit)?Math.max(1,Math.floor(retentionLimit)):MAX_WORLD_EVENTS
+  const bufferFull=safeEvents.length>=limit
+  const oldestGeneration=safeEvents.reduce<number|null>((oldest,event)=>{
+    const candidate=journalEventField(event,'generation')
+    if(!isValidJournalEventGeneration(candidate))return oldest
+    return oldest===null||candidate<oldest?candidate:oldest
+  },null)
   if(matches.length)return bufferFull&&generation===oldestGeneration?'partial':'events'
-  if(events.length<limit)return'none'
+  if(safeEvents.length<limit)return'none'
   return oldestGeneration!==null&&generation>oldestGeneration?'none':'unknown'
 }
 
@@ -322,7 +372,7 @@ export function GenerationJournal({ledgers,events,requestedGeneration,onRequeste
       <div className="event-story journal-events pressure-patterns"><h3>How offspring inherited traits</h3><p className="journal-kicker">One admitted parent produces one same-lineage offspring. Newborns copy all six traits, then enabled traits may mutate independently.{inheritance.status==='available'?' Rows show parent mean → newborn mean.':''}</p>{inheritance.status==='available'?<><p className="journal-equation"><strong>Generation {review.generation} → {review.generation+1}</strong> · {inheritance.offspringCount} newborns · <strong>{inheritance.changedTraitValues}</strong> final trait values changed out of {inheritance.offspringCount*JOURNAL_TRAITS.length}</p><ul className="story-grid">{JOURNAL_TRAITS.map(trait=>{const summary=inheritance.traits[trait],means=formatAdaptivePair(summary.parentMean!,summary.offspringMean!);return <li key={trait}><span>{TRAIT_LABELS[trait][0].toUpperCase()+TRAIT_LABELS[trait].slice(1)}</span><strong>{means[0]} → {means[1]} · {summary.changedCount} of {inheritance.offspringCount} changed</strong></li>})}</ul></>:inheritance.status==='no-births'?<p className="journal-kicker">Generation {review.generation} → {review.generation+1}: no parent→offspring comparison; no admitted parent produced a newborn.</p>:<p className="journal-kicker">Generation {review.generation} → {review.generation+1}: this retained record has {review.births.admitted} births, but its parent→offspring trait comparison is unavailable.</p>}{inheritance.status==='available'&&<p className="journal-kicker">Changed means the final clamped value differed from the matched parent; this is not a mutation-attempt count. A zero here does not imply mutation was disabled.</p>}</div>
       <div className="journal-takeaway"><strong>Selection takeaway</strong><span>{review.takeaway}</span></div>
       {pressureFingerprints.length>0&&<div className="event-story journal-events pressure-patterns"><h3>Outcome trait patterns</h3><p className="journal-kicker">Compared with the evaluated cohort; associations are descriptive, not proof of cause.</p><ul>{pressureFingerprints.map(fingerprint=>{const comparison=fingerprint.comparison,means=comparison?formatAdaptivePair(comparison.outcomeMean,comparison.baselineMean):null;return <li key={fingerprint.cause}><span>{fingerprint.label} · n={fingerprint.count}</span>{comparison&&means?<strong>{comparison.traitLabel}: {means[0]} vs cohort {means[1]} ({comparison.direction})</strong>:<strong>Trait comparison unavailable.</strong>}<span>{fingerprint.interpretation}</span></li>})}</ul></div>}
-      <div className="event-story journal-events"><h3>Ecosystem events · generation {review.generation}</h3>{eventReview.events.length?<>{eventReview.status==='partial'&&<p className="journal-kicker">Showing retained events; earlier events from this generation may no longer be available.</p>}<ul>{eventReview.events.map((event,index)=><li key={`${event.generation}-${event.day}-${event.kind}-${index}`}><span>Day {event.day.toFixed(2)}</span><strong>{event.summary}</strong></li>)}</ul></>:<p className="journal-kicker">{eventReview.status==='unknown'?'Event history is unavailable for this generation.':'No shocks occurred in this generation.'}</p>}</div>
+      <div className="event-story journal-events"><h3>Ecosystem events · generation {review.generation}</h3>{eventReview.events.length?<>{eventReview.status==='partial'&&<p className="journal-kicker">Showing retained events; earlier events from this generation may no longer be available.</p>}<ul>{eventReview.events.map((event,index)=><li key={`${isValidJournalEventGeneration(journalEventField(event,'generation'))?journalEventField(event,'generation'):'unknown'}-${isValidJournalEventDay(journalEventField(event,'day'))?journalEventField(event,'day'):'unavailable'}-${journalEventSortKind(event)}-${index}`}><span>{formatJournalEventDay(journalEventField(event,'day'))}</span><strong>{formatJournalEventSummary(journalEventField(event,'summary'))}</strong></li>)}</ul></>:<p className="journal-kicker">{eventReview.status==='unknown'?'Event history is unavailable for this generation.':'No shocks occurred in this generation.'}</p>}</div>
     </>}
   </section>
 }

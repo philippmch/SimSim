@@ -1,5 +1,6 @@
 import { END_CAUSES } from '../simulation/types'
 import type { BiologicalTrait,EndCause,GenerationLedger,HistoryPoint,World,WorldEvent } from '../simulation/types'
+import { MAX_WORLD_EVENTS } from '../simulation/engine'
 import { speedColor } from './ArenaCanvas'
 
 export const SPEED_HISTOGRAM_DOMAIN = {min:.3,max:2.8} as const
@@ -74,6 +75,68 @@ export function formatTimelineSummary(entry:HistoryTimelineEntry){
   return`Generation ${entry.generation}: next population ${timelineValue(entry.nextPopulation)}, mean energy ${timelineValue(entry.nextMeanEnergy)}, mean age ${timelineValue(entry.nextMeanAge)}, ${entry.births} births${outcomes?`; outcomes ${outcomes}`:''}${events}`
 }
 
+export const RETAINED_SHOCK_CONTEXT='Retained shocks are observational context, not proof of cause.'
+export const RETAINED_SHOCK_ORDER_NOTE='Listed by day; same-day shocks are alphabetized for display, not command order.'
+export const RETAINED_SHOCK_ARIA_LABEL_LIMIT=240
+const RETAINED_SHOCK_KINDS:readonly WorldEvent['kind'][]=['resource-bloom','drought','founder-migration']
+const RETAINED_SHOCK_KIND_LABELS:Record<WorldEvent['kind'],string>={'resource-bloom':'Resource bloom',drought:'Drought','founder-migration':'Founder migration'}
+
+export interface RetainedShockNavigatorGroup {
+  generation:number
+  events:WorldEvent[]
+  label:string
+  ariaLabel:string
+  partial:boolean
+}
+
+export interface RetainedShockNavigator {
+  groups:RetainedShockNavigatorGroup[]
+  bufferFull:boolean
+  retentionLimit:number
+  partialOldestGeneration:number|null
+}
+
+const isCompletedGeneration=(value:unknown):value is number=>typeof value==='number'&&Number.isInteger(value)&&Number.isFinite(value)&&value>=1
+const isRetainedShockKind=(value:unknown):value is WorldEvent['kind']=>typeof value==='string'&&(RETAINED_SHOCK_KINDS as readonly string[]).includes(value)
+const normalizedShockSummary=(value:unknown)=>typeof value==='string'?value.trim().replace(/\s+/g,' '):''
+const isValidRetainedShock=(event:WorldEvent):event is WorldEvent=>Boolean(event&&typeof event==='object'&&isCompletedGeneration(event.generation)&&typeof event.day==='number'&&Number.isFinite(event.day)&&event.day>=0&&isRetainedShockKind(event.kind)&&normalizedShockSummary(event.summary).length>0)
+const normalizeRetentionLimit=(value:unknown)=>typeof value==='number'&&Number.isFinite(value)?Math.max(1,Math.floor(value)):MAX_WORLD_EVENTS
+const boundedShockText=(value:string,limit:number)=>value.length<=limit?value:`${value.slice(0,Math.max(0,limit-1)).trimEnd()}…`
+const formatShockDay=(day:number)=>day.toFixed(2)
+
+/** Group truthful retained shocks by the visible/latest forty completed generations. */
+export function buildRetainedShockNavigator(entries:readonly HistoryTimelineEntry[],events:readonly WorldEvent[],retentionLimit=MAX_WORLD_EVENTS):RetainedShockNavigator{
+  const limit=normalizeRetentionLimit(retentionLimit),visibleEntries=entries.slice(-MAX_TIMELINE_ENTRIES),visibleGenerations=new Set(visibleEntries.flatMap(entry=>isCompletedGeneration(entry.generation)?[entry.generation]:[])),byGeneration=new Map<number,WorldEvent[]>()
+  for(const event of events){
+    if(!isValidRetainedShock(event)||!visibleGenerations.has(event.generation))continue
+    const bucket=byGeneration.get(event.generation)??[]
+    bucket.push(event)
+    byGeneration.set(event.generation,bucket)
+  }
+  const validEvents=events.filter(isValidRetainedShock),oldestValidGeneration=validEvents.length?Math.min(...validEvents.map(event=>event.generation)):null,bufferFull=events.length>=limit
+  const partialOldestGeneration=bufferFull&&oldestValidGeneration!==null&&visibleGenerations.has(oldestValidGeneration)?oldestValidGeneration:null
+  const groups:RetainedShockNavigatorGroup[]=[]
+  const seen=new Set<number>()
+  for(const entry of visibleEntries){
+    const generation=entry.generation
+    if(!isCompletedGeneration(generation)||seen.has(generation))continue
+    seen.add(generation)
+    const grouped=byGeneration.get(generation)
+    if(!grouped?.length)continue
+    const ordered=[...grouped].sort((a,b)=>a.day-b.day||a.kind.localeCompare(b.kind)),count=ordered.length,shockWord=count===1?'shock':'shocks',label=`Gen ${generation} · ${count} ${shockWord}`,partial=partialOldestGeneration===generation,preview=ordered.map(event=>`Day ${formatShockDay(event.day)} · ${RETAINED_SHOCK_KIND_LABELS[event.kind]}: ${normalizedShockSummary(event.summary)}`).join('; '),ariaLabel=boundedShockText(`${label}${partial?' (partial retained list)':''}. ${preview}. Select generation ${generation} to inspect its history.`,RETAINED_SHOCK_ARIA_LABEL_LIMIT)
+    groups.push({generation,events:ordered,label,ariaLabel,partial})
+  }
+  return{groups,bufferFull,retentionLimit:limit,partialOldestGeneration}
+}
+
+/** Explain retention and interpretation limits alongside the navigator controls. */
+export function formatRetainedShockNavigatorNotice(navigator:RetainedShockNavigator){
+  if(!navigator.groups.length)return navigator.bufferFull?`The ${navigator.retentionLimit}-event buffer is full; no retained shocks overlap the visible completed-generation window. Earlier shocks may be missing.`:''
+  const retentionWarning=navigator.bufferFull?` The ${navigator.retentionLimit}-event buffer is full; earlier shocks may be missing.`:''
+  const partialWarning=navigator.partialOldestGeneration===null?'':` Generation ${navigator.partialOldestGeneration} is the oldest marked generation; its retained list may be partial.`
+  return`${RETAINED_SHOCK_CONTEXT} ${RETAINED_SHOCK_ORDER_NOTE}${retentionWarning}${partialWarning}`
+}
+
 export type GenerationDeltaStatus='available'|'missing-selected'|'missing-predecessor'
 export interface GenerationDelta {
   status:GenerationDeltaStatus
@@ -141,7 +204,7 @@ export interface HistoryChartProps {
 }
 
 export function HistoryChart({world,requestedGeneration,onSelectGeneration}:HistoryChartProps){
-  const entries=buildHistoryTimeline(world.ledger,world.history,world.events),selectedGeneration=resolveTimelineGeneration(entries,requestedGeneration),selectedIndex=Math.max(0,entries.findIndex(entry=>entry.generation===selectedGeneration)),w=320,h=34,pad=3
+  const entries=buildHistoryTimeline(world.ledger,world.history,world.events),selectedGeneration=resolveTimelineGeneration(entries,requestedGeneration),selectedIndex=Math.max(0,entries.findIndex(entry=>entry.generation===selectedGeneration)),shockNavigator=buildRetainedShockNavigator(entries,world.events),shockNotice=formatRetainedShockNavigatorNotice(shockNavigator),w=320,h=34,pad=3
   if(!entries.length)return <div className="chart-empty">Complete one generation to begin the timeline.</div>
   const populations=entries.map(entry=>entry.nextPopulation).filter((value):value is number=>value!==null&&Number.isFinite(value)),popMax=Math.max(1,...populations)
   const series:{label:string;short:string;values:(number|null)[];sdValues?:(number|null)[];min:number;max:number;decimals:number;className:string}[]=[
@@ -155,7 +218,7 @@ export function HistoryChart({world,requestedGeneration,onSelectGeneration}:Hist
   return <><div className="history-scrubber journal-controls" aria-label="History generation selector">
     <label className="metric-select" htmlFor="history-generation">Inspect generation <input id="history-generation" type="range" min={0} max={Math.max(0,entries.length-1)} step={1} value={selectedIndex} disabled={entries.length<2} aria-valuetext={formatTimelineSummary(selectedEntry)} onChange={event=>{const entry=entries[Number(event.target.value)];if(entry)onSelectGeneration(entry.generation)}}/></label>
     <output className="journal-equation">{formatTimelineSummary(selectedEntry)} · {requestedGeneration===null?'Following latest completed generation':`Pinned to generation ${selectedEntry.generation}`}</output>
-  </div><div className="history-facets" role="group" aria-label={`Evolution history from generation ${start} to ${end}. Selected generation ${selectedEntry.generation}. Each row uses its own labeled scale.`}>
+  </div>{shockNotice&&<div className="journal-events"><p className={shockNavigator.groups.length?'journal-kicker':'journal-warning'}>{shockNotice}</p>{shockNavigator.groups.length>0&&<div className="history-scrubber journal-controls" role="group" aria-label="Retained shocks by generation">{shockNavigator.groups.map(group=>{const selected=group.generation===selectedGeneration;return <button key={group.generation} type="button" className="settings-toggle journal-latest" aria-label={group.ariaLabel} aria-current={selected?'true':undefined} aria-pressed={selected} onClick={()=>onSelectGeneration(group.generation)}>{group.label}{group.partial?' · partial':''}</button>})}</div>}</div>}<div className="history-facets" role="group" aria-label={`Evolution history from generation ${start} to ${end}. Selected generation ${selectedEntry.generation}. Each row uses its own labeled scale.`}>
     {series.map(s=>{
       const current=s.values[selectedIndex]??null,sd=s.sdValues?.[selectedIndex]??null,currentLabel=current===null?'Unavailable':`${current.toFixed(s.decimals)} ${s.short}${sd===null?'':` · ±1 SD ${sd.toFixed(s.decimals)}`}`,lower=s.sdValues?.map((spread,index)=>spread===null||s.values[index]===null?null:Math.max(s.min,s.values[index]!-spread)),upper=s.sdValues?.map((spread,index)=>spread===null||s.values[index]===null?null:Math.min(s.max,s.values[index]!+spread)),marker=historyCoordinate(current,s.min,s.max,selectedIndex,entries.length,w,h,pad)
       return <div className="history-facet" key={s.label}>

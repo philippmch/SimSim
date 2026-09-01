@@ -1,10 +1,14 @@
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { BEHAVIOR_HISTORY_CONTEXT, buildGenerationDelta, buildHistoryTimeline, buildSpeedHistogram, formatGenerationDelta, formatTimelineSummary, historyCoordinate, MAX_TIMELINE_ENTRIES, resolveTimelineGeneration, SPEED_HISTOGRAM_DOMAIN, traitColor } from './Charts'
+import { BEHAVIOR_HISTORY_CONTEXT, buildGenerationDelta, buildHistoryTimeline, buildRetainedShockNavigator, buildSpeedHistogram, formatGenerationDelta, formatRetainedShockNavigatorNotice, formatTimelineSummary, HistoryChart, historyCoordinate, MAX_TIMELINE_ENTRIES, RETAINED_SHOCK_ARIA_LABEL_LIMIT, RETAINED_SHOCK_CONTEXT, RETAINED_SHOCK_ORDER_NOTE, resolveTimelineGeneration, SPEED_HISTOGRAM_DOMAIN, traitColor } from './Charts'
 import { speedColor } from './ArenaCanvas'
-import type { GenerationLedger, HistoryPoint, WorldEvent } from '../simulation/types'
+import type { GenerationLedger, HistoryPoint, World, WorldEvent } from '../simulation/types'
 
 const ledger=(generation:number,birthsAdmitted=generation%3):GenerationLedger=>({generation,birthsAdmitted,outcomes:{survived:4,hunted:0,energy:0,unfed:0,late:0,aged:0}} as GenerationLedger)
 const point=(generation:number,population:number,avgEnergy:number|null=10,avgAge:number|null=2):HistoryPoint=>({generation,population,avgSpeed:1,avgSize:1,avgSense:.2,avgAggression:.4,avgCaution:.5,avgExploration:.6,sdSpeed:0,sdSize:0,sdSense:0,sdAggression:0,sdCaution:0,sdExploration:0,avgEnergy,avgAge})
+const shock=(generation:number,day:number,kind:WorldEvent['kind']='drought',summary=`${kind} recorded`,count=1):WorldEvent=>({generation,day,kind,summary,count})
+const chartWorld=(events:readonly WorldEvent[],generations=[1,2]):World=>({ledger:generations.map(generation=>ledger(generation)),history:generations.map(generation=>point(generation,generation*10)),events:[...events]} as unknown as World)
 
 describe('speed histogram',()=>{
   it('includes the full valid speed domain with accurate final-bin bounds',()=>{
@@ -90,6 +94,88 @@ describe('generation history timeline',()=>{
     const point=historyCoordinate(0,0,1,0,1)
     expect(point).toMatchObject({x:160})
     expect(Object.values(point!).every(value=>Number.isFinite(value))).toBe(true)
+  })
+})
+
+describe('retained shock navigator',()=>{
+  it('groups visible events, keeps count-zero records, and orders by day then kind',()=>{
+    const entries=buildHistoryTimeline([ledger(1),ledger(2)],[point(1,10),point(2,20)],[])
+    const result=buildRetainedShockNavigator(entries,[shock(2,2,'resource-bloom','late'),shock(2,1,'founder-migration','same day'),shock(2,1,'drought','zero impact',0),shock(2,1,'drought','first')])
+    expect(result.groups).toHaveLength(1)
+    expect(result.groups[0]).toMatchObject({generation:2,label:'Gen 2 · 4 shocks',partial:false})
+    expect(result.groups[0].events.map(event=>`${event.day}:${event.kind}:${event.summary}`)).toEqual(['1:drought:zero impact','1:drought:first','1:founder-migration:same day','2:resource-bloom:late'])
+    expect(result.groups[0].events.some(event=>event.count===0)).toBe(true)
+    expect(result.groups[0].ariaLabel.length).toBeLessThanOrEqual(RETAINED_SHOCK_ARIA_LABEL_LIMIT)
+    expect(result.groups[0].ariaLabel).toContain('Drought: zero impact')
+    expect(formatRetainedShockNavigatorNotice(result)).toContain(RETAINED_SHOCK_CONTEXT)
+    expect(formatRetainedShockNavigatorNotice(result)).toContain(RETAINED_SHOCK_ORDER_NOTE)
+  })
+
+  it('limits groups to the latest forty visible completed generations',()=>{
+    const ledgers=Array.from({length:MAX_TIMELINE_ENTRIES+5},(_,index)=>ledger(index+1)),history=ledgers.map(item=>point(item.generation,item.generation)),entries=buildHistoryTimeline(ledgers,history,[]),result=buildRetainedShockNavigator(entries,[shock(5,0,'drought','too old'),shock(6,0,'drought','first visible'),shock(45,0,'resource-bloom','latest')])
+    expect(entries[0].generation).toBe(6)
+    expect(result.groups.map(group=>group.generation)).toEqual([6,45])
+  })
+
+  it('skips malformed records that cannot support truthful copy',()=>{
+    const entries=buildHistoryTimeline([ledger(2)],[point(2,20)],[]),valid=shock(2,1,'drought','valid'),malformed:WorldEvent[]=[valid,shock(0,0,'drought','initial state, not a completed generation'),shock(2,-1,'drought','negative day'),shock(2,Number.NaN,'drought','unknown day'),shock(2,0,'drought','   \t'),{...shock(2,0,'resource-bloom','unknown kind'),kind:'unknown' as WorldEvent['kind']},{...shock(2,0,'resource-bloom','unknown generation'),generation:Number.POSITIVE_INFINITY},{...shock(2,0,'resource-bloom','not visible'),generation:3}]
+    const result=buildRetainedShockNavigator(entries,malformed)
+    expect(result.groups).toHaveLength(1)
+    expect(result.groups[0].events).toEqual([valid])
+  })
+
+  it('warns about a full 60-event buffer and marks the oldest visible generation partial',()=>{
+    const entries=buildHistoryTimeline([ledger(1),ledger(2)],[point(1,10),point(2,20)],[]),events=[shock(1,0,'drought','oldest'),...Array.from({length:59},(_,index)=>shock(2,index/10,'resource-bloom',`newer ${index}`))],result=buildRetainedShockNavigator(entries,events),notice=formatRetainedShockNavigatorNotice(result)
+    expect(result.bufferFull).toBe(true)
+    expect(result.partialOldestGeneration).toBe(1)
+    expect(result.groups[0].partial).toBe(true)
+    expect(notice).toContain('60-event buffer is full')
+    expect(notice).toContain('earlier shocks may be missing')
+    expect(notice).toContain('Generation 1 is the oldest marked generation')
+    expect(notice).toContain('may be partial')
+  })
+
+  it('warns about a full buffer without falsely marking a visible group partial when older records are outside it',()=>{
+    const entries=buildHistoryTimeline([ledger(2),ledger(3)],[point(2,20),point(3,30)],[]),result=buildRetainedShockNavigator(entries,[shock(1,0,'drought','outside visible history'),shock(1,1,'drought','outside visible history two'),shock(2,0,'resource-bloom','visible')],3),notice=formatRetainedShockNavigatorNotice(result)
+    expect(result.groups.map(group=>group.generation)).toEqual([2])
+    expect(result.partialOldestGeneration).toBeNull()
+    expect(notice).toContain('3-event buffer is full')
+    expect(notice).not.toContain('may be partial')
+  })
+
+  it('warns when a full event buffer has no valid shock group in the visible window',()=>{
+    const entries=buildHistoryTimeline([ledger(2),ledger(3)],[point(2,20),point(3,30)],[]),result=buildRetainedShockNavigator(entries,Array.from({length:60},(_,index)=>shock(1,index,'drought',`outside ${index}`))),notice=formatRetainedShockNavigatorNotice(result)
+    expect(result.groups).toEqual([])
+    expect(notice).toContain('60-event buffer is full')
+    expect(notice).toContain('no retained shocks overlap the visible completed-generation window')
+    expect(notice).toContain('Earlier shocks may be missing')
+  })
+
+  it('renders no navigator markup for a normal no-event timeline',()=>{
+    const markup=renderToStaticMarkup(createElement(HistoryChart,{world:chartWorld([]),requestedGeneration:null,onSelectGeneration:()=>{}}))
+    expect(markup).not.toContain(RETAINED_SHOCK_CONTEXT)
+    expect(markup).not.toContain('Retained shocks by generation')
+  })
+
+  it('renders selected generation buttons with accessible pressed/current state',()=>{
+    const markup=renderToStaticMarkup(createElement(HistoryChart,{world:chartWorld([shock(1,0,'drought','first'),shock(2,0,'resource-bloom','second')]),requestedGeneration:1,onSelectGeneration:()=>{}}))
+    expect(markup).toContain('aria-label="Retained shocks by generation"')
+    expect(markup).toContain('aria-current="true" aria-pressed="true"')
+    expect(markup).toContain('aria-pressed="false"')
+    expect(markup).toContain('class="settings-toggle journal-latest"')
+    expect(markup).toContain('>Gen 1 · 1 shock</button>')
+    expect(markup).toContain('>Gen 2 · 1 shock</button>')
+    expect(markup).toContain('Drought: first')
+    expect(markup).toContain('observational context, not proof of cause')
+  })
+
+  it('renders only a noninteractive full-buffer warning when no retained shock overlaps the chart',()=>{
+    const markup=renderToStaticMarkup(createElement(HistoryChart,{world:chartWorld(Array.from({length:60},(_,index)=>shock(1,index,'drought',`outside ${index}`)),[2,3]),requestedGeneration:null,onSelectGeneration:()=>{}}))
+    expect(markup).toContain('class="journal-warning"')
+    expect(markup).toContain('no retained shocks overlap the visible completed-generation window')
+    expect(markup).toContain('Earlier shocks may be missing')
+    expect(markup).not.toContain('Retained shocks by generation')
+    expect(markup).not.toContain('settings-toggle journal-latest')
   })
 })
 
