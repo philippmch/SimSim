@@ -13,6 +13,7 @@ import {
   ARENA_QUICK_START,
   ARENA_SELECTED_OVERLAY_KEY,
   arenaCanvasPalette,
+  classifyArenaHeldPathEndpoint,
   arenaTargetPathEligible,
   listenToArenaColorScheme,
   type ArenaColorSchemeQuery,
@@ -211,7 +212,36 @@ describe('arena clarity helpers', () => {
     expect(hunting).toContain(ARENA_FOCUS_TARGET_PATH_KEY)
     expect(formatArenaFocusDescription('safe',2,7)).toContain(ARENA_SAFE_FOCUS_TARGET_PATH_KEY)
     expect(formatArenaFocusDescription('safe',2,7)).not.toContain(ARENA_FOCUS_TARGET_PATH_KEY)
-    expect(all).toContain('Choose an action focus to reveal dashed current held-target paths for active matches')
+    expect(all).toContain('Choose an action focus to reveal dashed held destinations captured at the last decision for active matches')
+    expect(ARENA_SELECTED_OVERLAY_KEY).toContain('dashed path = held destination')
+    expect(ARENA_SELECTED_OVERLAY_KEY).toContain('captured at last decision')
+    expect(ARENA_SELECTED_OVERLAY_KEY).toContain('solid dot = target still present')
+    expect(ARENA_SELECTED_OVERLAY_KEY).toContain('not current position')
+    expect(ARENA_SELECTED_OVERLAY_KEY).toContain('× = target gone at its last-known held location')
+    expect(ARENA_SELECTED_OVERLAY_KEY).toContain('diamond = waypoint')
+    expect(ARENA_FOCUS_TARGET_PATH_KEY).toContain('dashed held destinations captured at last decision')
+    expect(ARENA_FOCUS_TARGET_PATH_KEY).toContain('target still present (not current position)')
+    expect(ARENA_FOCUS_TARGET_PATH_KEY).toContain('decisions can persist between reaction windows')
+  })
+
+  it('classifies held destinations from current entities without mistaking threats for endpoints', () => {
+    const target = (overrides: Partial<{ targetType: World['creatures'][number]['targetType']; targetId: number | null; targetX: number; targetY: number }> = {}) => ({
+      targetType: 'food' as const, targetId: 11, targetX: .7, targetY: .8, ...overrides,
+    })
+    expect(classifyArenaHeldPathEndpoint(target({ targetType: null }), [], [])).toBe('none')
+    expect(classifyArenaHeldPathEndpoint(target({ targetX: Number.NaN }), [], [])).toBe('none')
+    expect(classifyArenaHeldPathEndpoint(target(), [], [{ id: 11 }])).toBe('live-food')
+    expect(classifyArenaHeldPathEndpoint(target(), [], [])).toBe('last-known-food')
+    expect(classifyArenaHeldPathEndpoint(target({ targetId: null }), [], [])).toBe('last-known-food')
+    expect(classifyArenaHeldPathEndpoint(target({ targetType: 'prey', targetId: 42 }), [{ id: 42, individualId: 7, alive: true }], [])).toBe('live-prey')
+    const movedPrey = { id: 42, individualId: 7, alive: true, x: .12, y: .14 }
+    expect(classifyArenaHeldPathEndpoint(target({ targetType: 'prey', targetId: 42, targetX: .92, targetY: .88 }), [movedPrey], [])).toBe('live-prey')
+    expect(classifyArenaHeldPathEndpoint(target({ targetType: 'prey', targetId: 42 }), [{ id: 42, individualId: 7, alive: false }], [])).toBe('last-known-prey')
+    expect(classifyArenaHeldPathEndpoint(target({ targetType: 'prey', targetId: 42 }), [], [])).toBe('last-known-prey')
+    expect(classifyArenaHeldPathEndpoint(target({ targetType: 'home', targetId: null }), [], [])).toBe('waypoint')
+    expect(classifyArenaHeldPathEndpoint(target({ targetType: 'memory', targetId: null }), [], [])).toBe('waypoint')
+    expect(classifyArenaHeldPathEndpoint(target({ targetType: 'explore', targetId: null }), [], [])).toBe('waypoint')
+    expect(classifyArenaHeldPathEndpoint(target({ targetType: 'threat', targetId: 42 }), [{ id: 42, individualId: 7, alive: true }], [])).toBe('waypoint')
   })
 
   it('derives playback phases from population and active creature counts', () => {
@@ -270,15 +300,18 @@ describe('arena clarity helpers', () => {
 
   it('formats runtime targets as user-facing individual and food labels', () => {
     expect(formatSelectedTarget({ targetType: 'prey', targetId: 42 }, [{ id: 42, individualId: 7, alive: true }])).toBe('Prey · Individual 7')
+    expect(formatSelectedTarget({ targetType: 'threat', targetId: 43, targetX: .7, targetY: .8 }, [{ id: 43, individualId: 8, alive: true }])).toBe('Threat · Individual 8 · path ends at an escape waypoint')
     expect(formatSelectedTarget({ targetType: 'threat', targetId: 43 }, [{ id: 43, individualId: 8, alive: true }])).toBe('Threat · Individual 8')
     expect(formatSelectedTarget({ targetType: 'food', targetId: 901 }, [], [{ id: 901 }])).toBe('Food item')
     expect(formatSelectedTarget({ targetType: null, targetId: null }, [])).toBe('None')
   })
 
   it('hides missing, dead, or disappeared entity identifiers', () => {
-    expect(formatSelectedTarget({ targetType: 'prey', targetId: 42 }, [{ id: 42, individualId: 7, alive: false }])).toBe('Prey · unavailable')
-    expect(formatSelectedTarget({ targetType: 'threat', targetId: 99 }, [])).toBe('Threat · unavailable')
-    expect(formatSelectedTarget({ targetType: 'food', targetId: 901 }, [], [])).toBe('Food · unavailable')
+    expect(formatSelectedTarget({ targetType: 'prey', targetId: 42, targetX: .4, targetY: .5 }, [{ id: 42, individualId: 7, alive: false }])).toBe('Prey target gone · held location shown')
+    expect(formatSelectedTarget({ targetType: 'threat', targetId: 99, targetX: .4, targetY: .5 }, [])).toBe('Threat target gone · path ends at an escape waypoint')
+    expect(formatSelectedTarget({ targetType: 'food', targetId: 901 }, [], [])).toBe('Food target · current status unavailable')
+    expect(formatSelectedTarget({ targetType: 'food', targetId: 901, targetX: .4, targetY: .5 }, [], [])).toBe('Food target gone · held location shown')
+    expect(formatSelectedTarget({ targetType: 'prey', targetId: 42 }, [{ id: 42, individualId: 7, alive: false }])).toBe('Prey target · current status unavailable')
   })
 
   it('labels location targets without exposing implementation identifiers', () => {

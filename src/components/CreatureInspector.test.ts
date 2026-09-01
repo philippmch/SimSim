@@ -25,7 +25,9 @@ describe('captured decision inspector helpers',()=>{
   it('resolves stable target copy without exposing runtime IDs',()=>{
     expect(formatDecisionTargetLabel(summary,'Prey · Individual 17')).toBe('Prey · Individual 17')
     expect(formatDecisionTargetLabel({...summary,chosen:'home',chosenTargetId:null},'')).toBe('Home location')
-    expect(formatDecisionTargetLabel({...summary,chosen:'food',chosenTargetId:99},undefined)).toBe('Food item · unavailable')
+    expect(formatDecisionTargetLabel({...summary,chosen:'food',chosenTargetId:99},undefined)).toBe('Food target · current status unavailable')
+    expect(formatDecisionTargetLabel({...summary,chosen:'prey',chosenTargetId:99},undefined)).toBe('Prey target · current status unavailable')
+    expect(formatDecisionTargetLabel({...summary,chosen:'threat',chosenTargetId:99},undefined)).toBe('Threat target · current status unavailable')
   })
 
   it('marks the selected semantic candidate and supports legacy summaries',()=>{

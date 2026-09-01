@@ -28,9 +28,9 @@ function fallbackDecisionTarget(type:TargetType|undefined):string{
   if(type==='home')return'Home location'
   if(type==='memory')return'Remembered location'
   if(type==='explore')return'Exploration waypoint'
-  if(type==='food')return'Food item · unavailable'
-  if(type==='prey')return'Prey · unavailable'
-  if(type==='threat')return'Threat · unavailable'
+  if(type==='food')return'Food target · current status unavailable'
+  if(type==='prey')return'Prey target · current status unavailable'
+  if(type==='threat')return'Threat target · current status unavailable'
   return'Decision target unavailable'
 }
 

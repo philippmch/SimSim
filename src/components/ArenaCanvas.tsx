@@ -24,9 +24,9 @@ export interface ArenaPlaybackDetailInput {
 }
 
 export const ARENA_PATCH_STOCK_KEY = 'Patch arcs = current food stock.'
-export const ARENA_SELECTED_OVERLAY_KEY = 'Selected: gold ring = focus; gold area = sight; dash = target; colored rings = memory; dotted rings = kin.'
-export const ARENA_HUNT_CONTACT_KEY = 'Hunts resolve against the nearest eligible prey at contact, which may differ from the dashed pursuit target.'
-export const ARENA_FOCUS_TARGET_PATH_KEY = 'Active matches with a held target show dashed paths; decisions can persist between reaction windows.'
+export const ARENA_SELECTED_OVERLAY_KEY = 'Selected: gold ring = focus · gold area = sight · dashed path = held destination captured at last decision · endpoint: solid dot = target still present (not current position), × = target gone at its last-known held location, diamond = waypoint · colored rings = memory · dotted rings = kin. Held decisions can persist between reaction windows.'
+export const ARENA_HUNT_CONTACT_KEY = 'Hunts resolve against the nearest eligible prey at contact, which may differ from the dashed held destination.'
+export const ARENA_FOCUS_TARGET_PATH_KEY = 'Active matches show dashed held destinations captured at last decision: solid dot = target still present (not current position), × = target gone at its last-known held location, diamond = waypoint. Held decisions can persist between reaction windows.'
 export const ARENA_SAFE_FOCUS_TARGET_PATH_KEY = 'Safe-at-home creatures have no active target paths.'
 export const ARENA_QUICK_START = [
   'Try this: pause → inspect a creature → finish generation.',
@@ -60,6 +60,33 @@ export function arenaCreatureAlpha(focus: ArenaFocus, state: CreatureState, sele
 }
 
 export type ArenaTargetPathCreature = Pick<World['creatures'][number], 'individualId' | 'x' | 'y' | 'alive' | 'home' | 'mode' | 'targetType' | 'targetX' | 'targetY'>
+
+/** The visual meaning of a held destination endpoint. Threats intentionally
+ * resolve to a waypoint: their target coordinates are an escape point, not
+ * the threat's current location. */
+export type ArenaHeldPathEndpointKind = 'none'|'live-food'|'live-prey'|'last-known-food'|'last-known-prey'|'waypoint'
+
+export interface ArenaHeldPathEndpointInput {
+  targetType: TargetType | null
+  targetId: number | null
+  targetX: number
+  targetY: number
+}
+
+export type ArenaHeldPathCreature = Pick<World['creatures'][number], 'id'|'individualId'|'alive'>
+export type ArenaHeldPathFood = Pick<World['food'][number], 'id'>
+
+/** Classify a path endpoint using only current world facts and finite path data. */
+export function classifyArenaHeldPathEndpoint(
+  target: ArenaHeldPathEndpointInput,
+  creatures: ReadonlyArray<ArenaHeldPathCreature> = [],
+  food: ReadonlyArray<ArenaHeldPathFood> = [],
+): ArenaHeldPathEndpointKind {
+  if (target.targetType === null || !Number.isFinite(target.targetX) || !Number.isFinite(target.targetY)) return 'none'
+  if (target.targetType === 'home' || target.targetType === 'memory' || target.targetType === 'explore' || target.targetType === 'threat') return 'waypoint'
+  if (target.targetType === 'food') return target.targetId !== null && food.some(item => item.id === target.targetId) ? 'live-food' : 'last-known-food'
+  return target.targetId !== null && creatures.some(creature => creature.id === target.targetId && creature.alive) ? 'live-prey' : 'last-known-prey'
+}
 
 /** Whether a creature has a safe-to-draw held-target path in the current action focus. */
 export function arenaTargetPathEligible(focus: ArenaFocus, creature: ArenaTargetPathCreature, selectedIndividualId: number | null = null): boolean {
@@ -122,6 +149,8 @@ export function formatArenaDayProgress(dayTime: number, dayLength: number, statu
 export interface ArenaSelectedTargetInput {
   targetType: TargetType | null
   targetId: number | null
+  targetX?: number
+  targetY?: number
 }
 
 type ArenaTargetCreature = Pick<World['creatures'][number], 'id' | 'individualId' | 'alive'>
@@ -132,15 +161,22 @@ export function formatSelectedTarget(
   creatures: ReadonlyArray<ArenaTargetCreature>,
   food: ReadonlyArray<ArenaTargetFood> = [],
 ): string {
+  const heldLocationShown=Number.isFinite(target.targetX)&&Number.isFinite(target.targetY)
+  const unavailableEntity=(kind:string)=>heldLocationShown?`${kind} target gone · held location shown`:`${kind} target · current status unavailable`
   if (target.targetType === null) return 'None'
   if (target.targetType === 'home') return 'Home location'
   if (target.targetType === 'memory') return 'Remembered location'
   if (target.targetType === 'explore') return 'Exploration waypoint'
-  if (target.targetId === null) return `${target.targetType === 'food' ? 'Food' : target.targetType === 'prey' ? 'Prey' : 'Threat'} · unavailable`
-  if (target.targetType === 'food') return food.some(item => item.id === target.targetId) ? 'Food item' : 'Food · unavailable'
+  if (target.targetType === 'food') return target.targetId !== null && food.some(item => item.id === target.targetId) ? 'Food item' : unavailableEntity('Food')
+  if (target.targetType === 'threat') {
+    const targetCreature = target.targetId === null ? undefined : creatures.find(creature => creature.id === target.targetId && creature.alive)
+    return targetCreature
+      ? heldLocationShown ? `Threat · Individual ${targetCreature.individualId} · path ends at an escape waypoint` : `Threat · Individual ${targetCreature.individualId}`
+      : heldLocationShown ? 'Threat target gone · path ends at an escape waypoint' : 'Threat target · current status unavailable'
+  }
+  if (target.targetId === null) return unavailableEntity('Prey')
   const targetCreature = creatures.find(creature => creature.id === target.targetId && creature.alive)
-  const kind = target.targetType === 'prey' ? 'Prey' : 'Threat'
-  return targetCreature ? `${kind} · Individual ${targetCreature.individualId}` : `${kind} · unavailable`
+  return targetCreature ? `Prey · Individual ${targetCreature.individualId}` : unavailableEntity('Prey')
 }
 
 function observedCount(value: number | undefined): number {
@@ -293,7 +329,7 @@ export function formatArenaAccessibleDescription(input: ArenaAccessibleDescripti
     : `${input.foodCount} food remaining from a ${Math.round(input.foodBudget)}-item generation pulse across ${input.patchCount} patches`
   const overlayDescription = formatArenaOverlayDescription(input.ecologyMode, input.hasSelectedCreature, input.selectedIsHunting)
   const focusDescription = formatArenaFocusDescription(input.focus ?? 'all',input.focusCount,input.livingCreatures,input.selectedOutsideFocus)
-  const allFocusPathDescription = input.focus === 'all' ? ' Choose an action focus to reveal dashed current held-target paths for active matches; decisions can persist between reaction windows.' : ''
+  const allFocusPathDescription = input.focus === 'all' ? ' Choose an action focus to reveal dashed held destinations captured at the last decision for active matches; decisions can persist between reaction windows.' : ''
   const selectionHint = input.hasSelectedCreature
     ? ''
     : 'Select a creature to reveal its focus, sight, target, memory, and same-lineage overlays.'
@@ -460,6 +496,27 @@ function speedColor(speed: number) {
   return `hsl(${hue} 58% ${42+t*14}%)`
 }
 
+function drawHeldPathEndpoint(
+  ctx: CanvasRenderingContext2D,
+  kind: ArenaHeldPathEndpointKind,
+  x: number,
+  y: number,
+  color: string,
+  size: number,
+) {
+  if (kind === 'none' || !Number.isFinite(x) || !Number.isFinite(y)) return
+  const radius=Math.max(3,size)
+  ctx.save();ctx.globalAlpha=.78;ctx.fillStyle='rgba(10,24,18,.82)';ctx.beginPath();ctx.arc(x,y,radius+2.8,0,Math.PI*2);ctx.fill();ctx.globalAlpha=.9;ctx.strokeStyle='rgba(248,252,249,.9)';ctx.lineWidth=1;ctx.beginPath();ctx.arc(x,y,radius+2.8,0,Math.PI*2);ctx.stroke();ctx.globalAlpha=.82;ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=1.6;ctx.setLineDash([])
+  if (kind === 'live-food' || kind === 'live-prey') {
+    ctx.beginPath();ctx.arc(x,y,radius*.52,0,Math.PI*2);ctx.fill()
+  } else if (kind === 'last-known-food' || kind === 'last-known-prey') {
+    ctx.beginPath();ctx.moveTo(x-radius*.75,y-radius*.75);ctx.lineTo(x+radius*.75,y+radius*.75);ctx.moveTo(x+radius*.75,y-radius*.75);ctx.lineTo(x-radius*.75,y+radius*.75);ctx.stroke()
+  } else {
+    ctx.beginPath();ctx.moveTo(x,y-radius);ctx.lineTo(x+radius,y);ctx.lineTo(x,y+radius);ctx.lineTo(x-radius,y);ctx.closePath();ctx.globalAlpha=.22;ctx.fill();ctx.globalAlpha=.82;ctx.stroke()
+  }
+  ctx.restore()
+}
+
 export function ArenaCanvas({world,revision,selectedIndividualId,onSelect,arenaFocus,playbackStatus,playbackDetail}:Props) {
   const ref=useRef<HTMLCanvasElement>(null)
   const drawRef=useRef<()=>void>(()=>{})
@@ -481,11 +538,14 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect,arenaF
       ctx.strokeStyle=palette.fieldBorder;ctx.lineWidth=1;ctx.stroke()
       ctx.save();ctx.setLineDash([4,8]);ctx.strokeStyle=palette.fieldGrid;ctx.strokeRect(pad+10,pad+10,w-pad*2-20,h-pad*2-20);ctx.restore()
       const sx=(x:number)=>pad+x*(w-pad*2), sy=(y:number)=>pad+y*(h-pad*2)
+      const endpointMarkers:{kind:ArenaHeldPathEndpointKind;x:number;y:number;color:string;size:number}[]=[]
       const renderableCreatures=world.creatures.filter(c=>c.alive).slice(0,MAX_POPULATION)
       if(arenaFocus!=='all')for(const c of renderableCreatures)if(arenaTargetPathEligible(arenaFocus,c,selectedIndividualId)){
         const fromX=sx(c.x),fromY=sy(c.y),targetX=sx(c.targetX),targetY=sy(c.targetY)
         const color=CREATURE_STATE_METADATA[arenaFocus].color
-        ctx.save();ctx.globalAlpha=.52;ctx.strokeStyle=color;ctx.lineWidth=1.25;ctx.setLineDash([5,5]);ctx.beginPath();ctx.moveTo(fromX,fromY);ctx.lineTo(targetX,targetY);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=color;ctx.beginPath();ctx.arc(targetX,targetY,Math.max(2.5,Math.min(w,h)*.009),0,Math.PI*2);ctx.fill();ctx.restore()
+        const endpoint=classifyArenaHeldPathEndpoint(c,world.creatures,world.food)
+        ctx.save();ctx.globalAlpha=.52;ctx.strokeStyle=color;ctx.lineWidth=1.25;ctx.setLineDash([5,5]);ctx.beginPath();ctx.moveTo(fromX,fromY);ctx.lineTo(targetX,targetY);ctx.stroke();ctx.restore()
+        endpointMarkers.push({kind:endpoint,x:targetX,y:targetY,color,size:Math.max(3,Math.min(w,h)*.009)})
       }
       const selected=world.creatures.find(creature=>creature.individualId===selectedIndividualId&&creature.alive)
       if(selected){
@@ -493,7 +553,12 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect,arenaF
         ctx.save();ctx.fillStyle=palette.sightFill;ctx.strokeStyle=palette.sightStroke;ctx.lineWidth=1.25;ctx.setLineDash([5,5]);ctx.beginPath()
         if(world.config.perceptionMode==='realistic'&&world.config.fieldOfView<359.9){ctx.moveTo(x,y);ctx.ellipse(x,y,rx,ry,0,selected.angle-half,selected.angle+half);ctx.closePath()}else ctx.ellipse(x,y,rx,ry,0,0,Math.PI*2)
         ctx.fill();ctx.stroke();ctx.restore()
-        if(selected.targetType){ctx.save();ctx.strokeStyle=palette.targetLine;ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(sx(selected.targetX),sy(selected.targetY));ctx.stroke();ctx.restore()}
+        const selectedEndpoint=classifyArenaHeldPathEndpoint(selected,world.creatures,world.food)
+        if(selectedEndpoint!=='none'&&[selected.x,selected.y,selected.targetX,selected.targetY].every(Number.isFinite)){
+          const targetX=sx(selected.targetX),targetY=sy(selected.targetY)
+          ctx.save();ctx.strokeStyle=palette.targetLine;ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(targetX,targetY);ctx.stroke();ctx.restore()
+          endpointMarkers.push({kind:selectedEndpoint,x:targetX,y:targetY,color:palette.targetLine,size:Math.max(3,Math.min(w,h)*.009)})
+        }
         for(const memory of [{x:selected.memory.foodX,y:selected.memory.foodY,color:palette.memoryFood},{x:selected.memory.threatX,y:selected.memory.threatY,color:palette.memoryThreat}])if(memory.x!==null&&memory.y!==null){ctx.save();ctx.strokeStyle=memory.color;ctx.lineWidth=1.5;ctx.setLineDash([2,3]);ctx.beginPath();ctx.arc(sx(memory.x),sy(memory.y),7,0,Math.PI*2);ctx.stroke();ctx.restore()}
       }
       for(const patch of world.environment.patches){
@@ -539,6 +604,7 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect,arenaF
       const pct=Math.min(1,world.dayTime/world.config.dayLength)
       ctx.fillStyle=palette.progressTrack;ctx.fillRect(pad,pad-9,w-pad*2,3)
       ctx.fillStyle=palette.progressFill;ctx.fillRect(pad,pad-9,(w-pad*2)*pct,3)
+      for(const marker of endpointMarkers)drawHeldPathEndpoint(ctx,marker.kind,marker.x,marker.y,marker.color,marker.size)
     }
     drawRef.current=draw;draw()
   },[world,revision,selectedIndividualId,arenaFocus])
