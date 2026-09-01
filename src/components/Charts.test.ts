@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { BEHAVIOR_HISTORY_CONTEXT, buildGenerationDelta, buildHistoryTimeline, buildRetainedShockNavigator, buildSpeedHistogram, formatGenerationDelta, formatRetainedShockNavigatorNotice, formatTimelineSummary, HistoryChart, historyCoordinate, MAX_TIMELINE_ENTRIES, RETAINED_SHOCK_ARIA_LABEL_LIMIT, RETAINED_SHOCK_CONTEXT, RETAINED_SHOCK_ORDER_NOTE, resolveTimelineGeneration, SPEED_HISTOGRAM_DOMAIN, traitColor } from './Charts'
+import { BEHAVIOR_HISTORY_CONTEXT, buildGenerationDelta, buildHistoryTimeline, buildObservedNonnegativeDomain, buildRetainedShockNavigator, buildSpeedHistogram, formatGenerationDelta, formatRetainedShockNavigatorNotice, formatTimelineSummary, HistoryChart, historyCoordinate, MAX_TIMELINE_ENTRIES, RETAINED_SHOCK_ARIA_LABEL_LIMIT, RETAINED_SHOCK_CONTEXT, RETAINED_SHOCK_ORDER_NOTE, resolveTimelineGeneration, safeNonnegativeHistoryValue, SPEED_HISTOGRAM_DOMAIN, traitColor } from './Charts'
 import { speedColor } from './ArenaCanvas'
 import type { GenerationLedger, HistoryPoint, World, WorldEvent } from '../simulation/types'
 
@@ -94,6 +94,57 @@ describe('generation history timeline',()=>{
     const point=historyCoordinate(0,0,1,0,1)
     expect(point).toMatchObject({x:160})
     expect(Object.values(point!).every(value=>Number.isFinite(value))).toBe(true)
+  })
+})
+
+describe('energy and age history facets',()=>{
+  it('keeps observed domains finite, nonnegative, data-driven, and readable for small values',()=>{
+    expect(buildObservedNonnegativeDomain([null,undefined,Number.NaN,Number.POSITIVE_INFINITY,-4,0,.4])).toEqual({min:0,max:1})
+    expect(buildObservedNonnegativeDomain([null,-4,1.25,3.5])).toEqual({min:0,max:3.5})
+    expect(safeNonnegativeHistoryValue(null)).toBeNull()
+    expect(safeNonnegativeHistoryValue(Number.NaN)).toBeNull()
+    expect(safeNonnegativeHistoryValue(-1)).toBeNull()
+    expect(safeNonnegativeHistoryValue(0)).toBe(0)
+    expect(safeNonnegativeHistoryValue(2.5)).toBe(2.5)
+  })
+
+  it('renders next-population means with separate observed domains and precise wording',()=>{
+    const history=[point(1,10,4.5,.25),point(2,20,2.25,3.75)]
+    const firstMarkup=renderToStaticMarkup(createElement(HistoryChart,{world:{...chartWorld([], [1,2]),history},requestedGeneration:1,onSelectGeneration:()=>{}}))
+    expect(firstMarkup).toContain('Gen 1 · 4.50 mean</span>')
+    expect(firstMarkup).toContain('Gen 1 · 0.25 mean</span>')
+    const markup=renderToStaticMarkup(createElement(HistoryChart,{world:{...chartWorld([], [1,2]),history},requestedGeneration:2,onSelectGeneration:()=>{}}))
+    expect(markup).toContain('<strong>Next population</strong>')
+    expect(markup).toContain('<strong>Mean energy</strong>')
+    expect(markup).toContain('<strong>Mean age</strong>')
+    expect(markup).toContain('aria-label="Next population, selected generation 2, 20 creatures, scale 0 to 20."')
+    expect(markup).toContain('Energy and age are observed means in each next population; descriptive, not causal.</p>')
+    expect(markup).toContain('Gen 2 · 2.25 mean</span>')
+    expect(markup).toContain('Gen 2 · 3.75 mean</span>')
+    expect(markup).toContain('Mean energy history, selected generation 2, observed mean 2.25 in the next population; descriptive, not causal, scale 0.00 to 4.50.')
+    expect(markup).toContain('Mean age history, selected generation 2, observed mean 3.75 in the next population; descriptive, not causal, scale 0.00 to 3.75.')
+    expect(markup).toContain('0.00–4.50')
+    expect(markup).toContain('0.00–3.75')
+    expect(markup).not.toContain('Population mean')
+    expect(markup).not.toContain('<strong>Population mean</strong>')
+  })
+
+  it('renders unavailable malformed values without leaking nonfinite text or path coordinates',()=>{
+    const history=[point(1,10,-2,Number.NaN),point(2,20,Number.POSITIVE_INFINITY,-3)]
+    const markup=renderToStaticMarkup(createElement(HistoryChart,{world:{...chartWorld([], [1,2]),history},requestedGeneration:1,onSelectGeneration:()=>{}}))
+    expect(markup).toContain('<strong>Mean energy</strong><span>Gen 1 · Unavailable</span>')
+    expect(markup).toContain('<strong>Mean age</strong><span>Gen 1 · Unavailable</span>')
+    expect(markup).toContain('Mean energy history, selected generation 1, observed mean unavailable in the next population; descriptive, not causal, scale 0.00 to 1.00.')
+    expect(markup).toContain('Mean age history, selected generation 1, observed mean unavailable in the next population; descriptive, not causal, scale 0.00 to 1.00.')
+    expect(markup).not.toMatch(/NaN|Infinity/)
+    expect(markup).not.toMatch(/d="[^"]*(?:NaN|Infinity)/)
+  })
+
+  it('keeps a single observed point finite and gives it a minimum one-unit domain',()=>{
+    const markup=renderToStaticMarkup(createElement(HistoryChart,{world:{...chartWorld([], [7]),history:[point(7,10,0,.5)]},requestedGeneration:null,onSelectGeneration:()=>{}}))
+    expect(markup).toContain('Mean energy history, selected generation 7, observed mean 0.00 in the next population; descriptive, not causal, scale 0.00 to 1.00.')
+    expect(markup).toContain('Mean age history, selected generation 7, observed mean 0.50 in the next population; descriptive, not causal, scale 0.00 to 1.00.')
+    expect(markup).not.toMatch(/NaN|Infinity/)
   })
 })
 
