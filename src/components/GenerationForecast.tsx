@@ -1,6 +1,7 @@
 import { MAX_POPULATION } from '../simulation/config'
 import { settleLifecycle, type LifecycleOutcomeCause } from '../simulation/lifecycle'
 import type { World } from '../simulation/types'
+import type { ArenaPlaybackStatus } from './ArenaCanvas'
 
 export const FORECAST_LOSS_CAUSES = ['hunted', 'energy', 'unfed', 'late', 'aged'] as const satisfies readonly Exclude<LifecycleOutcomeCause, 'survived'>[]
 export type ForecastLossCause = (typeof FORECAST_LOSS_CAUSES)[number]
@@ -61,20 +62,42 @@ export function formatGenerationForecastBirths(summary: GenerationForecastSummar
   return `${parents} · ${newborns} · ${blocked}`
 }
 
-export function formatGenerationForecastAriaLabel(summary: GenerationForecastSummary): string {
-  return `If the generation ended at this exact moment (counterfactual, not a prediction): ${formatGenerationForecastEquation(summary)}. Loss causes: ${formatGenerationForecastLosses(summary)}. ${formatGenerationForecastBirths(summary)}. This snapshot changes as creatures act.`
+export function formatGenerationForecastHeading(status: ArenaPlaybackStatus): string {
+  if (status === 'Awaiting settlement') return 'Settlement preview'
+  if (status === 'Extinct') return 'Population extinct'
+  return 'If generation ended now'
 }
 
-export function GenerationForecast({ world }: { world: World }) {
+export function formatGenerationForecastFraming(status: ArenaPlaybackStatus): string {
+  if (status === 'Awaiting settlement') return 'Not recorded until Finish generation'
+  if (status === 'Extinct') return 'No cohort remains to evaluate'
+  return 'Counterfactual snapshot · not a prediction · updates as creatures act'
+}
+
+export function formatGenerationForecastAriaLabel(summary: GenerationForecastSummary, status: ArenaPlaybackStatus = 'Running'): string {
+  const heading = formatGenerationForecastHeading(status)
+  const framing = formatGenerationForecastFraming(status)
+  if (status === 'Extinct') return `${heading}. ${framing}.`
+  const details = `${formatGenerationForecastEquation(summary)}. Loss causes: ${formatGenerationForecastLosses(summary)}. ${formatGenerationForecastBirths(summary)}.`
+  return `${heading}. ${framing}. ${details}`
+}
+
+export function GenerationForecast({ world, playbackStatus }: { world: World; playbackStatus: ArenaPlaybackStatus }) {
   const summary = summarizeGenerationForecast(world)
+  const heading = formatGenerationForecastHeading(playbackStatus)
+  const framing = formatGenerationForecastFraming(playbackStatus)
+  if (playbackStatus === 'Extinct') return <div className="ecology-line activity-line" role="group" aria-label={formatGenerationForecastAriaLabel(summary, playbackStatus)}>
+    <strong>{heading}</strong>
+    <span>{framing}</span>
+  </div>
   const losses = FORECAST_LOSS_CAUSES.filter(cause => summary.losses[cause] > 0)
-  return <div className="ecology-line activity-line" role="group" aria-label={formatGenerationForecastAriaLabel(summary)}>
-    <strong>If generation ended now</strong>
+  return <div className="ecology-line activity-line" role="group" aria-label={formatGenerationForecastAriaLabel(summary, playbackStatus)}>
+    <strong>{heading}</strong>
     <span><b>{summary.evaluatedCohort}</b> creatures evaluated → <b>{summary.survivors}</b> survived</span>
     <span>+ <b>{summary.admittedBirths}</b> {summary.admittedBirths === 1 ? 'newborn' : 'newborns'} = <b>{summary.projectedNextPopulation}</b> next</span>
     {losses.length ? losses.map(cause => <span key={cause}>{FORECAST_LOSS_LABELS[cause]} <b>{summary.losses[cause]}</b></span>) : <span>No current losses</span>}
     <span><b>{summary.eligibleParents}</b> eligible {summary.eligibleParents === 1 ? 'parent' : 'parents'}</span>
     <span><b>{summary.cappedBirths}</b> {summary.cappedBirths === 1 ? 'birth' : 'births'} blocked by cap</span>
-    <span>Counterfactual snapshot · not a prediction</span>
+    <span>{framing}</span>
   </div>
 }

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { CLASSIC_MODES, defaultConfig, MAX_POPULATION } from '../simulation/config'
 import { createWorld } from '../simulation/engine'
-import { formatGenerationForecastAriaLabel, formatGenerationForecastBirths, formatGenerationForecastEquation, formatGenerationForecastLosses, summarizeGenerationForecast, type GenerationForecastSummary } from './GenerationForecast'
+import { formatGenerationForecastAriaLabel, formatGenerationForecastBirths, formatGenerationForecastEquation, formatGenerationForecastLosses, GenerationForecast, summarizeGenerationForecast, type GenerationForecastSummary } from './GenerationForecast'
 
 describe('generation forecast', () => {
   it('uses classic settlement rules for the current cohort and loss causes', () => {
@@ -50,8 +52,10 @@ describe('generation forecast', () => {
 
     expect(formatGenerationForecastEquation(summary)).toBe('2 creatures evaluated → 1 survived + 1 newborn = 2 in the next population')
     expect(formatGenerationForecastLosses(summary)).toBe('Hunted: 1')
-    expect(formatGenerationForecastAriaLabel(summary)).toContain('counterfactual, not a prediction')
-    expect(formatGenerationForecastAriaLabel(summary)).toContain('This snapshot changes as creatures act.')
+    const ariaLabel = formatGenerationForecastAriaLabel(summary)
+    expect(ariaLabel).toContain('Counterfactual snapshot · not a prediction · updates as creatures act')
+    expect(ariaLabel.match(/counterfactual/gi)).toHaveLength(1)
+    expect(ariaLabel.match(/updates as creatures act/gi)).toHaveLength(1)
   })
 
   it('keeps singular, plural, zero, and journal loss labels readable', () => {
@@ -79,5 +83,51 @@ describe('generation forecast', () => {
 
     expect(first).toEqual(second)
     expect(world).toEqual(before)
+  })
+
+  it('uses the same active counterfactual copy while running or paused', () => {
+    const world = createWorld({ ...defaultConfig, initialPopulation: 2 })
+    const summary = summarizeGenerationForecast(world)
+
+    for (const playbackStatus of ['Running', 'Paused'] as const) {
+      const markup = renderToStaticMarkup(createElement(GenerationForecast, { world, playbackStatus }))
+      expect(markup).toContain('<strong>If generation ended now</strong>')
+      expect(markup).toContain('Counterfactual snapshot · not a prediction · updates as creatures act')
+      expect(markup).toContain(formatGenerationForecastEquation(summary))
+      expect(markup).toContain(`aria-label="${formatGenerationForecastAriaLabel(summary, playbackStatus)}"`)
+      expect(markup).not.toContain('aria-live')
+    }
+  })
+
+  it('labels an awaiting cohort as a settlement preview while retaining numeric details', () => {
+    const world = createWorld({ ...defaultConfig, initialPopulation: 2 })
+    const summary = summarizeGenerationForecast(world)
+    const markup = renderToStaticMarkup(createElement(GenerationForecast, { world, playbackStatus: 'Awaiting settlement' }))
+
+    expect(markup).toContain('<strong>Settlement preview</strong>')
+    expect(markup).toContain('Not recorded until Finish generation')
+    expect(markup).toContain(formatGenerationForecastEquation(summary))
+    expect(markup).toContain(formatGenerationForecastLosses(summary))
+    expect(markup).toContain(formatGenerationForecastBirths(summary))
+    expect(markup).toContain(`aria-label="${formatGenerationForecastAriaLabel(summary, 'Awaiting settlement')}"`)
+    expect(markup).not.toContain('aria-live')
+  })
+
+  it('does not show a zero-cohort settlement equation after extinction', () => {
+    const world = createWorld({ ...defaultConfig, initialPopulation: 2 })
+    world.creatures = []
+    const summary = summarizeGenerationForecast(world)
+    const markup = renderToStaticMarkup(createElement(GenerationForecast, { world, playbackStatus: 'Extinct' }))
+
+    expect(markup).toContain('<strong>Population extinct</strong>')
+    expect(markup).toContain('No cohort remains to evaluate')
+    expect(markup).toContain(`aria-label="${formatGenerationForecastAriaLabel(summary, 'Extinct')}"`)
+    expect(markup).not.toContain('creatures evaluated')
+    expect(markup).not.toContain('current losses')
+    expect(markup).not.toContain('eligible parent')
+    expect(markup).not.toContain('blocked by cap')
+    expect(markup).not.toContain('Counterfactual')
+    expect(markup).not.toContain('not a prediction')
+    expect(markup).not.toContain('aria-live')
   })
 })
