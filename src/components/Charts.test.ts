@@ -1,14 +1,17 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { BEHAVIOR_HISTORY_CONTEXT, buildGenerationDelta, buildHistoryTimeline, buildObservedNonnegativeDomain, buildRetainedShockNavigator, buildSpeedHistogram, completePendingGenerationJournalFocus, formatGenerationDelta, formatRetainedShockNavigatorNotice, formatTimelineSummary, GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE, GENERATION_JOURNAL_SCROLL_OPTIONS, HistoryChart, historyCoordinate, MAX_TIMELINE_ENTRIES, openGenerationJournalReview, RETAINED_SHOCK_ARIA_LABEL_LIMIT, RETAINED_SHOCK_CONTEXT, RETAINED_SHOCK_ORDER_NOTE, resolveTimelineGeneration, safeNonnegativeHistoryValue, SPEED_HISTOGRAM_DOMAIN, traitColor } from './Charts'
+import { BEHAVIOR_HISTORY_CONTEXT, buildGenerationDelta, buildHistoryTimeline, buildObservedNonnegativeDomain, buildOutcomeFlowTimeline, buildRetainedShockNavigator, buildSpeedHistogram, completePendingGenerationJournalFocus, contrastRatio, formatGenerationDelta, formatOutcomeFlowSummary, formatRetainedShockNavigatorNotice, formatTimelineSummary, GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE, GENERATION_JOURNAL_SCROLL_OPTIONS, HistoryChart, historyCoordinate, MAX_TIMELINE_ENTRIES, openGenerationJournalReview, OUTCOME_FLOW_CARD_SURFACES, OUTCOME_FLOW_LEGEND, OUTCOME_FLOW_MISSING_TEXT, RETAINED_SHOCK_ARIA_LABEL_LIMIT, RETAINED_SHOCK_CONTEXT, RETAINED_SHOCK_ORDER_NOTE, resolveOutcomeFlowGeneration, resolveTimelineGeneration, safeFiniteHistoryValue, safeNonnegativeHistoryValue, SPEED_HISTOGRAM_DOMAIN, traitColor, outcomeFlowScrollLeft, outcomeFlowSlotCenter } from './Charts'
 import { speedColor } from './ArenaCanvas'
-import type { GenerationLedger, HistoryPoint, World, WorldEvent } from '../simulation/types'
+import type { EndCause, GenerationLedger, HistoryPoint, World, WorldEvent } from '../simulation/types'
 
 const ledger=(generation:number,birthsAdmitted=generation%3):GenerationLedger=>({generation,birthsAdmitted,outcomes:{survived:4,hunted:0,energy:0,unfed:0,late:0,aged:0}} as GenerationLedger)
 const point=(generation:number,population:number,avgEnergy:number|null=10,avgAge:number|null=2):HistoryPoint=>({generation,population,avgSpeed:1,avgSize:1,avgSense:.2,avgAggression:.4,avgCaution:.5,avgExploration:.6,sdSpeed:0,sdSize:0,sdSense:0,sdAggression:0,sdCaution:0,sdExploration:0,avgEnergy,avgAge})
 const shock=(generation:number,day:number,kind:WorldEvent['kind']='drought',summary=`${kind} recorded`,count=1):WorldEvent=>({generation,day,kind,summary,count})
 const chartWorld=(events:readonly WorldEvent[],generations=[1,2]):World=>({ledger:generations.map(generation=>ledger(generation)),history:generations.map(generation=>point(generation,generation*10)),events:[...events]} as unknown as World)
+const flowOutcomes=(overrides:Partial<Record<EndCause,number>>={}):Record<EndCause,number>=>({survived:0,hunted:0,energy:0,unfed:0,late:0,aged:0,...overrides})
+const flowLedger=(generation:number,startPopulation:number,outcomes:Record<EndCause,number>,birthsEligible=outcomes.survived,birthsAdmitted=birthsEligible,birthsCapped=birthsEligible-birthsAdmitted):GenerationLedger=>({generation,startPopulation,outcomes,birthsEligible,birthsAdmitted,birthsCapped} as unknown as GenerationLedger)
+const flowWorld=(ledgers:readonly GenerationLedger[]):World=>({...chartWorld([],ledgers.map(item=>item.generation)),ledger:[...ledgers]} as World)
 type JournalTargetSpy={disabled?:boolean;attributes:Set<string>;scrollCalls:ScrollIntoViewOptions[];focusCalls:FocusOptions[];scrollIntoView:(options?:ScrollIntoViewOptions)=>void;focus:(options?:FocusOptions)=>void;setAttribute:(name:string,value:string)=>void;removeAttribute:(name:string)=>void;hasAttribute:(name:string)=>boolean}
 const journalTarget=(disabled=false):JournalTargetSpy=>({disabled,attributes:new Set(),scrollCalls:[],focusCalls:[],scrollIntoView(options){this.scrollCalls.push(options??{})},focus(options){this.focusCalls.push(options??{})},setAttribute(name){this.attributes.add(name)},removeAttribute(name){this.attributes.delete(name)},hasAttribute(name){return this.attributes.has(name)}})
 
@@ -159,6 +162,133 @@ describe('generation history timeline',()=>{
   })
 })
 
+describe('population outcome flow history',()=>{
+  it('keeps the two accounting equations separate and names every nonzero loss cause',()=>{
+    const outcomes=flowOutcomes({survived:4,hunted:1,energy:2,unfed:1,late:1,aged:1}),[entry]=buildOutcomeFlowTimeline([flowLedger(7,10,outcomes,3,2,1)])
+    expect(entry).toMatchObject({generation:7,startPopulation:10,evaluated:10,cohortFlowAvailable:true,survivors:4,birthsEligible:3,birthsAdmitted:2,birthsCapped:1,birthCapState:'available',exactNextPopulation:6,nextPopulationAvailable:true})
+    const summary=formatOutcomeFlowSummary(entry)
+    expect(summary).toContain('Evaluated = survivors + losses: 10 = 4 survivors + 1 hunted + 2 energy depleted + 1 no food at settlement + 1 missed return deadline + 1 old age.')
+    expect(summary).toContain('Survivors + admitted births = exact next population: 4 + 2 = 6')
+    expect(summary).toContain('Birth cap: eligible parents = admitted births + capped births: 3 = 2 + 1')
+    expect(summary).toContain('1 capped birth')
+    expect(summary).toContain('Descriptive counts only')
+    expect(summary).not.toMatch(/because|caused|led to|impact/i)
+    expect(formatOutcomeFlowSummary({...entry,cohortFlowAvailable:false,nextPopulationAvailable:false,birthCapState:'unavailable'})).toContain('10 = 4 survivors')
+  })
+
+  it('represents zero losses and zero births without inventing missing values',()=>{
+    const [entry]=buildOutcomeFlowTimeline([flowLedger(1,4,flowOutcomes({survived:4}),0,0,0)])
+    expect(entry).toMatchObject({evaluated:4,exactNextPopulation:4,birthCapState:'available'})
+    expect(formatOutcomeFlowSummary(entry)).toContain('4 survivors + no recorded losses')
+    expect(formatOutcomeFlowSummary(entry)).toContain('4 + 0 = 4')
+    expect(formatOutcomeFlowSummary(entry)).toContain('0 eligible parents')
+    expect(formatOutcomeFlowSummary(entry)).toContain('0 capped births')
+  })
+
+  it('retains the latest forty mappable ledgers in source order and supports one row',()=>{
+    const ledgers=Array.from({length:45},(_,index)=>flowLedger(index+1,1,flowOutcomes({survived:1}))),entries=buildOutcomeFlowTimeline(ledgers)
+    expect(entries).toHaveLength(MAX_TIMELINE_ENTRIES)
+    expect(entries[0].generation).toBe(6)
+    expect(entries.at(-1)!.generation).toBe(45)
+    expect(buildOutcomeFlowTimeline([ledgers[0],ledgers[1],{generation:0},ledgers[3]],2).map(entry=>entry.generation)).toEqual([4])
+    expect(buildOutcomeFlowTimeline([...ledgers,{generation:0}],2).map(entry=>entry.generation)).toEqual([45])
+    expect(buildOutcomeFlowTimeline([ledgers[0]])).toHaveLength(1)
+    expect(buildOutcomeFlowTimeline(null)).toEqual([])
+    expect(buildOutcomeFlowTimeline(ledgers,0)).toEqual([])
+  })
+
+  it('keeps known fields in malformed or mismatched records but withholds irreconcilable stacks',()=>{
+    const malformed={generation:3,startPopulation:5,outcomes:{survived:2,hunted:1},birthsAdmitted:4,birthsEligible:4,birthsCapped:0},mismatched=flowLedger(4,5,flowOutcomes({survived:4,hunted:0}),1,1,0),[partial,wrong]=buildOutcomeFlowTimeline([malformed,mismatched])
+    expect(partial).toMatchObject({generation:3,startPopulation:5,cohortFlowAvailable:false,evaluated:null,survivors:2,birthsEligible:4,birthsAdmitted:4,birthsCapped:0,birthCapState:'unavailable',exactNextPopulation:null,nextPopulationAvailable:false})
+    expect(partial.outcomes).toMatchObject({survived:2,hunted:1,energy:null,unfed:null,late:null,aged:null})
+    expect(wrong).toMatchObject({generation:4,cohortFlowAvailable:false,evaluated:null,survivors:4,exactNextPopulation:5,nextPopulationAvailable:true,birthCapState:'available'})
+    expect(formatOutcomeFlowSummary(partial)).toContain(OUTCOME_FLOW_MISSING_TEXT)
+    expect(formatOutcomeFlowSummary(partial)).toContain('Known outcomes: 2 survived, 1 hunted.')
+  })
+
+  it('rejects invalid cap identities and protects max-safe arithmetic',()=>{
+    const capMismatch=flowLedger(5,6,flowOutcomes({survived:6}),5,3,1),[capEntry]=buildOutcomeFlowTimeline([capMismatch])
+    expect(capEntry).toMatchObject({nextPopulationAvailable:true,exactNextPopulation:9,birthCapState:'unavailable',birthsEligible:5,birthsAdmitted:3,birthsCapped:1})
+    const overEligible=flowLedger(6,6,flowOutcomes({survived:6}),1,2,0),[overEntry]=buildOutcomeFlowTimeline([overEligible])
+    expect(overEntry).toMatchObject({nextPopulationAvailable:false,exactNextPopulation:null,birthCapState:'unavailable'})
+    const max=Number.MAX_SAFE_INTEGER,maxEntry=flowLedger(max,max,flowOutcomes({survived:max}),max,1,max-1),[safeEntry]=buildOutcomeFlowTimeline([maxEntry])
+    expect(safeEntry).toMatchObject({generation:max,startPopulation:max,evaluated:max,cohortFlowAvailable:true,nextPopulationAvailable:false,exactNextPopulation:null})
+    expect(formatOutcomeFlowSummary(safeEntry)).not.toMatch(/NaN|Infinity/)
+  })
+
+  it('keeps outcome colors readable on both card themes and gives each category a pattern cue',()=>{
+    expect(OUTCOME_FLOW_LEGEND).toHaveLength(8)
+    expect(new Set(OUTCOME_FLOW_LEGEND.map(item=>item.pattern)).size).toBe(OUTCOME_FLOW_LEGEND.length)
+    for(const item of OUTCOME_FLOW_LEGEND)for(const surface of OUTCOME_FLOW_CARD_SURFACES)expect(contrastRatio(item.color,surface)??0).toBeGreaterThanOrEqual(3)
+    expect(contrastRatio('not-a-color','#fff')).toBeNull()
+  })
+
+  it('centers outcome slots rather than placing cursors on endpoints',()=>{
+    expect(outcomeFlowSlotCenter(0,1)).toBe(160)
+    expect(outcomeFlowSlotCenter(0,2)).toBe(81.5)
+    expect(outcomeFlowSlotCenter(1,2)).toBe(238.5)
+    expect(outcomeFlowSlotCenter(0,40)).toBeCloseTo(6.925)
+    expect(outcomeFlowSlotCenter(39,40)).toBeCloseTo(313.075)
+    expect(outcomeFlowSlotCenter(-1,2)).toBeNull()
+    expect(outcomeFlowSlotCenter(2,2)).toBeNull()
+    expect(outcomeFlowSlotCenter(0,0)).toBeNull()
+    expect(outcomeFlowSlotCenter(0,2,Number.NaN)).toBeNull()
+    expect(outcomeFlowSlotCenter(0,2,Number.POSITIVE_INFINITY)).toBeNull()
+  })
+
+  it('re-centers a selected slot defensively after a responsive layout change',()=>{
+    expect(outcomeFlowScrollLeft(1,2,320,118,0)).toBeCloseTo(179.5)
+    expect(outcomeFlowScrollLeft(0,40,320,118,0)).toBe(0)
+    expect(outcomeFlowScrollLeft(39,40,320,118,0)).toBeCloseTo(202)
+    expect(outcomeFlowScrollLeft(1,2,320,118,Number.NaN)).toBeNull()
+    expect(outcomeFlowScrollLeft(1,2,320,0,0)).toBeNull()
+  })
+
+  it('keeps selected generation resolution and visible chart semantics synchronized',()=>{
+    const first=flowLedger(1,4,flowOutcomes({survived:3,hunted:1}),2,1,1),second=flowLedger(2,4,flowOutcomes({survived:2,energy:2}),1,1,0),entries=buildOutcomeFlowTimeline([first,second])
+    expect(resolveOutcomeFlowGeneration(entries,2)).toBe(2)
+    expect(resolveOutcomeFlowGeneration(entries,99)).toBe(2)
+    expect(resolveOutcomeFlowGeneration(entries,null)).toBe(2)
+    const markup=renderToStaticMarkup(createElement(HistoryChart,{world:flowWorld([first,second]),requestedGeneration:2,onSelectGeneration:()=>{}}))
+    expect(markup).toContain('Cohort fates')
+    expect(markup).toContain('Next population')
+    expect(markup).toContain('<span>Evaluated = survivors + losses: 4 = 2 survivors + 2 energy depleted.</span>')
+    expect(markup).toContain('aria-label="Outcome flow legend"')
+    expect(markup).toContain('Hunted')
+    expect(markup).toContain('Admitted births')
+    expect(markup).toContain('data-outcome-flow-scroll="true"')
+    expect(markup).toContain('style="overflow-x:auto;width:100%"')
+    expect(markup).toContain('data-outcome-flow-plot="true"')
+    expect(markup).toContain('style="min-width:320px;width:100%"')
+    expect(markup.match(/data-outcome-flow-scroll="true"/g)).toHaveLength(2)
+    expect(markup).toContain('id="outcome-flow-cohort-hunted"')
+    expect(markup).toContain('id="outcome-flow-next-births"')
+    expect(markup).toContain('fill:url(#outcome-flow-cohort-hunted)')
+    expect(markup).toContain('stroke="var(--paper)"')
+    expect(markup).toContain('<details')
+    expect(markup).toContain('Exact outcome table · 2 retained rows')
+    expect(markup).toContain('style="display:flex;align-items:center;min-height:44px;padding:8px 10px;cursor:pointer;gap:6px"')
+    expect(markup).toContain('class="journal-events utility-breakdown"')
+    expect(markup).toContain('<th scope="col">Recorded start</th>')
+    expect(markup).toContain('<th scope="col">Reconciled evaluated</th>')
+    expect(markup).toContain('<th scope="col">Eligible parents</th>')
+    expect(markup).toContain('<th scope="col">Birth-cap status</th>')
+    expect(markup).toContain('<th scope="col">Energy depleted</th>')
+    expect(markup).toContain('<th scope="row">2</th>')
+    expect(markup).toContain('Exact next population')
+    const legend=markup.slice(markup.indexOf('aria-label="Outcome flow legend"'),markup.indexOf('<details'))
+    expect(legend).not.toContain('Capped births')
+    expect(markup).not.toContain('aria-live="polite"')
+    expect(markup).not.toMatch(/NaN|Infinity/)
+  })
+
+  it('renders an explicit empty state when no generation is mappable',()=>{
+    const markup=renderToStaticMarkup(createElement(HistoryChart,{world:{...chartWorld([],[]),ledger:[{generation:0}]} as World,requestedGeneration:null,onSelectGeneration:()=>{}}))
+    expect(markup).toContain('Outcome flow unavailable: no valid retained generation records.')
+    expect(markup).not.toContain('Outcome flow legend')
+  })
+})
+
 describe('energy and age history facets',()=>{
   it('keeps observed domains finite, nonnegative, data-driven, and readable for small values',()=>{
     expect(buildObservedNonnegativeDomain([null,undefined,Number.NaN,Number.POSITIVE_INFINITY,-4,0,.4])).toEqual({min:0,max:1})
@@ -168,6 +298,9 @@ describe('energy and age history facets',()=>{
     expect(safeNonnegativeHistoryValue(-1)).toBeNull()
     expect(safeNonnegativeHistoryValue(0)).toBe(0)
     expect(safeNonnegativeHistoryValue(2.5)).toBe(2.5)
+    expect(safeFiniteHistoryValue(Number.NaN)).toBeNull()
+    expect(safeFiniteHistoryValue(Number.POSITIVE_INFINITY)).toBeNull()
+    expect(safeFiniteHistoryValue(-1)).toBe(-1)
   })
 
   it('renders next-population means with separate observed domains and precise wording',()=>{
