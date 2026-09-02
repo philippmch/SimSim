@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveAcknowledgedFinishGeneration, resolveTerminalOutcome, reviewSettlementAndNavigate, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
+import { formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, hasOwnActivityField, InterventionFeedFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveAcknowledgedFinishGeneration, resolveTerminalOutcome, reviewSettlementAndNavigate, SimulationActivityFallback, SimulationEventStory, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
 import { formatPerceptionTelemetry } from './components/CreatureInspector'
 import { createWorld, defaultConfig, finishGeneration as settleGeneration } from './simulation/engine'
 import { MAX_FOUNDER_MIGRATION_BATCH, MAX_POPULATION } from './simulation/config'
-import type { LastInspectedOutcome, PerceptionDiagnostics } from './simulation/types'
+import type { LastInspectedOutcome, PerceptionDiagnostics, World } from './simulation/types'
 
 const ready = (overrides: Partial<NextActionCopyInput> = {}): NextActionCopyInput => ({
   extinct: false,
@@ -337,5 +337,33 @@ describe('parameters loading state', () => {
     expect(markup).toContain('role="status"')
     expect(markup).toContain('aria-busy="true"')
     expect(markup).toContain('Opening parameter controls…')
+  })
+})
+
+describe('live event story selection', () => {
+  it('uses own activity-field presence to distinguish modern and legacy snapshots', () => {
+    expect(hasOwnActivityField({ activity: [] })).toBe(true)
+    expect(hasOwnActivityField({ events: [] })).toBe(false)
+    expect(hasOwnActivityField(null)).toBe(false)
+  })
+
+  it('keeps both lazy fallbacks explicit and accessible', () => {
+    const modern = renderToStaticMarkup(createElement(SimulationActivityFallback))
+    const legacy = renderToStaticMarkup(createElement(InterventionFeedFallback))
+    expect(modern).toContain('What happened')
+    expect(modern).toContain('Opening retained moments…')
+    expect(legacy).toContain('Recent shocks')
+    expect(legacy).toContain('Opening recorded shocks…')
+    expect(modern).toContain('aria-busy="true"')
+    expect(legacy).toContain('aria-busy="true"')
+  })
+
+  it('renders exactly one modern or legacy story branch', () => {
+    const modern = renderToStaticMarkup(createElement(SimulationEventStory, { world: { activity: [], events: [] } as unknown as World }))
+    const legacy = renderToStaticMarkup(createElement(SimulationEventStory, { world: { events: [] } as unknown as World }))
+    expect(modern).toContain('What happened')
+    expect(modern).not.toContain('Recent shocks')
+    expect(legacy).toContain('Recent shocks')
+    expect(legacy).not.toContain('What happened')
   })
 })

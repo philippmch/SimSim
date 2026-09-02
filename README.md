@@ -2,7 +2,9 @@
 
 An interactive, deterministic natural-selection sandbox. Creatures forage,
 remember resources and danger, hunt, flee, return home, reproduce, and mutate
-while live charts show selection taking shape across generations.
+while live charts show selection taking shape across generations. The live
+**What happened** panel keeps the latest salient event prominent, with a
+bounded earlier-moment trail for context.
 
 ## Ecological behavior model
 
@@ -37,9 +39,9 @@ capacity-limited births use a seeded fair ranking. The ledger records production
 consumption, attack outcomes, birth capacity, and selection moments. Autoplay also
 keeps a bounded newest-first list of salient actor-level moments—such as food
 collection, attacks, home arrivals, energy loss, regrowth, interventions, and
-generation settlement—with generation/day provenance. Movement-only ticks are
-omitted, so this is not a long per-tick trace or replay. Clicking a creature still
-opens its bounded inspection telemetry.
+generation settlement—with generation/day provenance and a short model-context
+line. Movement-only ticks are omitted, so this is not a long per-tick trace or
+replay. Clicking a creature still opens its bounded inspection telemetry.
 
 The seeded environment persists across generations. Food patches have visible
 stock, bounded capacity, and deterministic within-generation regrowth. Remaining

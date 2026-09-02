@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { WorldActivityEntry } from '../simulation/types'
-import SimulationActivity, { MAX_VISIBLE_ACTIVITY_ENTRIES, NO_ACTIVITY_MOMENTS, deriveActivityFeed, deriveSimulationActivity, formatActivityAnnouncement, formatActivityMoment, formatActivityRetentionContext, hasWorldActivityTelemetry, normalizeActivityMoment } from './SimulationActivity'
+import { defaultConfig } from '../simulation/config'
+import type { Config, WorldActivityEntry, WorldActivityKind } from '../simulation/types'
+import SimulationActivity, { MAX_VISIBLE_ACTIVITY_ENTRIES, NO_ACTIVITY_MOMENTS, deriveActivityFeed, deriveSimulationActivity, formatActivityAnnouncement, formatActivityContext, formatActivityMoment, formatActivityRetentionContext, hasWorldActivityTelemetry, normalizeActivityMoment } from './SimulationActivity'
 
 const moment = (overrides: Partial<WorldActivityEntry> = {}): WorldActivityEntry => ({
   sequence: 1,
@@ -15,6 +16,14 @@ const moment = (overrides: Partial<WorldActivityEntry> = {}): WorldActivityEntry
   actorIds: [1],
   ...overrides,
 })
+
+const contextConfig: Partial<Config> = {
+  ...defaultConfig,
+  foodEnergy: 22,
+  attackCost: 4,
+  predationMode: 'threshold',
+  patchCapacity: 60,
+}
 
 describe('simulation activity helpers', () => {
   it('normalizes legacy missing sequence and keeps optional actor metadata safe', () => {
@@ -74,6 +83,72 @@ describe('simulation activity helpers', () => {
     expect(formatActivityAnnouncement(normalizeActivityMoment(entry, 0))).not.toBe(formatActivityAnnouncement(normalizeActivityMoment({ ...entry, sequence: 2 }, 1)))
     expect(formatActivityAnnouncement(null)).toBe('')
   })
+
+  it.each([
+    ['food-collected', 'Classic mode awards one carried-food unit at contact and uses the legacy fixed 22-energy reward.'],
+    ['attack-success', 'Threshold predation resolves an eligible contact meeting the size gate automatically; no contest energy cost is applied.'],
+    ['attack-failure', 'Threshold predation should resolve an eligible contact meeting the size gate automatically; this failure is inconsistent or unavailable in threshold mode.'],
+    ['energy-death', 'Energy reached zero; movement, sensing, and admitted contest attempts can spend it. Phase attribution is unavailable for this record.'],
+    ['reached-home', 'In classic mode, carrying food and crossing the home radius ends the active day.'],
+    ['natural-regrowth', 'Deterministic patch regrowth advances toward the configured capacity of 60 food per patch; this record has no per-patch breakdown.'],
+    ['intervention', 'The recorded user-applied change takes effect immediately; no downstream evolutionary claim is made from this record.'],
+    ['generation-settlement', 'The exact next population is 4 creatures; survivors carry forward and admitted births are added at this recorded boundary.'],
+  ] as [WorldActivityKind, string][])('gives %s a factual model-context line', (kind, expected) => {
+    const normalized = normalizeActivityMoment(moment({ kind, count: kind === 'generation-settlement' ? 4 : 1, contestChance: undefined }), 0)
+    expect(normalized).not.toBeNull()
+    expect(formatActivityContext(normalized!, { ...contextConfig, ecologyMode: 'classic' })).toBe(`Model context: ${expected}`)
+  })
+
+  it('distinguishes classic and energy-regrowth food rules and reports missing ecology mode', () => {
+    const normalized = normalizeActivityMoment(moment({ kind: 'food-collected' }), 0)!
+    expect(formatActivityContext(normalized, { ecologyMode: 'classic', foodEnergy: 99 })).toContain('legacy fixed 22-energy reward')
+    expect(formatActivityContext(normalized, { ecologyMode: 'energy-regrowth', foodEnergy: 17 })).toContain('17 energy')
+    expect(formatActivityContext(normalized, { ecologyMode: 'energy-regrowth' })).toContain('configured foodEnergy is unavailable')
+    expect(formatActivityContext(normalized, {})).toContain('Ecology mode unavailable')
+  })
+
+  it('keeps threshold attacks automatic and gives contest attempts their recorded chance and cost', () => {
+    const success = normalizeActivityMoment(moment({ kind: 'attack-success', contestChance: .63 }), 0)!
+    const failure = normalizeActivityMoment(moment({ kind: 'attack-failure' }), 0)!
+    const thresholdSuccess = formatActivityContext(success, { predationMode: 'threshold', attackCost: 99 })
+    const thresholdFailure = formatActivityContext(failure, { predationMode: 'threshold', attackCost: 99 })
+    const contestSuccess = formatActivityContext(success, { predationMode: 'contest', attackCost: 4 })
+    const contestFailure = formatActivityContext(failure, { predationMode: 'contest', attackCost: 4 })
+    expect(thresholdSuccess).toContain('resolves an eligible contact meeting the size gate automatically')
+    expect(thresholdSuccess).toContain('no contest energy cost is applied')
+    expect(thresholdSuccess).not.toContain('99')
+    expect(thresholdFailure).toContain('inconsistent or unavailable')
+    expect(contestSuccess).toContain('recorded contest chance 63%')
+    expect(contestSuccess).toContain('admitted attempts pay 4 energy units')
+    expect(contestSuccess).not.toMatch(/trait caused|because/i)
+    expect(contestFailure).toContain('event-level contest chance unavailable')
+    expect(formatActivityContext(failure, {})).toContain('Current predation mode unavailable')
+  })
+
+  it('reports the exact settlement accounting rule without parsing or repeating summary prose', () => {
+    const complete = normalizeActivityMoment(moment({ kind: 'generation-settlement', count: 5, summary: 'Generation 1 settled: 3 survivors + 2 admitted births → generation 2 starts with 5 creatures.' }), 0)!
+    const incomplete = normalizeActivityMoment(moment({ kind: 'generation-settlement', count: 5 }), 0)!
+    expect(formatActivityContext(complete, contextConfig)).toBe('Model context: The exact next population is 5 creatures; survivors carry forward and admitted births are added at this recorded boundary.')
+    expect(formatActivityContext(incomplete, contextConfig)).toBe(formatActivityContext(complete, contextConfig))
+  })
+
+  it('keeps energy, home, regrowth, and intervention context rule-relevant without non-finite or causal text', () => {
+    const entries = (['energy-death', 'reached-home', 'natural-regrowth', 'intervention'] as WorldActivityKind[]).map((kind, index) => normalizeActivityMoment(moment({ kind, sequence: index + 1 }), index)!)
+    const contexts = entries.map(entry => formatActivityContext(entry, { ecologyMode: 'energy-regrowth', patchCapacity: Number.NaN }))
+    expect(contexts.join(' ')).not.toMatch(/NaN|Infinity|undefined/)
+    expect(contexts.join(' ')).not.toMatch(/trait caused|because|led to/i)
+    expect(contexts[0]).toContain('Phase attribution is unavailable')
+    expect(contexts[1]).toContain('returning and crossing the home radius')
+    expect(contexts[2]).toContain('no per-patch breakdown')
+    expect(contexts[3]).toContain('takes effect immediately')
+  })
+
+  it('does not claim that a zero-count intervention changed the world', () => {
+    const intervention = normalizeActivityMoment(moment({ kind: 'intervention', count: 0 }), 0)!
+    const context = formatActivityContext(intervention, contextConfig)
+    expect(context).toContain('resolved with no units changed')
+    expect(context).not.toContain('takes effect immediately')
+  })
 })
 
 describe('SimulationActivity SSR markup', () => {
@@ -91,32 +166,47 @@ describe('SimulationActivity SSR markup', () => {
       world: {
         activity: [
           moment({ sequence: 1, generation: 1, summary: 'older moment' }),
-          moment({ sequence: 2, generation: 2, day: 1.5, kind: 'generation-settlement', summary: 'Generation 1 settled.' }),
+          moment({ sequence: 2, generation: 2, day: 1.5, kind: 'generation-settlement', count: 5, summary: 'Generation 1 settled: 3 survivors + 2 admitted births → generation 2 starts with 5 creatures.' }),
         ],
         activityDropped: 3,
       },
     }))
 
+    expect(markup).toContain('What happened')
     expect(markup).toContain('Recent key moments')
     expect(markup).toContain('Generation 2 · day 1.50')
-    expect(markup).toContain('Generation 1 settled.')
+    expect(markup).toContain('Generation 1 settled: 3 survivors + 2 admitted births')
     expect(markup).toContain('<details>')
-    expect(markup).toContain('Show all 2 retained key moments</summary>')
-    expect(markup).toContain('Retained key moments, newest first')
-    expect(markup.match(/<li/g)).toHaveLength(2)
+    expect(markup).toContain('Show 1 earlier retained key moment</summary>')
+    expect(markup).toContain('Earlier retained key moments, newest first')
+    expect(markup.match(/<li/g)).toHaveLength(1)
+    expect(markup.match(/Generation 1 settled:/g)).toHaveLength(1)
+    expect(markup.match(/Generation 2 · day 1\.50/g)).toHaveLength(1)
+    expect(markup).toContain('Model context: The exact next population is 5 creatures; survivors carry forward and admitted births are added at this recorded boundary.')
     expect(markup).toContain('3 records dropped')
     expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
     expect(markup).not.toMatch(/NaN|Infinity|undefined/)
+    expect(markup).toContain('min-height:44px')
+    expect(markup).toContain('display:list-item')
   })
 
   it('labels and renders only the visible retained portion of an oversized legacy buffer', () => {
     const activity = Array.from({ length: MAX_VISIBLE_ACTIVITY_ENTRIES + 3 }, (_, index) => moment({ sequence: index + 1, summary: `moment ${index + 1}` }))
     const markup = renderToStaticMarkup(createElement(SimulationActivity, { world: { activity, activityDropped: 2 } }))
 
-    expect(markup).toContain(`Show all ${MAX_VISIBLE_ACTIVITY_ENTRIES} retained key moments</summary>`)
-    expect(markup.match(/<li/g)).toHaveLength(MAX_VISIBLE_ACTIVITY_ENTRIES)
+    expect(markup).toContain(`Show ${MAX_VISIBLE_ACTIVITY_ENTRIES - 1} earlier retained key moments</summary>`)
+    expect(markup.match(/<li/g)).toHaveLength(MAX_VISIBLE_ACTIVITY_ENTRIES - 1)
     expect(markup).toContain('5 records dropped or unavailable')
     expect(markup).not.toContain(`Show all ${MAX_VISIBLE_ACTIVITY_ENTRIES + 3}`)
+  })
+
+  it('omits the disclosure when the latest event is the only retained moment', () => {
+    const markup = renderToStaticMarkup(createElement(SimulationActivity, { world: { activity: [moment()], activityDropped: 0, config: contextConfig } }))
+
+    expect(markup).not.toContain('<details')
+    expect(markup).not.toContain('Show 0 earlier')
+    expect(markup).toContain('What happened')
+    expect(markup.match(/<strong/g)).toHaveLength(2)
   })
 
   it('does not render an activity panel for legacy worlds with no activity field', () => {

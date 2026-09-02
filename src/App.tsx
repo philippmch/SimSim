@@ -8,7 +8,6 @@ import { createController } from './simulation/controller'
 import type { SimulationController,SimulationSnapshotMeta } from './simulation/controller'
 import { experimentUrl,loadInitialConfig,persistExperiment } from './simulation/share'
 import type { Config,InterventionKind,LastInspectedOutcome, World } from './simulation/types'
-import InterventionFeed from './components/InterventionFeed'
 import DashboardNavigation, { DASHBOARD_SECTION_IDS, DASHBOARD_SECTION_SCROLL_STYLE, openDashboardSection } from './components/DashboardNavigation'
 
 const ExperimentPanel=lazy(()=>import('./components/ExperimentPanel').then(module=>({default:module.ExperimentPanel})))
@@ -22,10 +21,18 @@ const SettlementReport=lazy(()=>import('./components/SettlementReport'))
 const GenerationHandoff=lazy(()=>import('./components/GenerationHandoff'))
 const GenerationAccounting=lazy(()=>import('./components/GenerationAccounting'))
 const SimulationActivity=lazy(()=>import('./components/SimulationActivity'))
+const InterventionFeed=lazy(()=>import('./components/InterventionFeed'))
 const ParametersPanel=lazy(()=>import('./components/ParametersPanel'))
 const creatureStates=Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]
 
 const copyConfig=(c:Config):Config=>({...c})
+
+/** Activity telemetry is an additive snapshot field; its presence selects the
+ * modern single story while older snapshots retain the intervention fallback. */
+export function hasOwnActivityField(value:unknown):boolean{
+  if(value===null||(typeof value!=='object'&&typeof value!=='function'))return false
+  try{return Object.prototype.hasOwnProperty.call(value,'activity')}catch{return false}
+}
 
 export function GenerationAccountingFallback(){
   return <><div className="ecology-line activity-line" aria-busy="true"><strong>Resource pressure</strong><span>Loading resource pressure…</span></div><div className="ecology-line activity-line" aria-busy="true"><strong>Generation accounting</strong><span>Loading generation accounting…</span></div></>
@@ -40,6 +47,20 @@ export function GenerationHandoffFallback(){
 
 export function ParametersPanelFallback(){
   return <p className="action-status" role="status" aria-busy="true">Opening parameter controls…</p>
+}
+
+export function SimulationActivityFallback(){
+  return <div className="interventions" role="group" aria-label="What happened" aria-busy="true"><span><strong style={{fontSize:12}}>What happened</strong><small style={{fontSize:10}}>Opening retained moments…</small></span></div>
+}
+
+export function InterventionFeedFallback(){
+  return <div className="interventions" role="group" aria-label="Recent shocks" aria-busy="true"><span><strong style={{fontSize:12}}>Recent shocks</strong><small style={{fontSize:10}}>Opening recorded shocks…</small></span></div>
+}
+
+export function SimulationEventStory({world}:{world:World}){
+  return hasOwnActivityField(world)
+    ? <Suspense fallback={<SimulationActivityFallback/>}><SimulationActivity world={world}/></Suspense>
+    : <Suspense fallback={<InterventionFeedFallback/>}><InterventionFeed events={world.events}/></Suspense>
 }
 
 export function formatStepCompletion(world:World,meta:SimulationSnapshotMeta){
@@ -368,14 +389,13 @@ function App(){
           <span><strong>Observed path</strong><small>Latest manual step</small></span>
           <output>{observedPath}</output>
         </div>
-        <Suspense fallback={<div className="interventions" role="group" aria-label="Recent key moments" aria-busy="true"><span><strong>Recent key moments</strong><small>Opening retained moments…</small></span></div>}><SimulationActivity world={world}/></Suspense>
+        <SimulationEventStory world={world}/>
         <div className="interventions" role="group" aria-label="Live ecological interventions">
           <span><strong>Live shocks</strong><small>No restart needed</small></span>
           <button onClick={()=>intervene('resource-bloom')} disabled={world.food.length>=MAX_FOOD} title={world.food.length>=MAX_FOOD?'Food is at the safety cap':'Add a deterministic pulse of food'}>Resource bloom</button>
           <button onClick={()=>intervene('drought')} disabled={!world.food.length} title={!world.food.length?'There is no food to remove':'Remove 40% of current food'}>Drought</button>
           <button onClick={()=>intervene('founder-migration')} disabled={founderMigrationCopy.available===0} title={founderMigrationCopy.title} aria-label={founderMigrationCopy.ariaLabel}>{founderMigrationCopy.buttonLabel}</button>
         </div>
-        <InterventionFeed events={world.events}/>
         {dirty&&<div className="pending" role="status">Changes are staged and will take effect when you choose <strong>Apply &amp; restart</strong>.</div>}
 
         <DashboardNavigation/>
