@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createWorld, defaultConfig, runGeneration as runWorldGeneration } from '../simulation/engine'
-import { CLASSIC_MODES, V4_ONLY_CONFIG_KEYS } from '../simulation/config'
+import { CLASSIC_MODES, V4_ONLY_CONFIG_KEYS, V5_ONLY_CONFIG_KEYS } from '../simulation/config'
 import type { ExperimentPlan, ReplicateResult } from './types'
 import {
   ExperimentCancelledError,
@@ -263,13 +263,41 @@ describe('paired experiment runner', () => {
     expect(lines[3]).toContain(',paired_delta,B-A,1,population,0')
   })
 
-  it('normalizes exact legacy v3 result configs to classic v4 modes', async () => {
+  it('normalizes exact legacy v3 result configs to classic modes', async () => {
     const result = await runExperiment(plan({ replicates: 1, generations: 1, metrics: ['population'] }))
     const payload = JSON.parse(toExperimentJson(result))
-    for (const key of V4_ONLY_CONFIG_KEYS) delete payload.result.plan.baseConfig[key]
+    for (const key of [...V4_ONLY_CONFIG_KEYS, ...V5_ONLY_CONFIG_KEYS]) delete payload.result.plan.baseConfig[key]
     const imported = fromExperimentJson(JSON.stringify(payload))
     expect(imported.result.plan.baseConfig).toMatchObject({ ecologyMode: 'classic', perceptionMode: 'perfect', predationMode: 'threshold' })
     expect(imported.result.plan.baseConfig.foodEnergy).toBe(defaultConfig.foodEnergy)
+    expect(imported.result.plan.baseConfig.maturityAge).toBe(0)
+  })
+
+  it('normalizes exact legacy v4 result configs without changing ecological modes and inherits maturity in partial scenarios', async () => {
+    const input = plan({
+      replicates: 1,
+      generations: 2,
+      baseConfig: { ...defaultConfig, seed: 6301, initialPopulation: 5, foodPerDay: 8, dayLength: 5 },
+      scenarioB: { id: 'treatment', label: 'Treatment', config: { startingEnergy: 125 } },
+      metrics: ['population', 'avgEnergy', 'births'],
+    })
+    const result = await runExperiment(input)
+    const payload = JSON.parse(toExperimentJson(result)) as any
+    delete payload.result.plan.baseConfig.maturityAge
+    const imported = fromExperimentJson(JSON.stringify(payload))
+    expect(imported.result.plan.baseConfig).toMatchObject({
+      ecologyMode: 'energy-regrowth',
+      perceptionMode: 'realistic',
+      predationMode: 'contest',
+      maturityAge: 0,
+    })
+    expect(imported.result.plan.scenarioB.config).toEqual({ startingEnergy: 125 })
+    const migratedResult = await runExperiment(imported.result.plan)
+    const explicitResult = await runExperiment({
+      ...input,
+      baseConfig: { ...input.baseConfig, maturityAge: 0 },
+    })
+    expect(migratedResult).toEqual(explicitResult)
   })
 
   it('neutralizes spreadsheet formulas in every string-backed CSV identifier', async () => {

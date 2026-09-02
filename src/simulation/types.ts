@@ -18,7 +18,7 @@ export interface Config {
   foodPatchCount:number; foodPatchiness:number; foodPatchSpread:number; obstacleCount:number
   seasonAmplitude:number; seasonLength:number; environmentResponse:number; foodTrend:number
   founderPhysicalVariation:number;founderBehaviorVariation:number
-  foodEnergy:number;preyEnergy:number;energyRetention:number;reproductionEnergyCost:number;offspringEnergy:number;maxAge:number
+  foodEnergy:number;preyEnergy:number;energyRetention:number;reproductionEnergyCost:number;offspringEnergy:number;maxAge:number;maturityAge:number
   patchCapacity:number;foodRegrowthRate:number
   fieldOfView:number;detectionFalloff:number;reactionTime:number;obstacleOcclusion:boolean
   attackCost:number;handlingTime:number;contestSharpness:number;evasionWeight:number
@@ -76,7 +76,7 @@ export type EndCause=(typeof END_CAUSES)[number]
 export type TerminalEndCause=Exclude<EndCause,'survived'>
 export interface LastInspectedOutcome{individualId:number;generation:number;cause:TerminalEndCause}
 export type AttackAttemptBasis='claims'|'admitted'
-export interface GenerationLedger{generation:number;startPopulation:number;outcomes:Record<EndCause,number>;foodAtStart:number;foodProduced:number;foodRemoved:number;foodConsumed:number;foodRemaining:number;preyConsumed:number;attackAttempts:number;attackSuccesses:number;attackFailures:number;/** Optional for legacy ledgers retained before contested-attack telemetry. */attackContested?:number;/** Optional for legacy ledgers retained before attempt-basis telemetry. */attackAttemptBasis?:AttackAttemptBasis;birthsEligible:number;birthsAdmitted:number;birthsCapped:number;selection:{start:SelectionSummary;survivor:SelectionSummary;reproducer:SelectionSummary};selectionByOutcome:Record<EndCause,SelectionSummary>;inheritance?:InheritanceSummary}
+export interface GenerationLedger{generation:number;startPopulation:number;outcomes:Record<EndCause,number>;foodAtStart:number;foodProduced:number;foodRemoved:number;foodConsumed:number;foodRemaining:number;preyConsumed:number;attackAttempts:number;attackSuccesses:number;attackFailures:number;/** Optional for legacy ledgers retained before contested-attack telemetry. */attackContested?:number;/** Optional for legacy ledgers retained before attempt-basis telemetry. */attackAttemptBasis?:AttackAttemptBasis;birthsEligible:number;birthsAdmitted:number;birthsCapped:number;/** Optional for legacy ledgers retained before reproductive maturity telemetry. */birthsImmature?:number;selection:{start:SelectionSummary;survivor:SelectionSummary;reproducer:SelectionSummary};selectionByOutcome:Record<EndCause,SelectionSummary>;inheritance?:InheritanceSummary}
 export type InterventionKind='resource-bloom'|'drought'|'founder-migration'
 export interface WorldEvent{generation:number;day:number;kind:InterventionKind;summary:string;count:number;/** Optional for retained legacy records created before live-announcement sequencing. */sequence?:number}
 /**

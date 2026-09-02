@@ -139,6 +139,14 @@ describe('bounded world activity telemetry',()=>{
     expect(before.activity).toEqual([])
   })
 
+  it('explains advanced maturity waits in settlement activity without changing classic copy',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0,obstacleCount:0,dayLength:60,energyRetention:1,reproductionEnergyCost:10})
+    Object.assign(world.creatures[0],{home:true,energy:100})
+    finishGeneration(world)
+    expect(world.ledger[0].birthsImmature).toBe(1)
+    expect(world.activity.at(-1)?.summary).toContain('1 energy-ready survivor waited for maturity.')
+  })
+
   it('lazily tolerates omitted activity fields on legacy snapshots',()=>{
     const world=classic() as World
     delete(world as Partial<World>).activity

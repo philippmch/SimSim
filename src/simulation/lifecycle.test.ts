@@ -37,9 +37,45 @@ describe('lifecycle settlement policy',()=>{
 
   it('does not keep zero-retained-energy adults or reproduce at exact cost',()=>{
     const noRetention=settle([creature(1,{energy:100})],{...energy,energyRetention:0})
-    expect(noRetention.outcomeCounts.energy).toBe(1);expect(noRetention.survivors).toEqual([])
+    expect(noRetention.outcomeCounts.energy).toBe(1);expect(noRetention.survivors).toEqual([]);expect(noRetention.immatureParents).toEqual([])
     const exactCost=settle([creature(1,{energy:100})],{...energy,energyRetention:.5,reproductionEnergyCost:50})
-    expect(exactCost.survivors).toHaveLength(1);expect(exactCost.eligibleParents).toEqual([]);expect(exactCost.survivors[0].settledEnergy).toBe(50)
+    expect(exactCost.survivors).toHaveLength(1);expect(exactCost.eligibleParents).toEqual([]);expect(exactCost.immatureParents).toEqual([]);expect(exactCost.survivors[0].settledEnergy).toBe(50)
+  })
+
+  it('separates energy-qualified immature survivors from mature eligible parents',()=>{
+    const result=settle([
+      creature(1,{age:0,energy:100}),
+      creature(2,{age:1,energy:100}),
+      creature(3,{age:0,energy:69}),
+      creature(4,{age:0,energy:70}),
+    ],{...energy,maturityAge:1,reproductionEnergyCost:35},6)
+    expect(result.immatureParents.map(item=>item.individualId)).toEqual([1])
+    expect(result.eligibleParents.map(item=>item.individualId)).toEqual([2])
+    expect(result.admittedParents.map(item=>item.individualId)).toEqual([2])
+    expect(result.birthsCapped).toBe(0)
+    expect(result.survivors.map(item=>[item.individual.individualId,item.reproductionEligible])).toEqual([[1,false],[2,true],[3,false],[4,false]])
+  })
+
+  it('treats omitted maturity as immediate for direct legacy policies',()=>{
+    const omitted=settle([creature(1,{age:0,energy:100})],energy)
+    const explicit=settle([creature(1,{age:0,energy:100})],{...energy,maturityAge:0})
+    expect(omitted).toEqual(explicit)
+    expect(omitted.immatureParents).toEqual([])
+    const classicMature=settle([creature(1,{age:0,food:2})],{...classic,maturityAge:200})
+    const classicImmediate=settle([creature(1,{age:0,food:2})],{...classic,maturityAge:0})
+    expect(classicMature).toEqual(classicImmediate)
+  })
+
+  it('keeps immature and capacity-capped mature parents in separate buckets',()=>{
+    const result=settle([
+      creature(1,{age:0,energy:100}),
+      creature(2,{age:1,energy:100}),
+      creature(3,{age:1,energy:100}),
+    ],{...energy,maturityAge:1,reproductionEnergyCost:35},3,19)
+    expect(result.immatureParents.map(item=>item.individualId)).toEqual([1])
+    expect(result.eligibleParents.map(item=>item.individualId)).toEqual([2,3])
+    expect(result.admittedParents).toHaveLength(0)
+    expect(result.birthsCapped).toBe(2)
   })
 
   it('preserves explicit advanced cause precedence when retention is zero',()=>{

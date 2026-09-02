@@ -1,4 +1,4 @@
-import { defaultConfig, LEGACY_V3_CONFIG_KEYS, sanitizeConfig, sanitizeLegacyConfig } from '../simulation/config'
+import { defaultConfig, LEGACY_V3_CONFIG_KEYS, LEGACY_V4_CONFIG_KEYS, migrateLegacyV4Config, sanitizeConfig, sanitizeLegacyConfig } from '../simulation/config'
 import type { Config } from '../simulation/types'
 import {
   EXPERIMENT_METRICS,
@@ -18,6 +18,7 @@ const INTERVENTION_KEYS = new Set<string>(INTERVENTION_CONFIG_KEYS)
 const CONFIG_KEYS = Object.keys(defaultConfig) as (keyof Config)[]
 const CONFIG_KEY_SET = new Set<string>(CONFIG_KEYS)
 const LEGACY_CONFIG_KEY_SET = new Set<string>(LEGACY_V3_CONFIG_KEYS)
+const LEGACY_V4_CONFIG_KEY_SET = new Set<string>(LEGACY_V4_CONFIG_KEYS)
 
 export interface ExperimentExport {
   schema: 'evolution-field-lab/experiment-result'
@@ -106,16 +107,27 @@ function assertNesting(source: string): void {
 function validateConfig(value: unknown, path: string, partial = false): RecordValue {
   const config = record(value, path)
   const keys = Object.keys(config)
-  const legacyFull = !partial && keys.length === LEGACY_V3_CONFIG_KEYS.length && keys.every(key => LEGACY_CONFIG_KEY_SET.has(key))
+  const legacyVersion = !partial && keys.length === LEGACY_V4_CONFIG_KEYS.length && keys.every(key => LEGACY_V4_CONFIG_KEY_SET.has(key))
+    ? 'v4'
+    : !partial && keys.length === LEGACY_V3_CONFIG_KEYS.length && keys.every(key => LEGACY_CONFIG_KEY_SET.has(key))
+      ? 'v3'
+      : null
   if (partial) {
     for (const key of keys) if (!CONFIG_KEY_SET.has(key)) fail(`${path}.${key} is unsupported`)
-  } else if (!legacyFull) {
+  } else if (!legacyVersion) {
     exactKeys(config, CONFIG_KEYS, [], path)
+  } else if (legacyVersion === 'v4') {
+    exactKeys(config, LEGACY_V4_CONFIG_KEYS, [], path)
   } else {
     exactKeys(config, LEGACY_V3_CONFIG_KEYS, [], path)
   }
-  const sanitized = legacyFull ? sanitizeLegacyConfig(config) : sanitizeConfig({ ...defaultConfig, ...config })
-  for (const key of partial ? keys as (keyof Config)[] : legacyFull ? LEGACY_V3_CONFIG_KEYS : CONFIG_KEYS) {
+  const sanitized = legacyVersion === 'v4'
+    ? migrateLegacyV4Config(config)
+    : legacyVersion === 'v3'
+      ? sanitizeLegacyConfig(config)
+      : sanitizeConfig({ ...defaultConfig, ...config })
+  if (!sanitized) fail(`${path} is invalid`)
+  for (const key of partial ? keys as (keyof Config)[] : legacyVersion === 'v4' ? LEGACY_V4_CONFIG_KEYS : legacyVersion === 'v3' ? LEGACY_V3_CONFIG_KEYS : CONFIG_KEYS) {
     const raw = config[key]
     if (typeof defaultConfig[key] === 'boolean') {
       boolean(raw, `${path}.${key}`)
@@ -127,7 +139,7 @@ function validateConfig(value: unknown, path: string, partial = false): RecordVa
       if (sanitized[key] !== raw) fail(`${path}.${key} is outside the supported range`)
     }
   }
-  return legacyFull ? sanitized as unknown as RecordValue : { ...config }
+  return legacyVersion ? sanitized as unknown as RecordValue : { ...config }
 }
 
 interface ValidatedScenario {

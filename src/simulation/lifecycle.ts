@@ -22,6 +22,8 @@ export interface LifecyclePolicy{
   reproductionEnergyCost:number
   offspringEnergy:number
   maxAge:number
+  /** Optional for direct/legacy callers; omitted means immediate maturity. */
+  maturityAge?:number
 }
 
 export interface LifecycleContext{
@@ -55,6 +57,8 @@ export interface LifecycleSettlement<T extends LifecycleIndividual>{
   outcomes:LifecycleOutcome<T>[]
   outcomeCounts:Record<LifecycleOutcomeCause,number>
   survivors:SurvivorSettlement<T>[]
+  /** Advanced survivors that clear the energy hurdle but are still too young to reproduce. */
+  immatureParents:T[]
   eligibleParents:T[]
   admittedParents:T[]
   births:BirthSettlement<T>[]
@@ -93,6 +97,7 @@ export function settleLifecycle<T extends LifecycleIndividual>(
 ):LifecycleSettlement<T>{
   const mode=policy.ecologyMode
   const maxAge=Math.max(1,Math.trunc(finiteNonNegative(policy.maxAge)))
+  const maturityAge=Math.max(0,Math.trunc(finiteNonNegative(policy.maturityAge??0)))
   const retention=unit(policy.energyRetention)
   const source=ordered(individuals)
   const outcomes=source.map(individual=>({individual,cause:mode==='classic'?classifyClassic(individual):classifyEnergy(individual,maxAge,retention)}))
@@ -105,9 +110,13 @@ export function settleLifecycle<T extends LifecycleIndividual>(
     individual.individualId,
     mode==='classic'?finiteNonNegative(policy.startingEnergy):finiteNonNegative(individual.energy)*retention,
   ]))
-  const eligibleParents=survivorIndividuals.filter(individual=>mode==='classic'
-    ?individual.food>=2
-    :(survivorEnergy.get(individual.individualId)??0)>reproductionCost)
+  const energyQualifiedParents=survivorIndividuals.filter(individual=>(survivorEnergy.get(individual.individualId)??0)>reproductionCost)
+  const immatureParents=mode==='energy-regrowth'
+    ?energyQualifiedParents.filter(individual=>individual.age<maturityAge)
+    :[]
+  const eligibleParents=mode==='classic'
+    ?survivorIndividuals.filter(individual=>individual.food>=2)
+    :energyQualifiedParents.filter(individual=>individual.age>=maturityAge)
 
   const availableBirthSlots=Math.max(0,Math.trunc(finiteNonNegative(context.maxPopulation))-survivorIndividuals.length)
   const ranked=mode==='classic'?eligibleParents:[...eligibleParents].sort((a,b)=>{
@@ -129,6 +138,6 @@ export function settleLifecycle<T extends LifecycleIndividual>(
   })
   const birthEnergy=mode==='classic'?finiteNonNegative(policy.startingEnergy):finiteNonNegative(policy.offspringEnergy)
   const births=admittedParents.map(parent=>({parent,parentIndividualId:parent.individualId,energy:birthEnergy}))
-  return{mode,outcomes,outcomeCounts,survivors,eligibleParents,admittedParents,births,
+  return{mode,outcomes,outcomeCounts,survivors,immatureParents,eligibleParents,admittedParents,births,
     birthsCapped:Math.max(0,eligibleParents.length-admittedParents.length),availableBirthSlots}
 }

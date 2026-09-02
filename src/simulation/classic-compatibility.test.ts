@@ -204,4 +204,15 @@ describe('classic-mode compatibility fixture',()=>{
       ]
     `)
   })
+
+  it('ignores maturity in classic trajectories and omits advanced immature telemetry',()=>{
+    const make=(maturityAge:number)=>createWorld({...defaultConfig,...CLASSIC_MODES,seed:2025,initialPopulation:12,foodPerDay:24,dayLength:18,maturityAge})
+    const immediate=make(0),delayed=make(200)
+    for(let generation=0;generation<3;generation++){runGeneration(immediate);runGeneration(delayed)}
+    expect(delayed.creatures).toEqual(immediate.creatures)
+    expect(delayed.history).toEqual(immediate.history)
+    expect(delayed.ledger).toEqual(immediate.ledger)
+    expect(delayed.activity).toEqual(immediate.activity)
+    expect(delayed.ledger.every(ledger=>ledger.birthsImmature===undefined)).toBe(true)
+  })
 })
