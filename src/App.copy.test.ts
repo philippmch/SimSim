@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, hasOwnActivityField, InterventionFeedFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveAcknowledgedFinishGeneration, resolveTerminalOutcome, reviewSettlementAndNavigate, SimulationActivityFallback, SimulationEventStory, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
+import { formatCompactNextActionLabel, formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, hasOwnActivityField, InterventionFeedFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveAcknowledgedFinishGeneration, resolveTerminalOutcome, reviewSettlementAndNavigate, shouldFocusSelectedInspector, SimulationActivityFallback, SimulationEventStory, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
 import { formatPerceptionTelemetry } from './components/CreatureInspector'
 import { createWorld, defaultConfig, finishGeneration as settleGeneration } from './simulation/engine'
 import { MAX_FOUNDER_MIGRATION_BATCH, MAX_POPULATION } from './simulation/config'
@@ -32,6 +32,22 @@ const creature = (overrides: Partial<TerminalOutcomeCreature> = {}): TerminalOut
 })
 
 describe('next action control copy', () => {
+  it('keeps narrow controls short without hiding unavailable or pending state', () => {
+    expect(formatCompactNextActionLabel(ready())).toBe('Next action')
+    expect(formatCompactNextActionLabel(ready({ pending: true }))).toBe('Advancing…')
+    expect(formatCompactNextActionLabel(ready({ selectedIndividualId: 17, selectedIsActive: true }))).toBe('Next selected')
+    expect(formatCompactNextActionLabel(ready({ pending: true, selectedIndividualId: 17, selectedIsActive: true }))).toBe('Advancing selected…')
+    expect(formatCompactNextActionLabel(ready({ hasActiveCreatures: false }))).toBe('No actions')
+    expect(formatCompactNextActionLabel(ready({ extinct: true }))).toBe('Extinct')
+  })
+
+  it('only requests inspector focus for an explicit matching selection that rendered', () => {
+    expect(shouldFocusSelectedInspector({ requestedIndividualId: 17, selectedIndividualId: 17, inspectorRendered: true })).toBe(true)
+    expect(shouldFocusSelectedInspector({ requestedIndividualId: null, selectedIndividualId: 17, inspectorRendered: true })).toBe(false)
+    expect(shouldFocusSelectedInspector({ requestedIndividualId: 17, selectedIndividualId: 18, inspectorRendered: true })).toBe(false)
+    expect(shouldFocusSelectedInspector({ requestedIndividualId: 17, selectedIndividualId: 17, inspectorRendered: false })).toBe(false)
+  })
+
   it('names an active inspected individual without claiming other creatures stop moving', () => {
     const copy = formatNextActionCopy(ready({ selectedIndividualId: 17, selectedIsActive: true }))
 
