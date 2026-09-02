@@ -26,22 +26,38 @@ const settlementFramingStyle={display:'block',marginTop:3,color:'var(--muted)',f
 const formatPreviewNumber=(value:number|null)=>value===null||!Number.isFinite(value)?'unavailable':value.toFixed(1)
 const formatPreviewFood=(value:number)=>!Number.isFinite(value)?'unavailable':Number.isInteger(value)?String(value):value.toFixed(1)
 const formatPreviewCount=(count:number,singular:string)=>`${count} ${count===1?singular:`${singular}s`}`
+const formatPreviewAge=(value:number|null)=>value===null||!Number.isSafeInteger(value)||value<0?'unavailable':String(value)
+const safePreviewGeneration=(value:number)=>Number.isSafeInteger(value)&&value>=1&&value<Number.MAX_SAFE_INTEGER?value:null
 
 export function formatSelectedSettlementOutcome(preview:SelectedSettlementPreview):string{
   if(preview.outcome!=='survived')return`Would not survive · ${FORECAST_LOSS_LABELS[preview.outcome]}.`
+  const nextGeneration=safePreviewGeneration(preview.generation)
   const age=preview.nextAge===null?'next age unavailable':`age ${preview.nextAge}`
-  return`Would survive → generation ${preview.generation+1} · ${age} · ${formatPreviewNumber(preview.settledEnergy)} energy.`
+  return`Would survive → ${nextGeneration===null?'the next generation':`generation ${nextGeneration+1}`} · ${age} · ${formatPreviewNumber(preview.settledEnergy)} energy.`
 }
 
 export function formatSelectedSettlementReproduction(preview:SelectedSettlementPreview):string{
   if(preview.outcome!=='survived')return'It would produce no offspring.'
   if(preview.reproductionStatus==='admitted')return preview.mode==='classic'
     ?`One offspring would be admitted · ${formatPreviewFood(preview.foodAtSettlement)}/2 food collected.`
-    :`One offspring would be admitted · ${formatPreviewNumber(preview.retainedEnergy)} retained energy − ${formatPreviewNumber(preview.reproductionCost)} reproduction cost.`
-  if(preview.reproductionStatus==='eligible-capacity-blocked')return`Eligible for offspring, but would not be admitted · ${formatPreviewCount(preview.availableBirthSlots,'available birth slot')} for ${formatPreviewCount(preview.eligibleParentCount,'eligible parent')}.`
+    :`One offspring would be admitted · mature + energy-eligible · ${formatPreviewNumber(preview.retainedEnergy)} retained energy − ${formatPreviewNumber(preview.reproductionCost)} reproduction cost.`
+  if(preview.reproductionStatus==='eligible-capacity-blocked')return preview.mode==='classic'
+    ?`Eligible for offspring, but would not be admitted · ${formatPreviewCount(preview.availableBirthSlots,'available birth slot')} for ${formatPreviewCount(preview.eligibleParentCount,'eligible parent')}.`
+    :`Mature + energy-eligible, but no offspring would be admitted · ${formatPreviewCount(preview.availableBirthSlots,'available birth slot')} for ${formatPreviewCount(preview.eligibleParentCount,'eligible parent')}.`
+  if(preview.mode==='energy-regrowth'){
+    const currentAge=preview.currentAge??(preview.nextAge===null?null:preview.nextAge-1)
+    const maturityAge=Number.isSafeInteger(preview.maturityAge)&&preview.maturityAge!==undefined&&preview.maturityAge>=0?preview.maturityAge:0
+    const ageBlocked=currentAge!==null&&currentAge<maturityAge
+    const retained= formatPreviewNumber(preview.retainedEnergy)
+    const cost=formatPreviewNumber(preview.reproductionCost)
+    const energyReady=preview.energyEligible??(preview.retainedEnergy!==null&&Number.isFinite(preview.retainedEnergy)&&preview.retainedEnergy>preview.reproductionCost)
+    if(ageBlocked&&energyReady)return`No offspring · age ${formatPreviewAge(currentAge)} is below required maturity age ${formatPreviewAge(maturityAge)}, despite enough retained energy (${retained} > ${cost}).`
+    if(ageBlocked&&!energyReady)return`No offspring · age ${formatPreviewAge(currentAge)} is below required maturity age ${formatPreviewAge(maturityAge)}, and ${retained} retained energy must strictly exceed the ${cost} reproduction cost.`
+    return`No offspring · ${retained} retained energy must strictly exceed the ${cost} reproduction cost.`
+  }
   return preview.mode==='classic'
     ?`No offspring · ${formatPreviewFood(preview.foodAtSettlement)}/2 food collected (needs at least 2).`
-    :`No offspring · ${formatPreviewNumber(preview.retainedEnergy)} retained energy must exceed the ${formatPreviewNumber(preview.reproductionCost)} cost.`
+    :`No offspring · ${formatPreviewNumber(preview.retainedEnergy)} retained energy must strictly exceed the ${formatPreviewNumber(preview.reproductionCost)} reproduction cost.`
 }
 
 /** Keep captured-decision metadata readable even when an old snapshot omits it. */

@@ -33,7 +33,7 @@ export function areParametersPanelPropsEqual(previous: ParametersPanelProps, nex
     && previous.onApply === next.onApply
 }
 
-function NumberControl({ label, value, min, max, step, onChange, unit }: { label: string; value: number; min: number; max: number; step: number; onChange: (value: number) => void; unit?: string }) {
+export function NumberControl({ label, value, min, max, step, onChange, unit }: { label: string; value: number; min: number; max: number; step: number; onChange: (value: number) => void; unit?: string }) {
   const id = label.toLowerCase().replace(/\W/g, '-')
   return <div className="control">
     <label htmlFor={id}>{label}<output>{value}{unit}</output></label>
@@ -49,6 +49,7 @@ function SelectControl({ label, value, onChange, options }: { label: string; val
 function ParametersPanel({ draft, liveConfig, dirty, actionStatus, runtimeMode, setDraft, onStatusChange, onApply }: ParametersPanelProps) {
   const importRef = useRef<HTMLInputElement>(null)
   const update = <K extends keyof Config>(key: K, value: Config[K]) => setDraft(config => ({ ...config, [key]: value }))
+  const maturityAge = typeof draft.maturityAge === 'number' && Number.isFinite(draft.maturityAge) ? Math.max(0, Math.min(200, Math.round(draft.maturityAge))) : 0
 
   return <>
     <div className="seed-row"><label htmlFor="seed">Random seed</label><input id="seed" type="number" value={draft.seed} min="1" max="9999999" onChange={event => { const value = event.currentTarget.valueAsNumber; update('seed', Number.isFinite(value) ? Math.max(1, Math.min(9999999, Math.round(value))) : defaultConfig.seed) }} /><button aria-label="Choose a new random seed" onClick={() => update('seed', Math.floor(Math.random() * 9999998) + 1)}>↻</button></div>
@@ -77,6 +78,7 @@ function ParametersPanel({ draft, liveConfig, dirty, actionStatus, runtimeMode, 
         <NumberControl label="Food energy" value={draft.foodEnergy} min={0} max={100} step={1} onChange={value => update('foodEnergy', value)} />
         <NumberControl label="Energy retained" value={Math.round(draft.energyRetention * 100)} min={0} max={100} step={5} unit="%" onChange={value => update('energyRetention', value / 100)} />
         <NumberControl label="Reproduction energy cost" value={draft.reproductionEnergyCost} min={0} max={200} step={5} onChange={value => update('reproductionEnergyCost', value)} />
+        <NumberControl label="Reproduction maturity age" value={maturityAge} min={0} max={200} step={1} unit=" gen" onChange={value => update('maturityAge', value)} />
         <NumberControl label="Offspring energy" value={draft.offspringEnergy} min={10} max={250} step={5} onChange={value => update('offspringEnergy', value)} />
         <NumberControl label="Maximum age" value={draft.maxAge} min={1} max={80} step={1} unit=" gen" onChange={value => update('maxAge', value)} />
       </details>}
@@ -136,7 +138,7 @@ function ParametersPanel({ draft, liveConfig, dirty, actionStatus, runtimeMode, 
         <NumberControl label="Evasion weight" value={draft.evasionWeight} min={0} max={3} step={.05} onChange={value => update('evasionWeight', value)} />
       </details>}
     </fieldset>
-    <details><summary>Rules of this ecosystem</summary><p>{draft.ecologyMode === 'classic' ? 'One food brought home survives; two also produces one mutated offspring.' : 'Creatures survive by returning home with energy, retain part of it, pay to reproduce, age, and forage from patches that regrow during the generation.'} {draft.perceptionMode === 'realistic' ? 'They react at intervals and can miss targets outside their view or behind obstacles.' : 'They sense every target inside their radius.'} {draft.predationMode === 'contest' ? `Hunters at least as large as their prey may attempt a contest. The ${draft.predatorRatio.toFixed(2)}× size benchmark sets the reference; raising it makes attacks harder. Speed, energy, aggression, and caution also shape the result.` : `Larger creatures instantly catch animals at least ${draft.predatorRatio.toFixed(2)}× smaller.`}</p></details>
+    <details><summary>Rules of this ecosystem</summary><p>{draft.ecologyMode === 'classic' ? 'One food brought home survives; two also produces one mutated offspring.' : `Creatures survive by returning home with energy, retain part of it, and reproduce only when their current age reaches ${maturityAge} generation${maturityAge === 1 ? '' : 's'} and retained energy strictly exceeds the reproduction cost. Newborns start at age 0, so an otherwise energy-ready parent can wait for maturity; available population capacity can also cap admitted births.`} {draft.perceptionMode === 'realistic' ? 'They react at intervals and can miss targets outside their view or behind obstacles.' : 'They sense every target inside their radius.'} {draft.predationMode === 'contest' ? `Hunters at least as large as their prey may attempt a contest. The ${draft.predatorRatio.toFixed(2)}× size benchmark sets the reference; raising it makes attacks harder. Speed, energy, aggression, and caution also shape the result.` : `Larger creatures instantly catch animals at least ${draft.predatorRatio.toFixed(2)}× smaller.`}</p></details>
     <button className="apply" onClick={onApply} disabled={!dirty}>{dirty ? 'Apply parameters & restart' : 'No staged changes'}</button>
   </>
 }

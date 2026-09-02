@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { defaultConfig } from '../simulation/config'
 import type { Config } from '../simulation/types'
-import ParametersPanel, { areParametersPanelPropsEqual, type ParametersPanelProps } from './ParametersPanel'
+import ParametersPanel, { areParametersPanelPropsEqual, NumberControl, type ParametersPanelProps } from './ParametersPanel'
 
 const props = (overrides: Partial<ParametersPanelProps> = {}): ParametersPanelProps => ({
   draft: { ...defaultConfig },
@@ -65,5 +65,36 @@ describe('parameters panel', () => {
     expect(markup).toContain('Running in compatibility mode.')
     expect(markup).toContain('No staged changes')
     expect(markup).toContain('type="checkbox"')
+  })
+
+  it('shows the advanced maturity control and explains all three reproduction gates', () => {
+    const markup = renderToStaticMarkup(createElement(ParametersPanel, props({ dirty: true })))
+
+    expect(markup).toContain('Reproduction maturity age')
+    expect(markup).toContain('id="reproduction-maturity-age"')
+    expect(markup).toContain('min="0"')
+    expect(markup).toContain('max="200"')
+    expect(markup).toContain('step="1"')
+    expect(markup).toContain('current age reaches 1 generation')
+    expect(markup).toContain('retained energy strictly exceeds the reproduction cost')
+    expect(markup).toContain('population capacity can also cap admitted births')
+  })
+
+  it('shows and explains a valid imported maturity age above the usual tuning range', () => {
+    const draft = { ...defaultConfig, maturityAge: 200 }
+    const markup = renderToStaticMarkup(createElement(ParametersPanel, props({ draft, liveConfig: draft })))
+
+    expect(markup).toContain('id="reproduction-maturity-age"')
+    expect(markup).toContain('value="200"')
+    expect(markup).toContain('current age reaches 200 generations')
+    expect(markup).not.toContain('current age reaches 80 generations')
+  })
+
+  it('converts a maturity slider interaction into a numeric staged value', () => {
+    const onChange = vi.fn()
+    const control = NumberControl({ label: 'Reproduction maturity age', value: 1, min: 0, max: 200, step: 1, unit: ' gen', onChange })
+    const children = control.props.children as unknown as Array<{ props: { onChange?: (event: unknown) => void } }>
+    children[1].props.onChange?.({ target: { value: '7' } })
+    expect(onChange).toHaveBeenCalledWith(7)
   })
 })

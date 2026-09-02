@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { CLASSIC_MODES, defaultConfig, MAX_POPULATION } from '../simulation/config'
 import { createWorld } from '../simulation/engine'
 import { formatGenerationForecastAriaLabel, formatGenerationForecastBirths, formatGenerationForecastEquation, formatGenerationForecastLosses, formatGenerationForecastTransition, GenerationForecast, summarizeGenerationForecast, summarizeSelectedSettlementPreview, type GenerationForecastSummary } from './GenerationForecast'
+import { formatSelectedSettlementReproduction } from './CreatureInspector'
 
 describe('generation forecast', () => {
   it('uses classic settlement rules for the current cohort and loss causes', () => {
@@ -18,10 +19,13 @@ describe('generation forecast', () => {
 
     expect(summary).toMatchObject({ evaluatedCohort: 4, survivors: 2, eligibleParents: 1, admittedBirths: 1, cappedBirths: 0, projectedNextPopulation: 3 })
     expect(summary.losses).toEqual({ hunted: 0, energy: 0, unfed: 1, late: 1, aged: 0 })
+    expect(summary.immatureParents).toBe(0)
+    expect(summary.energyLimitedParents).toBe(0)
+    expect(formatGenerationForecastBirths(summary)).toBe('1 eligible parent · 1 admitted newborn · 0 births blocked by the population cap')
   })
 
   it('forecasts energy carryover and regrowth reproduction eligibility', () => {
-    const world = createWorld({ ...defaultConfig, initialPopulation: 3, foodPerDay: 0, energyRetention: .5 })
+    const world = createWorld({ ...defaultConfig, initialPopulation: 3, foodPerDay: 0, energyRetention: .5, maturityAge: 0 })
     const [parent, nonParent, depleted] = world.creatures
     Object.assign(parent, { alive: true, home: true, energy: 100 })
     Object.assign(nonParent, { alive: true, home: true, energy: 69 })
@@ -33,15 +37,61 @@ describe('generation forecast', () => {
     expect(summary.losses).toEqual({ hunted: 0, energy: 1, unfed: 0, late: 0, aged: 0 })
   })
 
+  it('partitions advanced survivors into mature, energy-ready immature, and below-cost parents', () => {
+    const world = createWorld({ ...defaultConfig, initialPopulation: 4, foodPerDay: 0, energyRetention: .5, reproductionEnergyCost: 35, maturityAge: 2 })
+    const [mature, immature, exactCost, dualConstraint] = world.creatures
+    Object.assign(mature, { alive: true, home: true, age: 2, energy: 100 })
+    Object.assign(immature, { alive: true, home: true, age: 0, energy: 100 })
+    Object.assign(exactCost, { alive: true, home: true, age: 2, energy: 70 })
+    Object.assign(dualConstraint, { alive: true, home: true, age: 0, energy: 70 })
+
+    const before = structuredClone(world)
+    const summary = summarizeGenerationForecast(world)
+
+    expect(summary).toMatchObject({ evaluatedCohort: 4, survivors: 4, eligibleParents: 1, immatureParents: 1, energyLimitedParents: 2, admittedBirths: 1, cappedBirths: 0, projectedNextPopulation: 5 })
+    expect(formatGenerationForecastBirths(summary)).toBe('Reproduction: 1 mature + energy-eligible parent · 1 energy-ready but immature parent · 2 parents below reproduction cost · 1 admitted birth · 0 capacity-capped births.')
+    expect(world).toEqual(before)
+  })
+
+  it('uses current age for maturity and keeps exact-cost or dual constraints explicit', () => {
+    const world = createWorld({ ...defaultConfig, initialPopulation: 1, foodPerDay: 0, energyRetention: .5, reproductionEnergyCost: 50, maturityAge: 1 })
+    const [selected] = world.creatures
+    Object.assign(selected, { alive: true, home: true, age: 0, energy: 100 })
+
+    const immature = summarizeSelectedSettlementPreview(world, selected.individualId)
+    expect(immature).toMatchObject({ currentAge: 0, nextAge: 1, maturityAge: 1, retainedEnergy: 50, energyEligible: false, maturityEligible: false, reproductionStatus: 'not-eligible' })
+    expect(immature && formatSelectedSettlementReproduction(immature)).toContain('below required maturity age 1')
+
+    Object.assign(selected, { age: 1, energy: 100 })
+    const exact = summarizeSelectedSettlementPreview(world, selected.individualId)
+    expect(exact).toMatchObject({ currentAge: 1, maturityAge: 1, retainedEnergy: 50, energyEligible: false, maturityEligible: true, reproductionStatus: 'not-eligible' })
+    expect(exact && formatSelectedSettlementReproduction(exact)).toContain('must strictly exceed the 50.0 reproduction cost')
+
+    Object.assign(selected, { age: 0, energy: 102 })
+    const lowAgeEnergyReady = summarizeSelectedSettlementPreview(world, selected.individualId)
+    expect(lowAgeEnergyReady).toMatchObject({ currentAge: 0, maturityAge: 1, retainedEnergy: 51, energyEligible: true, maturityEligible: false, reproductionStatus: 'immature' })
+    expect(lowAgeEnergyReady && formatSelectedSettlementReproduction(lowAgeEnergyReady)).toContain('despite enough retained energy')
+
+    Object.assign(selected, { age: 1, energy: 102 })
+    const matureEligible = summarizeSelectedSettlementPreview(world, selected.individualId)
+    expect(matureEligible).toMatchObject({ currentAge: 1, maturityAge: 1, retainedEnergy: 51, energyEligible: true, maturityEligible: true, reproductionStatus: 'admitted' })
+
+    Object.assign(selected, { age: 0, energy: 98 })
+    const lowEnergyDual = summarizeSelectedSettlementPreview(world, selected.individualId)
+    expect(lowEnergyDual).toMatchObject({ currentAge: 0, maturityAge: 1, retainedEnergy: 49, energyEligible: false, maturityEligible: false, reproductionStatus: 'not-eligible' })
+    expect(lowEnergyDual && formatSelectedSettlementReproduction(lowEnergyDual)).toContain('below required maturity age 1')
+    expect(lowEnergyDual && formatSelectedSettlementReproduction(lowEnergyDual)).toContain('must strictly exceed the 50.0 reproduction cost')
+  })
+
   it('uses the population cap for admission and reports capped eligible births', () => {
-    const world = createWorld({ ...defaultConfig, initialPopulation: MAX_POPULATION, foodPerDay: 0 })
+    const world = createWorld({ ...defaultConfig, initialPopulation: MAX_POPULATION, foodPerDay: 0, maturityAge: 0 })
     world.creatures.slice(0, MAX_POPULATION - 2).forEach(creature => Object.assign(creature, { alive: true, home: true, energy: 100 }))
     world.creatures.slice(-2).forEach(creature => Object.assign(creature, { alive: false, deathCause: 'hunted' }))
 
     const summary = summarizeGenerationForecast(world)
 
     expect(summary).toMatchObject({ evaluatedCohort: MAX_POPULATION, survivors: MAX_POPULATION - 2, eligibleParents: MAX_POPULATION - 2, admittedBirths: 2, cappedBirths: MAX_POPULATION - 4, projectedNextPopulation: MAX_POPULATION })
-    expect(formatGenerationForecastBirths(summary)).toBe('118 eligible parents · 2 admitted newborns · 116 births blocked by the population cap')
+    expect(formatGenerationForecastBirths(summary)).toBe('Reproduction: 118 mature + energy-eligible parents · 0 energy-ready but immature parents · 0 parents below reproduction cost · 2 admitted births · 116 capacity-capped births.')
   })
 
   it('formats the equation, nonzero losses, and counterfactual wording', () => {
@@ -77,6 +127,27 @@ describe('generation forecast', () => {
     expect(formatGenerationForecastLosses({ ...singular, losses: { hunted: 1, energy: 2, unfed: 3, late: 4, aged: 5 } })).toBe('Hunted: 1 · Energy depleted: 2 · No food at settlement: 3 · Missed return deadline: 4 · Old age: 5')
     expect(formatGenerationForecastTransition({ ...singular, generation: Number.NaN })).toBe('Forecast transition unavailable')
     expect(formatGenerationForecastTransition(singular, 'Extinct')).toBe('Forecast transition unavailable · no current cohort')
+  })
+
+  it('formats advanced reproduction buckets with truthful singular, plural, and zero nouns', () => {
+    const zero: GenerationForecastSummary = {
+      generation: 1,
+      ecologyMode: 'energy-regrowth',
+      evaluatedCohort: 0,
+      survivors: 0,
+      projectedNextPopulation: 0,
+      eligibleParents: 0,
+      immatureParents: 0,
+      energyLimitedParents: 0,
+      admittedBirths: 0,
+      cappedBirths: 0,
+      losses: { hunted: 0, energy: 0, unfed: 0, late: 0, aged: 0 },
+    }
+    expect(formatGenerationForecastBirths(zero)).toBe('Reproduction: 0 mature + energy-eligible parents · 0 energy-ready but immature parents · 0 parents below reproduction cost · 0 admitted births · 0 capacity-capped births.')
+
+    const singular = { ...zero, survivors: 3, eligibleParents: 1, immatureParents: 1, energyLimitedParents: 1, admittedBirths: 1, cappedBirths: 1 }
+    expect(formatGenerationForecastBirths(singular)).toBe('Reproduction: 1 mature + energy-eligible parent · 1 energy-ready but immature parent · 1 parent below reproduction cost · 1 admitted birth · 1 capacity-capped birth.')
+    expect(formatGenerationForecastBirths(singular)).not.toMatch(/NaN|undefined|Infinity/)
   })
 
   it('is deterministic and leaves the world untouched', () => {
@@ -172,7 +243,7 @@ describe('generation forecast', () => {
   })
 
   it('distinguishes an eligible parent blocked by cohort capacity', () => {
-    const world = createWorld({ ...defaultConfig, initialPopulation: MAX_POPULATION, foodPerDay: 0 })
+    const world = createWorld({ ...defaultConfig, initialPopulation: MAX_POPULATION, foodPerDay: 0, maturityAge: 0 })
     world.creatures.forEach(creature => Object.assign(creature, { alive: true, home: true, energy: 100 }))
     const preview = summarizeSelectedSettlementPreview(world, world.creatures[0].individualId)
 

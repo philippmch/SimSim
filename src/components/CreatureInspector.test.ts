@@ -225,7 +225,7 @@ describe('selected individual cohort controls',()=>{
 })
 
 const settlementPreview=(overrides:Partial<SelectedSettlementPreview>={}):SelectedSettlementPreview=>({
-  individualId:1,generation:3,mode:'classic',outcome:'survived',nextAge:2,retainedEnergy:110,settledEnergy:110,
+  individualId:1,generation:3,mode:'classic',outcome:'survived',currentAge:1,nextAge:2,maturityAge:0,retainedEnergy:110,settledEnergy:110,energyEligible:null,maturityEligible:null,
   reproductionStatus:'admitted',foodAtSettlement:2,reproductionCost:35,eligibleParentCount:1,availableBirthSlots:119,...overrides,
 })
 
@@ -245,12 +245,29 @@ describe('selected individual settlement preview',()=>{
     expect(formatSelectedSettlementReproduction(settlementPreview())).toBe('One offspring would be admitted · 2/2 food collected.')
 
     const threshold=settlementPreview({mode:'energy-regrowth',retainedEnergy:35,settledEnergy:35,reproductionCost:35,reproductionStatus:'not-eligible'})
-    expect(formatSelectedSettlementReproduction(threshold)).toBe('No offspring · 35.0 retained energy must exceed the 35.0 cost.')
+    expect(formatSelectedSettlementReproduction(threshold)).toBe('No offspring · 35.0 retained energy must strictly exceed the 35.0 reproduction cost.')
   })
 
   it('distinguishes eligibility from capacity admission',()=>{
     const blocked=settlementPreview({mode:'energy-regrowth',reproductionStatus:'eligible-capacity-blocked',eligibleParentCount:3,availableBirthSlots:1})
-    expect(formatSelectedSettlementReproduction(blocked)).toBe('Eligible for offspring, but would not be admitted · 1 available birth slot for 3 eligible parents.')
+    expect(formatSelectedSettlementReproduction(blocked)).toBe('Mature + energy-eligible, but no offspring would be admitted · 1 available birth slot for 3 eligible parents.')
+  })
+
+  it('explains maturity, energy, and capacity as separate advanced outcomes',()=>{
+    const immature=settlementPreview({mode:'energy-regrowth',currentAge:0,nextAge:1,maturityAge:1,retainedEnergy:51,settledEnergy:51,energyEligible:true,maturityEligible:false,reproductionStatus:'immature'})
+    expect(formatSelectedSettlementReproduction(immature)).toBe('No offspring · age 0 is below required maturity age 1, despite enough retained energy (51.0 > 35.0).')
+
+    const dual=settlementPreview({mode:'energy-regrowth',currentAge:0,nextAge:1,maturityAge:1,retainedEnergy:35,settledEnergy:35,energyEligible:false,maturityEligible:false,reproductionStatus:'not-eligible'})
+    expect(formatSelectedSettlementReproduction(dual)).toBe('No offspring · age 0 is below required maturity age 1, and 35.0 retained energy must strictly exceed the 35.0 reproduction cost.')
+
+    const matureLowEnergy=settlementPreview({mode:'energy-regrowth',currentAge:1,nextAge:2,maturityAge:1,retainedEnergy:35,settledEnergy:35,energyEligible:false,maturityEligible:true,reproductionStatus:'not-eligible'})
+    expect(formatSelectedSettlementReproduction(matureLowEnergy)).toBe('No offspring · 35.0 retained energy must strictly exceed the 35.0 reproduction cost.')
+
+    const admitted=settlementPreview({mode:'energy-regrowth',currentAge:1,nextAge:2,maturityAge:1,retainedEnergy:36,settledEnergy:1,energyEligible:true,maturityEligible:true,reproductionStatus:'admitted'})
+    expect(formatSelectedSettlementReproduction(admitted)).toContain('mature + energy-eligible')
+
+    const malformed=settlementPreview({mode:'energy-regrowth',currentAge:null,nextAge:null,maturityAge:Number.NaN,retainedEnergy:Number.NaN,settledEnergy:Number.NaN,energyEligible:false,maturityEligible:false,reproductionStatus:'not-eligible'})
+    expect(formatSelectedSettlementReproduction(malformed)).not.toMatch(/NaN|undefined|Infinity/)
   })
 
   it('names every authoritative loss cause without implying reproduction',()=>{

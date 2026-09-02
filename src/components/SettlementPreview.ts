@@ -12,7 +12,7 @@ export const FORECAST_LOSS_LABELS: Record<ForecastLossCause, string> = {
   aged: 'Old age',
 }
 
-export type SelectedSettlementReproductionStatus = 'admitted' | 'eligible-capacity-blocked' | 'not-eligible'
+export type SelectedSettlementReproductionStatus = 'admitted' | 'eligible-capacity-blocked' | 'immature' | 'not-eligible'
 
 /**
  * Scalar, read-only settlement facts for one individual. Keeping this
@@ -24,9 +24,17 @@ export interface SelectedSettlementPreview {
   generation: number
   mode: World['config']['ecologyMode']
   outcome: LifecycleOutcomeCause
+  /** Age at the current settlement boundary; reproduction uses this value. */
+  currentAge?: number | null
   nextAge: number | null
+  /** Fresh energy runs use this threshold; legacy snapshots fall back to zero. */
+  maturityAge?: number
   retainedEnergy: number | null
   settledEnergy: number | null
+  /** Null in classic mode, where food—not retained energy—controls reproduction. */
+  energyEligible?: boolean | null
+  /** Null in classic mode; true means the current age has reached the threshold. */
+  maturityEligible?: boolean | null
   reproductionStatus: SelectedSettlementReproductionStatus
   foodAtSettlement: number
   reproductionCost: number
@@ -35,6 +43,7 @@ export interface SelectedSettlementPreview {
 }
 
 const finiteNonNegative = (value: number) => Number.isFinite(value) ? Math.max(0, value) : 0
+const safeNonnegativeInteger = (value: unknown): number | null => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
 
 /**
  * Project the exact lifecycle settlement for a selected individual. The
@@ -44,7 +53,10 @@ const finiteNonNegative = (value: number) => Number.isFinite(value) ? Math.max(0
  */
 export function summarizeSelectedSettlementPreview(world: World, individualId: number | null | undefined): SelectedSettlementPreview | null {
   if (typeof individualId !== 'number' || !Number.isSafeInteger(individualId) || individualId < 1) return null
-  const settlement = settleLifecycle(world.creatures, world.config, {
+  // Keep the optional field explicit so snapshots from before the maturity
+  // rule still follow the lifecycle's compatibility fallback of zero.
+  const policy = { ...world.config, maturityAge: safeNonnegativeInteger((world.config as World['config'] & { maturityAge?: unknown }).maturityAge) ?? 0 }
+  const settlement = settleLifecycle(world.creatures, policy, {
     seed: world.config.seed,
     generation: world.generation,
     maxPopulation: MAX_POPULATION,
@@ -52,17 +64,31 @@ export function summarizeSelectedSettlementPreview(world: World, individualId: n
   const outcome = settlement.outcomes.find(item => item.individual.individualId === individualId)
   if (!outcome) return null
   const survivor = settlement.survivors.find(item => item.individual.individualId === individualId)
+  const currentAge = safeNonnegativeInteger(outcome.individual.age)
+  const maturityAge = world.config.ecologyMode === 'classic' ? 0 : policy.maturityAge
+  const retainedEnergy = survivor?.retainedEnergy ?? null
+  const energyEligible = world.config.ecologyMode === 'classic'
+    ? null
+    : retainedEnergy !== null && retainedEnergy > finiteNonNegative(world.config.reproductionEnergyCost)
+  const maturityEligible = world.config.ecologyMode === 'classic'
+    ? null
+    : currentAge !== null && currentAge >= maturityAge
+  const ageImmature = currentAge !== null && currentAge < maturityAge
   const reproductionStatus: SelectedSettlementReproductionStatus = !survivor?.reproductionEligible
-    ? 'not-eligible'
+    ? energyEligible && ageImmature ? 'immature' : 'not-eligible'
     : survivor.birthAdmitted ? 'admitted' : 'eligible-capacity-blocked'
   return {
     individualId,
     generation: world.generation,
     mode: settlement.mode,
     outcome: outcome.cause,
+    currentAge,
     nextAge: survivor?.nextAge ?? null,
-    retainedEnergy: survivor?.retainedEnergy ?? null,
+    maturityAge,
+    retainedEnergy,
     settledEnergy: survivor?.settledEnergy ?? null,
+    energyEligible,
+    maturityEligible,
     reproductionStatus,
     foodAtSettlement: finiteNonNegative(outcome.individual.food),
     reproductionCost: finiteNonNegative(world.config.reproductionEnergyCost),

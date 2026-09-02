@@ -215,4 +215,25 @@ describe('generation handoff states', () => {
     expect(output).not.toContain('data-handoff-kind="forecast"')
     expect(output).not.toMatch(/NaN|Infinity|undefined/)
   })
+
+  it('keeps a complete old world forecastable when maturityAge is omitted', () => {
+    const world = makeWorld({ generation: 4 })
+    const legacyConfig = { ...world.config } as Record<string, unknown>
+    delete legacyConfig.maturityAge
+    const legacyWorld = { ...world, config: legacyConfig }
+    const output = markup(legacyWorld, 'Paused')
+
+    expect(output).toContain('data-handoff-kind="forecast"')
+    expect(output).toContain('Forecast transition · Generation 4 → 5')
+    expect(output).not.toMatch(/NaN|Infinity|undefined/)
+  })
+
+  it('rejects a malformed or out-of-range present maturityAge without inventing forecast facts', () => {
+    const world = makeWorld({ generation: 4 })
+    for (const maturityAge of [Number.NaN, 201, Number.MAX_SAFE_INTEGER]) {
+      const output = markup({ ...world, config: { ...world.config, maturityAge } }, 'Paused')
+      expect(output).not.toContain('data-handoff-kind="forecast"')
+      expect(output).not.toMatch(/NaN|Infinity|undefined/)
+    }
+  })
 })

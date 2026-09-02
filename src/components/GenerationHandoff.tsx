@@ -109,11 +109,16 @@ function isForecastWorld(world: unknown): world is World {
   const reproductionEnergyCost = read(config, 'reproductionEnergyCost')
   const offspringEnergy = read(config, 'offspringEnergy')
   const maxAge = read(config, 'maxAge')
+  // v4 snapshots predate the maturity rule. An omitted value is valid and
+  // settleLifecycle will use its compatibility fallback of zero; a present
+  // malformed value should not make the forecast fabricate a result.
+  const maturityAge = read(config, 'maturityAge')
   if (!source || Array.isArray(world) || !record(config) || Array.isArray(config) || !Array.isArray(creatures) ||
       safeGeneration(generation) === null || !safePositiveInteger(seed) ||
       (mode !== 'classic' && mode !== 'energy-regrowth') || !finiteNonnegative(startingEnergy) ||
       !finiteNonnegative(energyRetention) || energyRetention > 1 || !finiteNonnegative(reproductionEnergyCost) ||
-      !finiteNonnegative(offspringEnergy) || !safePositiveInteger(maxAge)) return false
+      !finiteNonnegative(offspringEnergy) || !safePositiveInteger(maxAge) ||
+      (maturityAge !== undefined && (!safeNonnegativeInteger(maturityAge) || maturityAge > 200))) return false
   return creatures.every(creature => {
     const item = record(creature)
     if (!item || Array.isArray(creature) || !safePositiveInteger(read(item, 'id')) || !safePositiveInteger(read(item, 'individualId')) ||

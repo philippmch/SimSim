@@ -11,29 +11,59 @@ export type { ForecastLossCause, SelectedSettlementPreview, SelectedSettlementRe
 
 export interface GenerationForecastSummary {
   generation: number
+  ecologyMode?: World['config']['ecologyMode']
   evaluatedCohort: number
   survivors: number
   projectedNextPopulation: number
   eligibleParents: number
+  /** Energy-ready survivors that are still below the reproduction maturity age. */
+  immatureParents?: number
+  /** Survivors below the strict retained-energy threshold, excluding energy-ready immature parents. */
+  energyLimitedParents?: number
   admittedBirths: number
   cappedBirths: number
   losses: Record<ForecastLossCause, number>
 }
 
+function safeNonnegativeInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
+}
+
+function maturityAgeFor(world: World): number {
+  const value = (world.config as World['config'] & { maturityAge?: unknown }).maturityAge
+  return safeNonnegativeInteger(value) ?? 0
+}
+
+function settlementImmatureCount(world: World, settlement: ReturnType<typeof settleLifecycle>): number {
+  const reported = (settlement as ReturnType<typeof settleLifecycle> & { immatureParents?: unknown }).immatureParents
+  if (Array.isArray(reported)) return reported.length
+  if (world.config.ecologyMode === 'classic') return 0
+  const threshold = maturityAgeFor(world)
+  const cost = Number.isFinite(world.config.reproductionEnergyCost) ? Math.max(0, world.config.reproductionEnergyCost) : 0
+  return settlement.survivors.filter(survivor => survivor.individual.age < threshold && survivor.retainedEnergy > cost).length
+}
+
 /** Summarize the exact settlement that would happen if the current generation ended now. */
 export function summarizeGenerationForecast(world: World): GenerationForecastSummary {
-  const settlement = settleLifecycle(world.creatures, world.config, {
+  const settlement = settleLifecycle(world.creatures, { ...world.config, maturityAge: maturityAgeFor(world) }, {
     seed: world.config.seed,
     generation: world.generation,
     maxPopulation: MAX_POPULATION,
   })
   const losses = Object.fromEntries(FORECAST_LOSS_CAUSES.map(cause => [cause, settlement.outcomeCounts[cause]])) as Record<ForecastLossCause, number>
+  const immatureParents = settlementImmatureCount(world, settlement)
+  const energyLimitedParents = world.config.ecologyMode === 'classic'
+    ? 0
+    : Math.max(0, settlement.survivors.length - settlement.eligibleParents.length - immatureParents)
   return {
     generation: world.generation,
+    ecologyMode: world.config.ecologyMode,
     evaluatedCohort: settlement.outcomes.length,
     survivors: settlement.survivors.length,
     projectedNextPopulation: settlement.survivors.length + settlement.admittedParents.length,
     eligibleParents: settlement.eligibleParents.length,
+    immatureParents,
+    energyLimitedParents,
     admittedBirths: settlement.admittedParents.length,
     cappedBirths: settlement.birthsCapped,
     losses,
@@ -52,6 +82,17 @@ export function formatGenerationForecastLosses(summary: GenerationForecastSummar
 }
 
 export function formatGenerationForecastBirths(summary: GenerationForecastSummary): string {
+  if (summary.ecologyMode !== 'classic' && (summary.ecologyMode === 'energy-regrowth' || summary.immatureParents !== undefined || summary.energyLimitedParents !== undefined)) {
+    const eligible = safeNonnegativeInteger(summary.eligibleParents) ?? 0
+    const immature = safeNonnegativeInteger(summary.immatureParents) ?? 0
+    const energyLimited = safeNonnegativeInteger(summary.energyLimitedParents) ?? Math.max(0, (safeNonnegativeInteger(summary.survivors) ?? 0) - eligible - immature)
+    const admitted = safeNonnegativeInteger(summary.admittedBirths) ?? 0
+    const capped = safeNonnegativeInteger(summary.cappedBirths) ?? 0
+    const parentCount = (count: number, phrase: string) => `${count} ${phrase} ${count === 1 ? 'parent' : 'parents'}`
+    const birthCount = (count: number, phrase: string) => `${count} ${phrase} ${count === 1 ? 'birth' : 'births'}`
+    const limited = `${energyLimited} ${energyLimited === 1 ? 'parent' : 'parents'} below reproduction cost`
+    return `Reproduction: ${parentCount(eligible, 'mature + energy-eligible')} · ${parentCount(immature, 'energy-ready but immature')} · ${limited} · ${birthCount(admitted, 'admitted')} · ${birthCount(capped, 'capacity-capped')}.`
+  }
   const parents = `${summary.eligibleParents} ${summary.eligibleParents === 1 ? 'eligible parent' : 'eligible parents'}`
   const newborns = `${summary.admittedBirths} ${summary.admittedBirths === 1 ? 'admitted newborn' : 'admitted newborns'}`
   const blocked = `${summary.cappedBirths} ${summary.cappedBirths === 1 ? 'birth' : 'births'} blocked by the population cap`
