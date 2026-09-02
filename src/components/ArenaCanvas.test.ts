@@ -12,6 +12,7 @@ import {
   ARENA_PATCH_STOCK_KEY,
   ARENA_QUICK_START,
   ARENA_SELECTED_OVERLAY_KEY,
+  arenaCanvasCanDraw,
   arenaCanvasPalette,
   classifyArenaHeldPathEndpoint,
   arenaTargetPathEligible,
@@ -135,6 +136,15 @@ describe('arena color scheme lifecycle', () => {
 })
 
 describe('arena clarity helpers', () => {
+  it('skips transient canvas boxes that cannot contain the minimum field inset', () => {
+    expect(arenaCanvasCanDraw(390, 600)).toBe(true)
+    expect(arenaCanvasCanDraw(40.01, 40.01)).toBe(true)
+    expect(arenaCanvasCanDraw(40, 600)).toBe(false)
+    expect(arenaCanvasCanDraw(0, 0)).toBe(false)
+    expect(arenaCanvasCanDraw(Number.NaN, 600)).toBe(false)
+    expect(arenaCanvasCanDraw(390, Number.POSITIVE_INFINITY)).toBe(false)
+  })
+
   it('keeps the light canvas palette stable and provides a legible dark palette', () => {
     expect(ARENA_COLOR_SCHEME_QUERY).toBe('(prefers-color-scheme: dark)')
     expect(arenaCanvasPalette(false)).toBe(ARENA_LIGHT_PALETTE)

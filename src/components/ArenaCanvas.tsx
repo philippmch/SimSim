@@ -517,6 +517,10 @@ function drawHeldPathEndpoint(
   ctx.restore()
 }
 
+/** Canvas geometry uses a 20px minimum inset on each side. During teardown or
+ * responsive reflow ResizeObserver can briefly report a smaller box. */
+export function arenaCanvasCanDraw(width:number,height:number){return Number.isFinite(width)&&Number.isFinite(height)&&width>40&&height>40}
+
 export function ArenaCanvas({world,revision,selectedIndividualId,onSelect,arenaFocus,playbackStatus,playbackDetail}:Props) {
   const ref=useRef<HTMLCanvasElement>(null)
   const drawRef=useRef<()=>void>(()=>{})
@@ -527,6 +531,7 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect,arenaF
     if(!canvas) return
     const draw=()=>{
       const rect=canvas.getBoundingClientRect(), dpr=Math.min(2,window.devicePixelRatio||1)
+      if(!arenaCanvasCanDraw(rect.width,rect.height))return
       if(canvas.width!==Math.round(rect.width*dpr)||canvas.height!==Math.round(rect.height*dpr)){
         canvas.width=Math.round(rect.width*dpr);canvas.height=Math.round(rect.height*dpr)
       }
@@ -620,7 +625,7 @@ export function ArenaCanvas({world,revision,selectedIndividualId,onSelect,arenaF
     })
   },[])
   useEffect(()=>{const canvas=ref.current;if(!canvas||typeof ResizeObserver==='undefined')return;const observer=new ResizeObserver(()=>drawRef.current());observer.observe(canvas);return()=>observer.disconnect()},[])
-  const chooseAt=(event:React.MouseEvent<HTMLCanvasElement>)=>{const canvas=ref.current;if(!canvas)return;const rect=canvas.getBoundingClientRect(),pad=Math.max(20,Math.min(rect.width,rect.height)*.055),x=(event.clientX-rect.left-pad)/(rect.width-pad*2),y=(event.clientY-rect.top-pad)/(rect.height-pad*2);let best:World['creatures'][number]|undefined,bestD=.05;for(const c of world.creatures.filter(c=>c.alive)){const d=Math.hypot(c.x-x,c.y-y);if(d<bestD){best=c;bestD=d}}onSelect(best?.individualId??null)}
+  const chooseAt=(event:React.MouseEvent<HTMLCanvasElement>)=>{const canvas=ref.current;if(!canvas)return;const rect=canvas.getBoundingClientRect();if(!arenaCanvasCanDraw(rect.width,rect.height))return;const pad=Math.max(20,Math.min(rect.width,rect.height)*.055),x=(event.clientX-rect.left-pad)/(rect.width-pad*2),y=(event.clientY-rect.top-pad)/(rect.height-pad*2);let best:World['creatures'][number]|undefined,bestD=.05;for(const c of world.creatures.filter(c=>c.alive)){const d=Math.hypot(c.x-x,c.y-y);if(d<bestD){best=c;bestD=d}}onSelect(best?.individualId??null)}
   const livingCreatures=world.creatures.filter(c=>c.alive)
   const selected=world.creatures.find(creature=>creature.individualId===selectedIndividualId&&creature.alive)
   const stateCounts:Record<CreatureState,number>={safe:0,exploring:0,foraging:0,hunting:0,fleeing:0,returning:0}
