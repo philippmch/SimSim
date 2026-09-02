@@ -5,7 +5,8 @@ import { defaultConfig } from '../simulation/config'
 import { createWorld } from '../simulation/engine'
 import type { DecisionSummary } from '../simulation/types'
 import { summarizeSelectedSettlementPreview, type SelectedSettlementPreview } from './GenerationForecast'
-import { CreatureInspector, decisionCandidateMatches, formatDecisionBasis, formatDecisionProvenance, formatDecisionTargetLabel, formatSelectedSettlementOutcome, formatSelectedSettlementReproduction } from './CreatureInspector'
+import type { CreatureInspectorProps } from './CreatureInspector'
+import { CreatureInspector, decisionCandidateMatches, formatCandidateUtilitySummary, formatDecisionActionLabel, formatDecisionBasis, formatDecisionProvenance, formatDecisionTargetLabel, formatSelectedSettlementOutcome, formatSelectedSettlementReproduction } from './CreatureInspector'
 
 const summary:DecisionSummary={
   chosen:'prey',
@@ -20,6 +21,18 @@ const summary:DecisionSummary={
 }
 
 describe('captured decision inspector helpers',()=>{
+  it('humanizes each captured action and formats candidate counts',()=>{
+    expect(formatDecisionActionLabel('food')).toBe('Forage for food')
+    expect(formatDecisionActionLabel('prey')).toBe('Hunt prey')
+    expect(formatDecisionActionLabel('threat')).toBe('Flee from danger')
+    expect(formatDecisionActionLabel('home')).toBe('Return home')
+    expect(formatDecisionActionLabel('memory')).toBe('Follow remembered food')
+    expect(formatDecisionActionLabel('explore')).toBe('Explore the arena')
+    expect(formatDecisionActionLabel(undefined)).toBe('Action unavailable')
+    expect(formatCandidateUtilitySummary(1)).toBe('Compare candidate utilities · 1 candidate')
+    expect(formatCandidateUtilitySummary(2)).toBe('Compare candidate utilities · 2 candidates')
+  })
+
   it('labels each supported selection basis and captured provenance',()=>{
     expect(formatDecisionBasis('best-utility')).toContain('highest relative utility')
     expect(formatDecisionBasis('commitment')).toContain('target commitment')
@@ -42,6 +55,53 @@ describe('captured decision inspector helpers',()=>{
     expect(decisionCandidateMatches(legacy,legacy.candidates[0])).toBe(true)
     expect(formatDecisionBasis(undefined)).toBe('Selection basis unavailable')
     expect(formatDecisionProvenance({generation:0,dayTime:Number.NaN,reactionWindow:-1})).toBe('Decision capture time unavailable')
+  })
+})
+
+const renderInspector=(world:ReturnType<typeof createWorld>,selected=world.creatures[0],overrides:Partial<CreatureInspectorProps>={})=>renderToStaticMarkup(createElement(CreatureInspector,{selected,ecologyMode:world.config.ecologyMode,dayTime:world.dayTime,stateLabel:'Exploring',targetLabel:'No current target',huntContactRule:'Contact required',onClose:()=>{},...overrides}))
+
+describe('progressive individual inspector disclosure',()=>{
+  it('keeps the plain-language decision explanation ahead of both dense disclosures',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1})
+    const selected=world.creatures[0]
+    selected.decisionSummary=summary
+    const markup=renderInspector(world,selected,{decisionTargetLabel:'Prey · Individual 17'})
+    const firstDetails=markup.indexOf('<details')
+    const secondDetails=markup.indexOf('<details',firstDetails+1)
+
+    expect(markup).toContain('Latest decision: Hunt prey')
+    expect(markup).toContain('Chosen target: Prey · Individual 17')
+    expect(markup).toContain('Reason: Target commitment')
+    expect(markup).toContain('Selection basis: Chosen by target commitment')
+    expect(markup).toContain('Captured decision · Generation 3 · day 1.25 · reaction window 4')
+    expect(firstDetails).toBeGreaterThan(markup.indexOf('Latest decision: Hunt prey'))
+    expect(secondDetails).toBeGreaterThan(firstDetails)
+    expect(markup).toContain('<summary>Trait profile · 6 values</summary>')
+    expect(markup).toContain('<summary>Compare candidate utilities · 2 candidates</summary>')
+    for(const trait of ['speed','size','sense','aggression','caution','exploration'])expect(markup).toContain(`<dt>${trait}</dt>`)
+    expect(markup).toContain('Nearby food utility')
+    expect(markup).toContain('Target commitment')
+    expect(markup).toContain('· Chosen')
+    expect(markup).toContain('scores rank candidates within this decision, not probability or biological fitness')
+    expect(markup).toContain('perception can refresh before the next decision')
+    expect([...markup.matchAll(/<details\b[^>]*>/g)].every(match=>!/\bopen(?:=|>)/.test(match[0]))).toBe(true)
+  })
+
+  it('distinguishes active and home creatures with no captured decision',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1})
+    const active=world.creatures[0]
+    delete active.decisionSummary
+    const activeMarkup=renderInspector(world,active)
+    expect(activeMarkup).toContain('No decision captured yet')
+    expect(activeMarkup).toContain('Advance the simulation to capture its next decision.')
+
+    active.home=true
+    const homeMarkup=renderInspector(world,active)
+    expect(homeMarkup).toContain('No active decision while home.')
+    expect(homeMarkup).toContain('there is no active action to explain')
+    expect(homeMarkup).not.toContain('Advance the simulation to capture its next decision.')
+    expect(activeMarkup).not.toContain('aria-live')
+    expect(homeMarkup).not.toContain('aria-live')
   })
 })
 

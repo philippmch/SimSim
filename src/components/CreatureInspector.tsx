@@ -12,6 +12,14 @@ const decisionBasisLabels:Record<DecisionSelectionBasis,string>={
   commitment:'Chosen by target commitment',
   'urgent-override':'Chosen by urgent safety override',
 }
+const decisionActionLabels:Record<TargetType,string>={
+  food:'Forage for food',
+  prey:'Hunt prey',
+  threat:'Flee from danger',
+  home:'Return home',
+  memory:'Follow remembered food',
+  explore:'Explore the arena',
+}
 const decisionLineStyle={display:'block',marginLeft:0} as const
 const settlementPreviewStyle={fontSize:11,lineHeight:1.4} as const
 const settlementFramingStyle={display:'block',marginTop:3,color:'var(--muted)',fontSize:10,lineHeight:1.35} as const
@@ -63,6 +71,16 @@ export function formatDecisionTargetLabel(summary:DecisionSummary|undefined,labe
   return clean||fallbackDecisionTarget(summary?.chosen)
 }
 
+/** Translate an internal target type into the action a person would describe. */
+export function formatDecisionActionLabel(type:TargetType|undefined):string{
+  return type&&decisionActionLabels[type] ? decisionActionLabels[type] : 'Action unavailable'
+}
+
+export function formatCandidateUtilitySummary(count:number):string{
+  const safeCount=Number.isFinite(count)&&count>=0?Math.floor(count):0
+  return`Compare candidate utilities · ${safeCount} candidate${safeCount===1?'':'s'}`
+}
+
 /** Match by semantic target identity, not by a candidate's array position. */
 export function decisionCandidateMatches(summary:DecisionSummary,candidate:DecisionCandidateSummary):boolean{
   if(candidate.type!==summary.chosen)return false
@@ -107,6 +125,7 @@ export function CreatureInspector({ selected, ecologyMode, dayTime, stateLabel, 
   const decision=selected.decisionSummary
   const candidates=decision&&Array.isArray(decision.candidates)?decision.candidates:[]
   const chosenIndex=decision?candidates.findIndex(candidate=>decisionCandidateMatches(decision,candidate)):-1
+  const decisionReason=typeof decision?.reason==='string'&&decision.reason.trim()?decision.reason:'Decision reason unavailable'
 
   return <section className="inspector" aria-label={`Selected individual ${selected.individualId}`}>
     <div className="inspector-head"><div><h2>Individual {selected.individualId}</h2><p>Lineage {selected.lineageId} · parent {selected.parentIndividualId??'founder'} · born generation {selected.birthGeneration}</p></div><button type="button" onClick={onClose} aria-label="Close individual inspector">×</button></div>
@@ -117,10 +136,14 @@ export function CreatureInspector({ selected, ecologyMode, dayTime, stateLabel, 
         : <span style={decisionLineStyle}>Settlement details unavailable for this individual.</span>}
       <small style={settlementFramingStyle}>Counterfactual snapshot · not a prediction · updates as the cohort changes</small>
     </div>
-    <div className="inspector-grid"><dl><div><dt>Age</dt><dd>{selected.age} generations</dd></div><div><dt>Energy</dt><dd>{selected.energy.toFixed(1)}</dd></div><div><dt>Food</dt><dd>{selected.food}{ecologyMode==='classic'?' / 2':' collected'}</dd></div><div><dt>State</dt><dd>{stateLabel}</dd></div><div><dt>Target</dt><dd>{targetLabel}</dd></div><div><dt>Attack ready</dt><dd>{selected.attackCooldownUntil<=dayTime?'now':`in ${(selected.attackCooldownUntil-dayTime).toFixed(2)}s`}</dd></div><div><dt>Memory</dt><dd>food {selected.memory.foodX===null?'none':'active'} · threat {selected.memory.threatX===null?'none':'active'}</dd></div></dl><dl>{(['speed','size','sense','aggression','caution','exploration']as BiologicalTrait[]).map(trait=><div key={trait}><dt>{trait}</dt><dd>{selected[trait].toFixed(3)}</dd></div>)}</dl></div>
-    {selected.mode==='hunting'&&<div className="utility-breakdown" role="note"><strong>Hunt contact rule</strong><span>{huntContactRule}</span></div>}
+    {decision
+      ? <div className="utility-breakdown" role="group" aria-label="Latest captured decision"><strong>Latest decision: {formatDecisionActionLabel(decision.chosen)}</strong><span style={decisionLineStyle}>Chosen target: {formatDecisionTargetLabel(decision,decisionTargetLabel)}</span><span style={decisionLineStyle}>Reason: {decisionReason}</span><span style={decisionLineStyle}>Selection basis: {formatDecisionBasis(decision.selectionBasis)}</span><span style={decisionLineStyle}>{formatDecisionProvenance(decision.decidedAt)}</span></div>
+      : <div className="utility-breakdown" role="group" aria-label="Latest captured decision"><strong>{selected.home?'No active decision while home.':'No decision captured yet'}</strong><span style={decisionLineStyle}>{selected.home?'This individual is waiting at home; there is no active action to explain.':selected.alive?'Advance the simulation to capture its next decision.':'This individual is inactive; no further decisions will be captured.'}</span></div>}
+    <div className="inspector-grid"><dl style={{gridColumn:'1/-1'}}><div><dt>Age</dt><dd>{selected.age} generations</dd></div><div><dt>Energy</dt><dd>{selected.energy.toFixed(1)}</dd></div><div><dt>Food</dt><dd>{selected.food}{ecologyMode==='classic'?' / 2':' collected'}</dd></div><div><dt>State</dt><dd>{stateLabel}</dd></div><div><dt>Target</dt><dd>{targetLabel}</dd></div><div><dt>Attack ready</dt><dd>{selected.attackCooldownUntil<=dayTime?'now':`in ${(selected.attackCooldownUntil-dayTime).toFixed(2)}s`}</dd></div><div><dt>Memory</dt><dd>food {selected.memory.foodX===null?'none':'active'} · threat {selected.memory.threatX===null?'none':'active'}</dd></div></dl></div>
     {selected.perceptionDiagnostics&&perceptionCopy&&<div className="perception-summary" role="group" aria-label="Selected creature perception telemetry"><strong>Perception window {selected.perceptionDiagnostics.reactionWindow}</strong><span>{perceptionCopy.creatures}</span><span>{perceptionCopy.food}</span><span>{perceptionCopy.notDetected}</span></div>}
-    {decision&&<div className="utility-breakdown" role="group" aria-label="Captured decision"><strong>Decision: {decision.chosen}</strong><span style={decisionLineStyle}>Chosen target: {formatDecisionTargetLabel(decision,decisionTargetLabel)}</span><span style={decisionLineStyle}>{formatDecisionBasis(decision.selectionBasis)}</span><span style={decisionLineStyle}>{formatDecisionProvenance(decision.decidedAt)}</span><span style={decisionLineStyle}>{typeof decision.reason==='string'&&decision.reason.trim()?decision.reason:'Decision reason unavailable'}</span><small style={{display:'block',marginTop:4,color:'var(--muted)'}}>Candidate utilities are from this captured decision; perception can refresh before the next decision.</small><table><caption className="sr-only">Captured candidate relative utilities; scores rank candidates within this decision, not probability or biological fitness</caption><thead><tr><th>Candidate</th><th>Relative utility</th><th>Reason</th></tr></thead><tbody>{candidates.map((candidate,i)=>{const chosen=i===chosenIndex;return <tr key={`${candidate.type}-${candidate.targetId}-${i}`} aria-label={chosen?`${candidate.type} chosen candidate`:undefined}><td>{candidate.type}{chosen&&<small> · Chosen</small>}</td><td>{Number.isFinite(candidate.score)?candidate.score.toFixed(2):'unavailable'}</td><td>{typeof candidate.reason==='string'&&candidate.reason.trim()?candidate.reason:'Reason unavailable'}</td></tr>})}</tbody></table></div>}
+    {selected.mode==='hunting'&&<div className="utility-breakdown" role="note"><strong>Hunt contact rule</strong><span>{huntContactRule}</span></div>}
+    <details key={`traits-${selected.individualId}`} className="utility-breakdown"><summary>Trait profile · 6 values</summary><dl>{(['speed','size','sense','aggression','caution','exploration']as BiologicalTrait[]).map(trait=><div key={trait}><dt>{trait}</dt><dd>{selected[trait].toFixed(3)}</dd></div>)}</dl></details>
+    {decision&&<details key={`candidates-${selected.individualId}`} className="utility-breakdown"><summary>{formatCandidateUtilitySummary(candidates.length)}</summary><small style={{display:'block',marginTop:4,color:'var(--muted)'}}>Scores rank candidates within this captured decision—not probability or biological fitness; perception can refresh before the next decision.</small><table><caption className="sr-only">Captured candidate relative utilities; scores rank candidates within this decision, not probability or biological fitness</caption><thead><tr><th>Candidate</th><th>Relative utility</th><th>Reason</th></tr></thead><tbody>{candidates.map((candidate,i)=>{const chosen=i===chosenIndex;return <tr key={`${candidate.type}-${candidate.targetId}-${i}`} aria-label={chosen?`${candidate.type} chosen candidate`:undefined}><td>{candidate.type}{chosen&&<small> · Chosen</small>}</td><td>{Number.isFinite(candidate.score)?candidate.score.toFixed(2):'unavailable'}</td><td>{typeof candidate.reason==='string'&&candidate.reason.trim()?candidate.reason:'Reason unavailable'}</td></tr>})}</tbody></table></details>}
   </section>
 }
 
