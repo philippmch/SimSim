@@ -488,13 +488,79 @@ const formatSurvivorLossDifference=(trait:SurvivorLossTraitComparison)=>{
   return`${trait.difference>=0?'+':''}${formatNumber(trait.difference)} raw · cohort spread unavailable`
 }
 
-function SurvivorLossComparisonPanel({comparison}:{comparison:SurvivorLossComparison}){
+const formatWholeCount=(value:number|null, singular:string, plural=singular+'s')=>safeNonnegativeInteger(value)?`${value} ${value===1?singular:plural}`:'count unavailable'
+const formatJournalGeneration=(generation:number|null|undefined)=>isValidJournalEventGeneration(generation)?`Generation ${generation}`:'this generation'
+const formatInheritanceTransition=(generation:number|null|undefined)=>isValidJournalEventGeneration(generation)&&Number.isSafeInteger(generation+1)?`Generation ${generation} → ${generation+1}`:'Generation transition unavailable'
+
+/** Keep the collapsed inheritance row useful without exposing any unsupported legacy detail. */
+export function formatInheritanceEvidenceSummary(inheritance:InheritanceAuditReview,generation:number|null|undefined=null):string{
+  const transition=formatInheritanceTransition(generation)
+  if(inheritance.status==='available'){
+    const totalTraitValues=inheritance.offspringCount*JOURNAL_TRAITS.length
+    const total=Number.isSafeInteger(totalTraitValues)?String(totalTraitValues):'total unavailable'
+    const changed=safeNonnegativeInteger(inheritance.changedTraitValues)?String(inheritance.changedTraitValues):'count unavailable'
+    return`Inheritance · ${transition} · ${formatWholeCount(inheritance.offspringCount,'newborn')} · ${changed} of ${total} trait values changed`
+  }
+  if(inheritance.status==='no-births')return`Inheritance · ${transition} · no admitted newborns · no parent→offspring comparison`
+  return`Inheritance · ${transition} · parent→offspring comparison unavailable in this retained record`
+}
+
+const survivorLossPatternSummary=(comparison:SurvivorLossComparison):string=>{
+  if(comparison.patternStatus==='pattern'&&comparison.largestTrait)return`possible ${TRAIT_LABELS[comparison.largestTrait]} pattern`
+  if(comparison.patternStatus==='too-few')return`too few observations for pattern screening`
+  if(comparison.patternStatus==='spread-unavailable')return'cohort spread unavailable for pattern screening'
+  if(comparison.patternStatus==='no-standout')return'no standout pattern'
+  return'pattern screening unavailable'
+}
+
+/** Summarize the survivor/loss comparison as an observation, never as a causal conclusion. */
+export function formatSurvivorLossEvidenceSummary(comparison:SurvivorLossComparison,generation:number|null|undefined=null):string{
+  const context=formatJournalGeneration(generation)
+  if(comparison.status==='no-survivors')return`Survivors vs losses · ${context} · no survivors recorded · comparison unavailable`
+  if(comparison.status==='no-losses')return`Survivors vs losses · ${context} · ${formatWholeCount(comparison.survivorCount,'survivor')} · no recorded losses`
+  if(comparison.status==='unavailable')return`Survivors vs losses · ${context} · comparison unavailable from retained data`
+  return`Survivors vs losses · ${context} · ${formatWholeCount(comparison.survivorCount,'survivor')} vs ${formatWholeCount(comparison.lossCount,'recorded loss','recorded losses')} · ${survivorLossPatternSummary(comparison)} · descriptive only`
+}
+
+const pressureStatusCountLabel=(status:PressureFingerprintStatus,count:number)=>status==='pattern'
+  ?`${count} possible pattern${count===1?'':'s'}`
+  :status==='too-few'
+    ?`${count} group${count===1?'':'s'} with too few observations`
+    :status==='baseline-unavailable'
+      ?`${count} group${count===1?'':'s'} with baseline spread unavailable`
+      :status==='no-standout'
+        ?`${count} no standout pattern${count===1?'':'s'}`
+        :`${count} comparison${count===1?'':'s'} unavailable`
+
+/** Summarize every positive-count outcome group while retaining the descriptive/non-causal framing. */
+export function formatPressureEvidenceSummary(fingerprints:readonly PressureFingerprint[],generation:number|null|undefined=null):string{
+  if(!fingerprints.length)return'Outcome trait patterns · no positive-count outcome groups'
+  const grouped=new Map<PressureFingerprintStatus,PressureFingerprint[]>()
+  for(const fingerprint of fingerprints)grouped.set(fingerprint.status,[...(grouped.get(fingerprint.status)??[]),fingerprint])
+  const parts=[...grouped.entries()].map(([status,items])=>{
+    const labels=items.map(item=>item.label).join(', ')
+    return`${pressureStatusCountLabel(status,items.length)} (${labels})`
+  })
+  return`Outcome trait patterns · ${formatJournalGeneration(generation)} · ${formatWholeCount(fingerprints.length,'outcome group')} · ${parts.join('; ')} · descriptive only`
+}
+
+/** Describe event retention state in one collapsed-row sentence. */
+export function formatJournalEventsEvidenceSummary(review:JournalEventReview,generation:number|null|undefined=null):string{
+  const context=formatJournalGeneration(generation)
+  if(review.status==='events')return`Ecosystem events · ${context} · ${formatWholeCount(review.events.length,'retained shock','retained shocks')}`
+  if(review.status==='partial')return`Ecosystem events · ${context} · ${formatWholeCount(review.events.length,'retained shock','retained shocks')} · earlier events may be missing`
+  if(review.status==='none')return`Ecosystem events · No shocks recorded in ${context}`
+  return`Ecosystem events · Event history unavailable for ${context}`
+}
+
+function SurvivorLossComparisonPanel({comparison,generation}:{comparison:SurvivorLossComparison;generation:number}){
   const statusCopy=comparison.status==='no-survivors'
     ? 'No survivors were recorded; trait means cannot be compared for this generation.'
     : comparison.status==='no-losses'
       ? 'No losses were recorded; trait means cannot be compared for this generation.'
       : comparison.interpretation
-  return <div className="event-story journal-events pressure-patterns" data-comparison-status={comparison.status}>
+  return <details className="event-story journal-events pressure-patterns" data-journal-evidence="survivor-loss" data-comparison-status={comparison.status}>
+    <summary>{formatSurvivorLossEvidenceSummary(comparison,generation)}</summary>
     <h3>Survivors vs recorded losses</h3>
     {comparison.status==='available'&&<><p className="journal-kicker">All six traits are shown. Loss means count-weight all recorded loss outcomes combined; survivor-minus-loss differences use evaluated-cohort spread when available.</p><p className="journal-equation"><strong>{comparison.survivorCount}</strong> survivors vs <strong>{comparison.lossCount}</strong> recorded losses</p><ul className="story-grid" aria-label="Survivor and combined loss trait means for the selected generation">{comparison.traits.map(trait=>{
       const means=trait.survivorMean===null||trait.lossMean===null?null:formatAdaptivePair(trait.survivorMean,trait.lossMean)
@@ -502,7 +568,7 @@ function SurvivorLossComparisonPanel({comparison}:{comparison:SurvivorLossCompar
       return <li key={trait.trait}><span>{label}</span><strong>Survivors {means?.[0]??'Unavailable'} · losses {means?.[1]??'Unavailable'}</strong><span>Survivor mean − loss mean: {formatSurvivorLossDifference(trait)}</span></li>
     })}</ul></>}
     <p className={comparison.status==='available'?'journal-kicker':'journal-warning'} role="note">{statusCopy}</p>
-  </div>
+  </details>
 }
 
 export function GenerationJournal({ledgers,events,requestedGeneration,onRequestedGenerationChange}:GenerationJournalProps){
@@ -553,11 +619,11 @@ export function GenerationJournal({ledgers,events,requestedGeneration,onRequeste
         <div><h3>Attacks &amp; births</h3><p className="journal-kicker">{formatAttackBasisNote(review.attacks.attemptBasis)}</p><div className="utility-breakdown"><table><tbody><tr><th scope="row">{formatAttackAttemptLabel(review.attacks.attemptBasis)}</th><td>{review.attacks.attempts}</td></tr><tr><th scope="row">Wins / failures</th><td>{review.attacks.wins} / {review.attacks.failures}</td></tr><tr><th scope="row">Contested same-prey claims</th><td>{review.attacks.contested===null?'Unavailable':review.attacks.contested}</td></tr><tr><th scope="row">Prey consumed</th><td>{review.attacks.preyConsumed}</td></tr><tr><th scope="row">Eligible parents → admitted births</th><td>{review.births.eligible} → {review.births.admitted}</td></tr><tr><th scope="row">Births capped</th><td>{review.births.capped}</td></tr><tr><th scope="row">Parents of newborns</th><td>{review.births.admitted}</td></tr></tbody></table></div></div>
       </div>
       <div className="journal-takeaway"><strong>Recorded outcome summary</strong><span>{deriveGenerationInterpretation(review)}</span></div>
-      <div className="event-story journal-events pressure-patterns"><h3>How offspring inherited traits</h3><p className="journal-kicker">One admitted parent produces one same-lineage offspring. Newborns copy all six traits, then enabled traits may mutate independently.{inheritance.status==='available'?' Rows show parent mean → newborn mean.':''}</p>{inheritance.status==='available'?<><p className="journal-equation"><strong>Generation {review.generation} → {review.generation+1}</strong> · {inheritance.offspringCount} newborns · <strong>{inheritance.changedTraitValues}</strong> final trait values changed out of {inheritance.offspringCount*JOURNAL_TRAITS.length}</p><ul className="story-grid">{JOURNAL_TRAITS.map(trait=>{const summary=inheritance.traits[trait],means=formatAdaptivePair(summary.parentMean!,summary.offspringMean!);return <li key={trait}><span>{TRAIT_LABELS[trait][0].toUpperCase()+TRAIT_LABELS[trait].slice(1)}</span><strong>{means[0]} → {means[1]} · {summary.changedCount} of {inheritance.offspringCount} changed</strong></li>})}</ul></>:inheritance.status==='no-births'?<p className="journal-kicker">Generation {review.generation} → {review.generation+1}: no parent→offspring comparison; no admitted parent produced a newborn.</p>:<p className="journal-kicker">Generation {review.generation} → {review.generation+1}: this retained record has {review.births.admitted} births, but its parent→offspring trait comparison is unavailable.</p>}{inheritance.status==='available'&&<p className="journal-kicker">Changed means the final clamped value differed from the matched parent; this is not a mutation-attempt count. A zero here does not imply mutation was disabled.</p>}</div>
       <div className="journal-takeaway"><strong>Selection takeaway</strong><span>{review.takeaway}</span></div>
-      <SurvivorLossComparisonPanel comparison={survivorLossComparison}/>
-      {pressureFingerprints.length>0&&<div className="event-story journal-events pressure-patterns"><h3>Outcome trait patterns</h3><p className="journal-kicker">Compared with the evaluated cohort; associations are descriptive, not proof of cause.</p><ul>{pressureFingerprints.map(fingerprint=>{const comparison=fingerprint.comparison,means=comparison?formatAdaptivePair(comparison.outcomeMean,comparison.baselineMean):null;return <li key={fingerprint.cause}><span>{fingerprint.label} · n={fingerprint.count}</span>{comparison&&means?<strong>{comparison.traitLabel}: {means[0]} vs cohort {means[1]} ({comparison.direction})</strong>:<strong>Trait comparison unavailable.</strong>}<span>{fingerprint.interpretation}</span></li>})}</ul></div>}
-      <div className="event-story journal-events"><h3>Ecosystem events · generation {review.generation}</h3>{eventReview.events.length?<>{eventReview.status==='partial'&&<p className="journal-kicker">Showing retained events; earlier events from this generation may no longer be available.</p>}<ul>{eventReview.events.map((event,index)=><li key={`${isValidJournalEventGeneration(journalEventField(event,'generation'))?journalEventField(event,'generation'):'unknown'}-${isValidJournalEventDay(journalEventField(event,'day'))?journalEventField(event,'day'):'unavailable'}-${journalEventSortKind(event)}-${index}`}><span>{formatJournalEventDay(journalEventField(event,'day'))}</span><strong>{formatJournalEventSummary(journalEventField(event,'summary'))}</strong></li>)}</ul></>:<p className="journal-kicker">{eventReview.status==='unknown'?'Event history is unavailable for this generation.':'No shocks occurred in this generation.'}</p>}</div>
+      <details className="event-story journal-events pressure-patterns" data-journal-evidence="inheritance"><summary>{formatInheritanceEvidenceSummary(inheritance,review.generation)}</summary><h3>How offspring inherited traits</h3><p className="journal-kicker">One admitted parent produces one same-lineage offspring. Newborns copy all six traits, then enabled traits may mutate independently.{inheritance.status==='available'?' Rows show parent mean → newborn mean.':''}</p>{inheritance.status==='available'?<><p className="journal-equation"><strong>Generation {review.generation} → {review.generation+1}</strong> · {inheritance.offspringCount} newborns · <strong>{inheritance.changedTraitValues}</strong> final trait values changed out of {inheritance.offspringCount*JOURNAL_TRAITS.length}</p><ul className="story-grid">{JOURNAL_TRAITS.map(trait=>{const summary=inheritance.traits[trait],means=formatAdaptivePair(summary.parentMean!,summary.offspringMean!);return <li key={trait}><span>{TRAIT_LABELS[trait][0].toUpperCase()+TRAIT_LABELS[trait].slice(1)}</span><strong>{means[0]} → {means[1]} · {summary.changedCount} of {inheritance.offspringCount} changed</strong></li>})}</ul></>:inheritance.status==='no-births'?<p className="journal-kicker">Generation {review.generation} → {review.generation+1}: no parent→offspring comparison; no admitted parent produced a newborn.</p>:<p className="journal-kicker">Generation {review.generation} → {review.generation+1}: this retained record has {review.births.admitted} births, but its parent→offspring trait comparison is unavailable.</p>}{inheritance.status==='available'&&<p className="journal-kicker">Changed means the final clamped value differed from the matched parent; this is not a mutation-attempt count. A zero here does not imply mutation was disabled.</p>}</details>
+      <SurvivorLossComparisonPanel comparison={survivorLossComparison} generation={review.generation}/>
+      {pressureFingerprints.length>0&&<details className="event-story journal-events pressure-patterns" data-journal-evidence="outcome-patterns"><summary>{formatPressureEvidenceSummary(pressureFingerprints,review.generation)}</summary><h3>Outcome trait patterns</h3><p className="journal-kicker">Compared with the evaluated cohort; associations are descriptive, not proof of cause.</p><ul>{pressureFingerprints.map(fingerprint=>{const comparison=fingerprint.comparison,means=comparison?formatAdaptivePair(comparison.outcomeMean,comparison.baselineMean):null;return <li key={fingerprint.cause}><span>{fingerprint.label} · n={fingerprint.count}</span>{comparison&&means?<strong>{comparison.traitLabel}: {means[0]} vs cohort {means[1]} ({comparison.direction})</strong>:<strong>Trait comparison unavailable.</strong>}<span>{fingerprint.interpretation}</span></li>})}</ul></details>}
+      <details className="event-story journal-events" data-journal-evidence="ecosystem-events"><summary>{formatJournalEventsEvidenceSummary(eventReview,review.generation)}</summary><h3>Ecosystem events · generation {review.generation}</h3>{eventReview.events.length?<>{eventReview.status==='partial'&&<p className="journal-kicker">Showing retained events; earlier events from this generation may no longer be available.</p>}<ul>{eventReview.events.map((event,index)=><li key={`${isValidJournalEventGeneration(journalEventField(event,'generation'))?journalEventField(event,'generation'):'unknown'}-${isValidJournalEventDay(journalEventField(event,'day'))?journalEventField(event,'day'):'unavailable'}-${journalEventSortKind(event)}-${index}`}><span>{formatJournalEventDay(journalEventField(event,'day'))}</span><strong>{formatJournalEventSummary(journalEventField(event,'summary'))}</strong></li>)}</ul></>:<p className="journal-kicker">{eventReview.status==='unknown'?'Event history is unavailable for this generation.':'No shocks occurred in this generation.'}</p>}</details>
     </>}
   </div>
 }

@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { meetsStandardizedEffectThreshold, SELECTION_PATTERN_THRESHOLD } from '../simulation/engine'
 import type { BiologicalTrait, GenerationLedger, InheritanceTraitSummary, SelectionSummary, TraitMoments, WorldEvent } from '../simulation/types'
-import GenerationJournal, { clampJournalGeneration, deriveGenerationInterpretation, deriveGenerationReview, deriveInheritanceAudit, deriveJournalEvents, derivePressureFingerprints, deriveSurvivorLossComparison, filterJournalEvents, formatAdaptivePair, formatAttackAttemptLabel, formatAttackBasisNote, formatJournalEventDay, formatJournalEventSummary, getJournalEventStatus, getRecentGenerationLedgers, isValidJournalEventDay, isValidJournalEventGeneration, isValidJournalEventKind, JOURNAL_EVENT_DAY_UNAVAILABLE, JOURNAL_EVENT_SUMMARY_UNAVAILABLE, MAX_JOURNAL_ENTRIES, pinCurrentGeneration, resolveJournalSelection } from './GenerationJournal'
+import GenerationJournal, { clampJournalGeneration, deriveGenerationInterpretation, deriveGenerationReview, deriveInheritanceAudit, deriveJournalEvents, derivePressureFingerprints, deriveSurvivorLossComparison, filterJournalEvents, formatAdaptivePair, formatAttackAttemptLabel, formatAttackBasisNote, formatInheritanceEvidenceSummary, formatJournalEventDay, formatJournalEventSummary, formatJournalEventsEvidenceSummary, formatPressureEvidenceSummary, formatSurvivorLossEvidenceSummary, getJournalEventStatus, getRecentGenerationLedgers, isValidJournalEventDay, isValidJournalEventGeneration, isValidJournalEventKind, JOURNAL_EVENT_DAY_UNAVAILABLE, JOURNAL_EVENT_SUMMARY_UNAVAILABLE, MAX_JOURNAL_ENTRIES, pinCurrentGeneration, resolveJournalSelection } from './GenerationJournal'
 
 const moments=(mean:number|null)=>({mean,variance:mean===null?null:0,sd:mean===null?null:0})
 const selection=(mean:number|null)=>({speed:moments(mean),size:moments(mean),sense:moments(mean),aggression:moments(mean),caution:moments(mean),exploration:moments(mean)})
@@ -464,5 +464,99 @@ describe('generation journal helpers',()=>{
     delete oldRuntime.selectionByOutcome
     expect(derivePressureFingerprints(old)[0]).toMatchObject({cause:'survived',status:'unavailable',comparison:null})
     expect(derivePressureFingerprints(old)[0].interpretation).toContain('unavailable')
+  })
+
+  describe('progressive-disclosure evidence summaries',()=>{
+    it('summarizes inheritance for available, no-birth, and legacy records',()=>{
+      const available=deriveInheritanceAudit(makeLedger(51,{birthsAdmitted:2,inheritance:{offspringCount:2,changedTraitValues:1,traits:inheritanceProfile({speed:{parentMean:1.004,offspringMean:1.001,changedCount:1}})}}))
+      const noBirths=deriveInheritanceAudit(makeLedger(52,{birthsAdmitted:0,birthsEligible:0,birthsCapped:0}))
+      const legacy=deriveInheritanceAudit(makeLedger(53,{birthsAdmitted:2}))
+      expect(formatInheritanceEvidenceSummary(available,51)).toBe('Inheritance · Generation 51 → 52 · 2 newborns · 1 of 12 trait values changed')
+      expect(formatInheritanceEvidenceSummary(noBirths,52)).toContain('Generation 52 → 53')
+      expect(formatInheritanceEvidenceSummary(noBirths,52)).toContain('no admitted newborns')
+      expect(formatInheritanceEvidenceSummary(noBirths,52)).toContain('no parent→offspring comparison')
+      expect(formatInheritanceEvidenceSummary(legacy,53)).toContain('Generation 53 → 54')
+      expect(formatInheritanceEvidenceSummary(legacy,53)).toContain('comparison unavailable')
+      for(const [audit,generation] of [[available,51],[noBirths,52],[legacy,53]] as const)expect(formatInheritanceEvidenceSummary(audit,generation)).not.toMatch(/NaN|Infinity|undefined/)
+    })
+
+    it('summarizes survivor/loss available and explicit empty or unavailable cohorts',()=>{
+      const available=deriveSurvivorLossComparison(comparisonLedger())
+      const noSurvivors=deriveSurvivorLossComparison(makeLedger(54,{startPopulation:3,outcomes:{survived:0,hunted:3,energy:0,unfed:0,late:0,aged:0}}))
+      const noLosses=deriveSurvivorLossComparison(makeLedger(55,{startPopulation:3,outcomes:{survived:3,hunted:0,energy:0,unfed:0,late:0,aged:0}}))
+      const legacy=makeLedger(56)
+      delete (legacy as Partial<GenerationLedger>).selectionByOutcome
+      const unavailable=deriveSurvivorLossComparison(legacy)
+      expect(formatSurvivorLossEvidenceSummary(available)).toContain('4 survivors vs 4 recorded losses')
+      expect(formatSurvivorLossEvidenceSummary(available)).toContain('descriptive only')
+      expect(formatSurvivorLossEvidenceSummary(noSurvivors)).toContain('no survivors recorded')
+      expect(formatSurvivorLossEvidenceSummary(noLosses)).toContain('no recorded losses')
+      expect(formatSurvivorLossEvidenceSummary(unavailable)).toContain('comparison unavailable')
+      for(const summary of [available,noSurvivors,noLosses,unavailable].map(formatSurvivorLossEvidenceSummary))expect(summary).not.toMatch(/NaN|Infinity|undefined/)
+    })
+
+    it('summarizes every outcome-pattern state without implying causation',()=>{
+      const outcomeLedger=(generation:number,effect:number,startSd=.2,count=3)=>{
+        const baseline=profile({speed:{mean:1,variance:startSd**2,sd:startSd}})
+        return makeLedger(generation,{outcomes:{survived:count,hunted:0,energy:0,unfed:0,late:0,aged:0},selection:{start:baseline,survivor:selection(1),reproducer:selection(1)},selectionByOutcome:{survived:profile({speed:{mean:1+effect*startSd,variance:startSd**2,sd:startSd}}),hunted:selection(null),energy:selection(null),unfed:selection(null),late:selection(null),aged:selection(null)}})
+      }
+      const pattern=derivePressureFingerprints(outcomeLedger(57,.5))[0]
+      const noStandout=derivePressureFingerprints(outcomeLedger(58,.05))[0]
+      const tooFew=derivePressureFingerprints(outcomeLedger(59,1,.2,2))[0]
+      const baselineUnavailable=derivePressureFingerprints(outcomeLedger(60,1,0))[0]
+      const unavailableLedger=outcomeLedger(61,.5)
+      delete (unavailableLedger as Partial<GenerationLedger>).selectionByOutcome
+      const unavailable=derivePressureFingerprints(unavailableLedger)[0]
+      expect(formatPressureEvidenceSummary([pattern])).toContain('possible pattern')
+      expect(formatPressureEvidenceSummary([noStandout])).toContain('no standout pattern')
+      expect(formatPressureEvidenceSummary([tooFew])).toContain('too few observations')
+      expect(formatPressureEvidenceSummary([baselineUnavailable])).toContain('baseline spread unavailable')
+      expect(formatPressureEvidenceSummary([unavailable])).toContain('comparison unavailable')
+      expect(formatPressureEvidenceSummary([pattern])).toContain('descriptive only')
+      expect(formatPressureEvidenceSummary([tooFew,{...tooFew,cause:'hunted',label:'Hunted'}])).toContain('2 groups with too few observations')
+      expect(formatPressureEvidenceSummary([baselineUnavailable,{...baselineUnavailable,cause:'hunted',label:'Hunted'}])).toContain('2 groups with baseline spread unavailable')
+      expect(formatPressureEvidenceSummary([unavailable,{...unavailable,cause:'hunted',label:'Hunted'}])).toContain('2 comparisons unavailable')
+      for(const fingerprint of [pattern,noStandout,tooFew,baselineUnavailable,unavailable])expect(formatPressureEvidenceSummary([fingerprint])).not.toMatch(/NaN|Infinity|undefined/)
+    })
+
+    it('summarizes events, retention gaps, empty history, and unknown history',()=>{
+      const events:Array<WorldEvent>=[{generation:62,day:1,kind:'drought',summary:'Drought removed food.',count:1}]
+      const eventReview=deriveJournalEvents(events,62)
+      const partialEvents:Array<WorldEvent>=[
+        ...Array.from({length:5},(_,index)=>({generation:63,day:index,kind:'drought' as const,summary:'retained shock',count:1})),
+        ...Array.from({length:55},(_,index)=>({generation:64,day:index,kind:'resource-bloom' as const,summary:'newer shock',count:1})),
+      ]
+      const partial=deriveJournalEvents(partialEvents,63)
+      const none=deriveJournalEvents([],62)
+      const unknown=deriveJournalEvents(Array.from({length:60},(_,index)=>({generation:64,day:index,kind:'drought' as const,summary:'retained shock',count:1})),62)
+      expect(formatJournalEventsEvidenceSummary(eventReview)).toContain('1 retained shock')
+      expect(formatJournalEventsEvidenceSummary(partial)).toContain('earlier events may be missing')
+      expect(formatJournalEventsEvidenceSummary(none)).toMatch(/No shocks recorded/)
+      expect(formatJournalEventsEvidenceSummary(unknown)).toMatch(/Event history unavailable/)
+      for(const summary of [eventReview,partial,none,unknown].map(formatJournalEventsEvidenceSummary))expect(summary).not.toMatch(/NaN|Infinity|undefined/)
+    })
+
+    it('renders four closed evidence details while keeping core answers outside them',()=>{
+      const markup=renderToStaticMarkup(createElement(GenerationJournal,{ledgers:[comparisonLedger()],events:[{generation:40,day:1,kind:'drought',summary:'Drought removed food.',count:1}],requestedGeneration:null,onRequestedGenerationChange:()=>{}}))
+      const details=[...markup.matchAll(/<details\b[^>]*>/g)]
+      expect(details).toHaveLength(4)
+      expect(details.map(match=>match[0].match(/data-journal-evidence="([^"]+)"/)?.[1])).toEqual(['inheritance','survivor-loss','outcome-patterns','ecosystem-events'])
+      expect(details.every(match=>!/\bopen(?:=|>)/.test(match[0]))).toBe(true)
+      for(const heading of ['How offspring inherited traits','Survivors vs recorded losses','Outcome trait patterns','Ecosystem events · generation 40'])expect(markup).toContain(`<h3>${heading}</h3>`)
+      const firstDetail=markup.indexOf('<details')
+      for(const core of ['Population outcomes','Resource balance','Attacks &amp; births','Recorded outcome summary','Selection takeaway'])expect(markup.indexOf(core)).toBeGreaterThanOrEqual(0)
+      expect(markup.indexOf('Recorded outcome summary')).toBeLessThan(firstDetail)
+      expect(markup.indexOf('Selection takeaway')).toBeLessThan(firstDetail)
+      expect(markup).not.toMatch(/NaN|Infinity|undefined/)
+    })
+
+    it('does not render evidence details before the first completed generation or for absent outcome fingerprints',()=>{
+      const emptyMarkup=renderToStaticMarkup(createElement(GenerationJournal,{ledgers:[],events:[],requestedGeneration:null,onRequestedGenerationChange:()=>{}}))
+      expect(emptyMarkup).not.toContain('<details')
+      const noOutcomes=makeLedger(65,{outcomes:{survived:0,hunted:0,energy:0,unfed:0,late:0,aged:0},birthsAdmitted:0,birthsEligible:0,birthsCapped:0})
+      const markup=renderToStaticMarkup(createElement(GenerationJournal,{ledgers:[noOutcomes],events:[],requestedGeneration:null,onRequestedGenerationChange:()=>{}}))
+      expect(markup).not.toContain('data-journal-evidence="outcome-patterns"')
+      expect(markup.match(/<details\b/g)).toHaveLength(3)
+    })
   })
 })
