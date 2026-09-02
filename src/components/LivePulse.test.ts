@@ -7,6 +7,8 @@ import {
   LIVE_PULSE_COUNTER_KEYS,
   MAX_LIVE_PULSE_TRAIL_ENTRIES,
   reduceLivePulseTrail,
+  hasWorldActivityTelemetry,
+  shouldRenderLivePulseTrail,
   type LivePulseCreature,
   type LivePulseSummary,
   type LivePulseTrailEntry,
@@ -359,5 +361,14 @@ describe('live pulse recent-activity trail', () => {
     expect(trail[0].text.split(' · ')).toHaveLength(3)
     expect(formatLivePulse(summary)).toContain('+1 attack success')
     expect(formatLivePulse(summary)).toContain('4 creatures reached home')
+  })
+
+  it('keeps the aggregate trail only for legacy snapshots without activity telemetry', () => {
+    const retained = record([], pulseSummary({ foundersArrived: 1 }))
+    expect(hasWorldActivityTelemetry(world())).toBe(false)
+    expect(hasWorldActivityTelemetry({ ...world(), activity: [] })).toBe(true)
+    expect(shouldRenderLivePulseTrail(world(), retained)).toBe(true)
+    expect(shouldRenderLivePulseTrail({ ...world(), activity: [] }, retained)).toBe(false)
+    expect(shouldRenderLivePulseTrail({ ...world(), activity: [{ malformed: true }] }, retained)).toBe(false)
   })
 })

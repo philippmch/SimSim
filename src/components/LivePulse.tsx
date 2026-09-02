@@ -65,6 +65,22 @@ export type LivePulseTrailAction =
 
 export const MAX_LIVE_PULSE_TRAIL_ENTRIES = 5
 
+/** New snapshots own the bounded key-moment story; older snapshots use this
+ * aggregate trail as a compatibility fallback. Presence matters even when the
+ * engine buffer is empty, so the two stories never duplicate each other. */
+export function hasWorldActivityTelemetry(world: unknown): boolean {
+  if (world === null || (typeof world !== 'object' && typeof world !== 'function')) return false
+  try {
+    return Object.prototype.hasOwnProperty.call(world, 'activity')
+  } catch {
+    return false
+  }
+}
+
+export function shouldRenderLivePulseTrail(world: unknown, trail: readonly LivePulseTrailEntry[]): boolean {
+  return !hasWorldActivityTelemetry(world) && trail.length > 0
+}
+
 const COUNTER_LABELS: Record<LivePulseCounterKey, (count: number) => string> = {
   dayFoodProduced: () => 'food added/grown',
   dayFoodRemoved: () => 'food removed',
@@ -405,7 +421,7 @@ export function LivePulse({ world }: { world: World }) {
       <strong>Live pulse</strong>
       {parts.map((part, index) => <span key={`${index}-${part}`}>{part}</span>)}
     </div>
-    {trail.length > 0 && <div className="ecology-line activity-line" role="group" aria-label="Recent simulation activity, newest first">
+    {shouldRenderLivePulseTrail(world, trail) && <div className="ecology-line activity-line" role="group" aria-label="Recent simulation activity, newest first">
       <strong>Recent activity</strong>
       <ol aria-label="Recent simulation activity, newest first" style={{ flex: '1 1 100%', minWidth: 0, margin: 0, padding: 0, listStyle: 'none' }}>
         {trail.map((entry, index) => <li key={entry.sequence} style={{ minWidth: 0, whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{trailTexts[index]}</li>)}

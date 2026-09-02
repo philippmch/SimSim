@@ -34,8 +34,12 @@ generation ledger reconciles each starting individual as survived, hunted,
 energy-depleted, unfed, late, or aged. Ecological survivors retain configurable
 energy, reproduction deducts a cost, offspring receive a configured reserve, and
 capacity-limited births use a seeded fair ranking. The ledger records production,
-consumption, attack outcomes, birth capacity, and selection moments. Clicking a
-creature opens bounded telemetry; long per-tick traces are not kept.
+consumption, attack outcomes, birth capacity, and selection moments. Autoplay also
+keeps a bounded newest-first list of salient actor-level moments—such as food
+collection, attacks, home arrivals, energy loss, regrowth, interventions, and
+generation settlement—with generation/day provenance. Movement-only ticks are
+omitted, so this is not a long per-tick trace or replay. Clicking a creature still
+opens its bounded inspection telemetry.
 
 The seeded environment persists across generations. Food patches have visible
 stock, bounded capacity, and deterministic within-generation regrowth. Remaining

@@ -21,6 +21,7 @@ const PopulationStory=lazy(()=>import('./components/PopulationStory'))
 const SettlementReport=lazy(()=>import('./components/SettlementReport'))
 const GenerationHandoff=lazy(()=>import('./components/GenerationHandoff'))
 const GenerationAccounting=lazy(()=>import('./components/GenerationAccounting'))
+const SimulationActivity=lazy(()=>import('./components/SimulationActivity'))
 const ParametersPanel=lazy(()=>import('./components/ParametersPanel'))
 const creatureStates=Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]
 
@@ -367,6 +368,7 @@ function App(){
           <span><strong>Observed path</strong><small>Latest manual step</small></span>
           <output>{observedPath}</output>
         </div>
+        <Suspense fallback={<div className="interventions" role="group" aria-label="Recent key moments" aria-busy="true"><span><strong>Recent key moments</strong><small>Opening retained moments…</small></span></div>}><SimulationActivity world={world}/></Suspense>
         <div className="interventions" role="group" aria-label="Live ecological interventions">
           <span><strong>Live shocks</strong><small>No restart needed</small></span>
           <button onClick={()=>intervene('resource-bloom')} disabled={world.food.length>=MAX_FOOD} title={world.food.length>=MAX_FOOD?'Food is at the safety cap':'Add a deterministic pulse of food'}>Resource bloom</button>
