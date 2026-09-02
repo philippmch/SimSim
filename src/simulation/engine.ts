@@ -1,5 +1,5 @@
 import { END_CAUSES } from './types'
-import type { BiologicalTrait,Config,Creature,GenerationLedger,HistoryPoint,InheritanceSummary,InterventionKind,LastInspectedOutcome,LineageAnalytics,SelectionSummary,TerminalEndCause,Trait,World,WorldEvent } from './types'
+import type { BiologicalTrait,Config,Creature,GenerationLedger,HistoryPoint,InheritanceSummary,InterventionKind,LastInspectedOutcome,LineageAnalytics,SelectionSummary,TerminalEndCause,Trait,World,WorldActivityEntry,WorldActivityKind,WorldEvent } from './types'
 import { clamp,distance,random } from './random'
 import { advanceFoodBudget,createEnvironment,effectiveFoodRegrowthRate,enforceAdvancedPatchCapacity,spawnFood,spawnRegrownFood,syncPatchStocks } from './environment'
 import { decide,type Decision } from './behavior'
@@ -18,6 +18,8 @@ function edgePoint(world:World){const edge=Math.floor(random(world)*4),p=.04+ran
 const emptyMemory=()=>({foodX:null,foodY:null,foodUntil:0,threatX:null,threatY:null,threatUntil:0})
 const traitKeys:BiologicalTrait[]=['speed','size','sense','aggression','caution','exploration']
 export const MAX_WORLD_EVENTS=60
+/** Keep the actor-level story small enough to ship with every simulation snapshot. */
+export const MAX_ACTIVITY_ENTRIES=24
 const traitRanges:Record<BiologicalTrait,number>={speed:2.5,size:2.5,sense:.565,aggression:1,caution:1,exploration:1}
 const traitDirections:Record<BiologicalTrait,readonly [string,string]>={speed:['slower','faster'],size:['smaller','larger'],sense:['narrower-sensing','broader-sensing'],aggression:['less aggressive','more aggressive'],caution:['less cautious','more cautious'],exploration:['less exploratory','more exploratory']}
 export const SELECTION_SIGNAL_THRESHOLD=.2
@@ -33,6 +35,62 @@ export function snapStandardizedEffect(effect:number){
   return effect
 }
 const selectionDescriptions:Record<BiologicalTrait,readonly [string,string]>={speed:['slower speed','faster speed'],size:['smaller size','larger size'],sense:['narrower sensing','broader sensing'],aggression:['lower aggression','higher aggression'],caution:['lower caution','higher caution'],exploration:['lower exploration tendency','higher exploration tendency']}
+
+type ActivityCursor={generation?:unknown;day?:unknown;tick?:unknown}
+type ActivityOptions={actorIds?:readonly unknown[];attackerId?:unknown;preyId?:unknown;contestChance?:unknown;cursor?:ActivityCursor}
+const safeActivityInteger=(value:unknown,min=0):number|null=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=min?value:null
+const safeActivityCount=(value:unknown)=>{if(typeof value!=='number'||!Number.isFinite(value)||value<0)return 0;return Math.min(Number.MAX_SAFE_INTEGER,Math.floor(value))}
+const safeActivityDay=(value:unknown)=>{if(typeof value!=='number'||!Number.isFinite(value)||value<0)return 0;const rounded=Math.round(value*1000)/1000;return Number.isFinite(rounded)?rounded:Number.MAX_SAFE_INTEGER}
+const safeActivitySummary=(value:unknown)=>typeof value==='string'&&value.trim().length?value:'Activity update unavailable.'
+const safeActivityChance=(value:unknown)=>typeof value==='number'&&Number.isFinite(value)?Math.max(0,Math.min(1,value)):null
+const formatActivityPercent=(chance:number)=>{const percent=chance*100;if(percent>0&&percent<.01)return'<0.01';return percent<.1?percent.toFixed(2):percent<10?percent.toFixed(1):percent.toFixed(0)}
+
+/**
+ * Initialize legacy snapshots lazily.  Keeping this tolerant is important for
+ * fallback mode, where a hand-authored or older snapshot can become the live
+ * mutable world without passing through createWorld first.
+ */
+function ensureActivityState(world:World){
+  if(!Array.isArray(world.activity))world.activity=[]
+  const storedDropped=safeActivityInteger(world.activityDropped)
+  if(storedDropped===null)world.activityDropped=0
+  let latest=safeActivityInteger(world.activitySequence)??0
+  for(const entry of world.activity){const sequence=safeActivityInteger((entry as Partial<WorldActivityEntry>|null)?.sequence,1);if(sequence!==null)latest=Math.max(latest,sequence)}
+  if(latest>=Number.MAX_SAFE_INTEGER){
+    world.activity=world.activity.slice(-MAX_ACTIVITY_ENTRIES).map((entry,index)=>({...entry,sequence:index+1}))
+    latest=world.activity.length
+  }
+  world.activitySequence=latest
+  if(world.activity.length>MAX_ACTIVITY_ENTRIES){
+    const dropped=world.activity.length-MAX_ACTIVITY_ENTRIES
+    world.activity=world.activity.slice(-MAX_ACTIVITY_ENTRIES)
+    world.activityDropped=Math.min(Number.MAX_SAFE_INTEGER,world.activityDropped+dropped)
+  }
+}
+
+/** Append one bounded, deterministic activity fact without touching simulation RNG. */
+function recordActivity(world:World,kind:WorldActivityKind,summary:string,count:number,options:ActivityOptions={}){
+  ensureActivityState(world)
+  const sequence=world.activitySequence<Number.MAX_SAFE_INTEGER?world.activitySequence+1:1
+  world.activitySequence=sequence
+  const generation=safeActivityInteger(options.cursor?.generation??world.generation,0)??0
+  const tick=safeActivityInteger(options.cursor?.tick??world.tickIndex,0)??0
+  const entry:WorldActivityEntry={sequence,generation,day:safeActivityDay(options.cursor?.day??world.dayTime),tick,kind,summary:safeActivitySummary(summary),count:safeActivityCount(count)}
+  const actorIds=(options.actorIds??[]).map(value=>safeActivityInteger(value)).filter((id):id is number=>id!==null)
+  if(actorIds.length)entry.actorIds=[...actorIds]
+  const attackerId=safeActivityInteger(options.attackerId)
+  if(attackerId!==null)entry.attackerId=attackerId
+  const preyId=safeActivityInteger(options.preyId)
+  if(preyId!==null)entry.preyId=preyId
+  const contestChance=safeActivityChance(options.contestChance)
+  if(contestChance!==null)entry.contestChance=contestChance
+  world.activity.push(entry)
+  if(world.activity.length>MAX_ACTIVITY_ENTRIES){world.activity.shift();world.activityDropped=Math.min(Number.MAX_SAFE_INTEGER,world.activityDropped+1)}
+}
+
+const activityActorLabel=(individualId:unknown)=>{const id=safeActivityInteger(individualId);return id===null?'An actor':`Individual ${id}`}
+const activityActorIds=(...ids:unknown[])=>ids.map(value=>safeActivityInteger(value)).filter((id):id is number=>id!==null)
+const activityCountLabel=(count:number,singular:string)=>`${count} ${count===1?singular:`${singular}s`}`
 export function summarizeValues(values:number[]){if(!values.length)return{mean:null,variance:null,sd:null};const mean=values.reduce((a,b)=>a+b,0)/values.length,variance=values.reduce((sum,value)=>sum+(value-mean)**2,0)/values.length;return{mean,variance,sd:Math.sqrt(variance)}}
 function selectionSummary(creatures:Creature[]):SelectionSummary{return Object.fromEntries(traitKeys.map(key=>[key,summarizeValues(creatures.map(c=>c[key]))])) as SelectionSummary}
 export function buildInheritanceSummary(pairs:readonly {parent:Pick<Creature,BiologicalTrait>;offspring:Pick<Creature,BiologicalTrait>}[]):InheritanceSummary{
@@ -61,7 +119,7 @@ function averages(creatures:Creature[],generation:number):HistoryPoint{const n=c
 
 export function createWorld(config:Config=defaultConfig):World{
   config=sanitizeConfig(config)
-  const world={config:{...config},generation:1,dayTime:0,tickIndex:0,creatures:[],food:[],history:[],ledger:[],events:[],environment:null as never,rngState:(config.seed||1)>>>0,nextId:1,nextIndividualId:1,nextLineageId:1,inspectedIndividualId:null,lastInspectedOutcome:null,dayHunted:0,dayFoodProduced:0,dayFoodRemoved:0,dayFoodConsumed:0,dayPreyConsumed:0,dayAttackAttempts:0,dayAttackSuccesses:0,dayAttackFailures:0,dayAttackContested:0,generationFoodStart:0,lastReport:{survived:config.initialPopulation,born:0,starved:0,hunted:0,energy:0,unfed:0,late:0,aged:0,capped:0}} as World
+  const world={config:{...config},generation:1,dayTime:0,tickIndex:0,creatures:[],food:[],history:[],ledger:[],events:[],activity:[],activityDropped:0,activitySequence:0,environment:null as never,rngState:(config.seed||1)>>>0,nextId:1,nextIndividualId:1,nextLineageId:1,inspectedIndividualId:null,lastInspectedOutcome:null,dayHunted:0,dayFoodProduced:0,dayFoodRemoved:0,dayFoodConsumed:0,dayPreyConsumed:0,dayAttackAttempts:0,dayAttackSuccesses:0,dayAttackFailures:0,dayAttackContested:0,generationFoodStart:0,lastReport:{survived:config.initialPopulation,born:0,starved:0,hunted:0,energy:0,unfed:0,late:0,aged:0,capped:0}} as World
   world.environment=createEnvironment(world,config)
   world.creatures=Array.from({length:config.initialPopulation},()=>makeCreature(world,{},undefined,true))
   world.food=spawnFood(world,Math.round(world.environment.foodBudget));enforceAdvancedPatchCapacity(world);syncPatchStocks(world);world.generationFoodStart=world.food.length;world.history=[averages(world.creatures,0)]
@@ -105,7 +163,8 @@ export function applyIntervention(world:World,kind:InterventionKind){
     enforceAdvancedPatchCapacity(world);syncPatchStocks(world)
     const count=world.food.length-before
     world.dayFoodProduced+=count
-    recordEvent(world,kind,count?`Resource bloom added ${count} food.`:'Resource bloom was capped; no food was added.',count)
+    const summary=count?`Resource bloom added ${count} food.`:'Resource bloom was capped; no food was added.'
+    recordEvent(world,kind,summary,count);recordActivity(world,'intervention',summary,count)
     return count
   }
   if(kind==='drought'){
@@ -115,13 +174,16 @@ export function applyIntervention(world:World,kind:InterventionKind){
     world.dayFoodRemoved+=count
     for(const patch of world.environment.patches)patch.accumulator=Math.min(patch.accumulator,.25)
     syncPatchStocks(world)
-    recordEvent(world,kind,count?`Drought removed ${count} food.`:'Drought found no food to remove.',count)
+    const summary=count?`Drought removed ${count} food.`:'Drought found no food to remove.'
+    recordEvent(world,kind,summary,count);recordActivity(world,'intervention',summary,count)
     return count
   }
   const available=Math.max(0,MAX_POPULATION-world.creatures.filter(creature=>creature.alive).length)
   const count=Math.min(MAX_FOUNDER_MIGRATION_BATCH,available)
-  for(let i=0;i<count;i++)world.creatures.push(makeCreature(world,{},undefined,true))
-  recordEvent(world,kind,count?`${count} new founder${count===1?'':'s'} migrated into the population.`:'Migration was capped; the population is full.',count)
+  const actorIds:number[]=[]
+  for(let i=0;i<count;i++){const founder=makeCreature(world,{},undefined,true);world.creatures.push(founder);actorIds.push(founder.individualId)}
+  const summary=count?`${count} new founder${count===1?'':'s'} migrated into the population.`:'Migration was capped; the population is full.'
+  recordEvent(world,kind,summary,count);recordActivity(world,'intervention',summary,count,{actorIds})
   return count
 }
 
@@ -217,7 +279,9 @@ export function scheduleDecision(perceptionMode:Config['perceptionMode'],current
 export function tick(world:World,dt:number,boundaryConfig?:Config){
   for(const creature of world.creatures)if(creature.individualId!==world.inspectedIndividualId){delete creature.decisionSummary;delete creature.perceptionDiagnostics}
   const advanced=world.config.ecologyMode==='energy-regrowth'
-  for(const c of world.creatures)if(c.alive&&!c.home&&(advanced?(c.returning||c.mode==='returning'):c.food>=1)&&distance(c,{x:c.homeX,y:c.homeY})<.025){c.home=true;c.mode='returning';c.vx=0;c.vy=0}
+  let homeArrivals:Creature[]|undefined
+  for(const c of world.creatures){const wasHome=c.home;if(c.alive&&!c.home&&(advanced?(c.returning||c.mode==='returning'):c.food>=1)&&distance(c,{x:c.homeX,y:c.homeY})<.025){c.home=true;c.mode='returning';c.vx=0;c.vy=0}if(c.alive&&!wasHome&&c.home)(homeArrivals??=[]).push(c)}
+  if(homeArrivals)for(const c of homeArrivals.sort((a,b)=>a.id-b.id||a.individualId-b.individualId))recordActivity(world,'reached-home',`${activityActorLabel(c.individualId)} reached home.`,1,{actorIds:activityActorIds(c.individualId)})
   const snapshots=world.creatures.filter(c=>c.alive&&!c.home).map(c=>({...c,memory:{...c.memory}})).sort((a,b)=>a.id-b.id)
   const canonicalFood=snapshots.length?[...world.food].sort((a,b)=>a.id-b.id):[]
   const decisions=new Map<number,Decision>()
@@ -236,9 +300,11 @@ export function tick(world:World,dt:number,boundaryConfig?:Config){
   const motions=new Map(snapshots.map(c=>[c.id,proposeMotion(c,decisions.get(c.id)!,world.config,world.environment.obstacles,dt)]))
   const byId=new Map(world.creatures.map(c=>[c.id,c]))
   for(const s of snapshots){const c=byId.get(s.id)!,d=decisions.get(s.id)!,m=motions.get(s.id)!
+    const wasAlive=c.alive,wasHome=c.home
     Object.assign(c,{x:m.x,y:m.y,vx:m.vx,vy:m.vy,angle:m.angle,energy:m.energy,home:m.home||c.home,alive:m.energy>0,
       mode:m.home?'returning':d.mode,returning:c.returning||d.mode==='returning',memory:d.memory,targetType:d.targetType,targetId:d.targetId,targetX:d.targetX,targetY:d.targetY,commitUntil:d.commitUntil,wanderAngle:d.wanderAngle,wanderTurn:d.wanderTurn,reactionWindow:reactionWindows.get(c.id)!,decisionSummary:d.summary,perceptionDiagnostics:diagnostics.get(c.id)})
-    if(m.energy<=0)c.deathCause='energy'
+    if(m.energy<=0){c.deathCause='energy';if(wasAlive&&c.alive===false)recordActivity(world,'energy-death',`${activityActorLabel(c.individualId)} died from energy loss.`,1,{actorIds:activityActorIds(c.individualId)})}
+    if(c.alive&&!wasHome&&c.home)recordActivity(world,'reached-home',`${activityActorLabel(c.individualId)} reached home.`,1,{actorIds:activityActorIds(c.individualId)})
   }
   const claimants=snapshots.map(s=>byId.get(s.id)!).filter(c=>c.alive&&!c.home&&(advanced||c.food<2))
   const preyTargets=snapshots.map(s=>byId.get(s.id)!).filter(c=>c.alive&&!c.home)
@@ -255,17 +321,20 @@ export function tick(world:World,dt:number,boundaryConfig?:Config){
   const winners=<T extends {actor:number;resource:number;d:number}>(claims:T[])=>{const won=new Map<number,T>();for(const q of claims.sort((a,b)=>a.resource-b.resource||a.d-b.d||a.actor-b.actor))if(!won.has(q.resource))won.set(q.resource,q);return[...won.values()]}
   const foodWins=winners(foodClaims),foodById=new Map(world.food.map(food=>[food.id,food]))
   const eatenFood=new Set<number>()
-  for(const q of foodWins){const actor=byId.get(q.actor),food=foodById.get(q.resource);if(actor&&food&&(advanced||actor.food<2)){actor.food++;actor.energy+=advanced?food.energy:22;eatenFood.add(q.resource);world.dayFoodConsumed++;if(advanced&&food.patchId!==null)world.environment.patches=consumeResourceStock({patches:world.environment.patches},food.patchId).patches}}
+  for(const q of foodWins){const actor=byId.get(q.actor),food=foodById.get(q.resource);if(actor&&food&&(advanced||actor.food<2)){actor.food++;actor.energy+=advanced?food.energy:22;eatenFood.add(q.resource);world.dayFoodConsumed++;recordActivity(world,'food-collected',`${activityActorLabel(actor.individualId)} collected food.`,1,{actorIds:activityActorIds(actor.individualId)});if(advanced&&food.patchId!==null)world.environment.patches=consumeResourceStock({patches:world.environment.patches},food.patchId).patches}}
   world.food=world.food.filter(f=>!eatenFood.has(f.id))
   const attackClaims=collectAttackClaims(attackers,preyTargets,world.config),resolution=resolveAttackClaims(attackClaims,world.config,{seed:world.config.seed,generation:world.generation,tick:world.tickIndex})
+  for(const outcome of resolution.admitted){const attacker=activityActorLabel(outcome.attacker.individualId),prey=activityActorLabel(outcome.prey.individualId),chance=safeActivityChance(outcome.probability),chanceText=world.config.predationMode==='contest'&&chance!==null?` (contest chance ${formatActivityPercent(chance)}%)`:'';recordActivity(world,outcome.success?'attack-success':'attack-failure',`${outcome.success?`${attacker} caught ${prey}`:`${attacker}'s attack on ${prey} failed`}${chanceText}.`,1,{actorIds:activityActorIds(outcome.attacker.individualId,outcome.prey.individualId),attackerId:outcome.attacker.individualId,preyId:outcome.prey.individualId,contestChance:world.config.predationMode==='contest'?outcome.probability:undefined})}
   world.dayAttackAttempts+=world.config.predationMode==='threshold'?attackClaims.length:resolution.admitted.length;world.dayAttackSuccesses+=resolution.successes.length;world.dayAttackFailures+=resolution.failures.length;world.dayAttackContested+=resolution.rejected.filter(item=>item.reason==='prey-contested').length
-  for(const delta of resolution.energyDeltas){const actor=byId.get(delta.id);if(actor){actor.energy+=delta.delta;if(actor.energy<=0){actor.alive=false;actor.deathCause='energy'}}}
+  const attackEnergyDeaths:Creature[]=[]
+  for(const delta of resolution.energyDeltas){const actor=byId.get(delta.id);if(actor){const wasAlive=actor.alive;actor.energy+=delta.delta;if(actor.energy<=0){actor.alive=false;actor.deathCause='energy';if(wasAlive)attackEnergyDeaths.push(actor)}}}
   for(const cooldown of resolution.cooldowns){const actor=byId.get(cooldown.id);if(actor)actor.attackCooldownUntil=world.dayTime+cooldown.duration}
   for(const outcome of resolution.successes){const actor=byId.get(outcome.attacker.id);if(actor)actor.food++}
   const killed=new Set(resolution.killedPreyIds);world.dayPreyConsumed+=resolution.successes.length
   for(const id of killed){const prey=byId.get(id);if(prey&&!prey.home){prey.alive=false;prey.deathCause='hunted'}}
+  for(const actor of attackEnergyDeaths.sort((a,b)=>a.id-b.id||a.individualId-b.individualId))if(actor.deathCause==='energy')recordActivity(world,'energy-death',`${activityActorLabel(actor.individualId)} died from energy loss.`,1,{actorIds:activityActorIds(actor.individualId)})
   world.dayHunted+=killed.size
-  if(advanced){const step=advanceResourceDynamics({patches:world.environment.patches},{ecologyMode:'energy-regrowth',patchCapacity:world.config.patchCapacity,foodRegrowthRate:effectiveFoodRegrowthRate(world.environment,world.config),foodPatchSpread:world.config.foodPatchSpread,maxFood:180},{seed:world.config.seed,generation:world.generation,dt,generationDuration:world.config.dayLength,currentFoodCount:world.food.length});world.environment.patches=step.state.patches;const produced=spawnRegrownFood(world,step.placements);world.food.push(...produced);world.dayFoodProduced+=produced.length}
+  if(advanced){const step=advanceResourceDynamics({patches:world.environment.patches},{ecologyMode:'energy-regrowth',patchCapacity:world.config.patchCapacity,foodRegrowthRate:effectiveFoodRegrowthRate(world.environment,world.config),foodPatchSpread:world.config.foodPatchSpread,maxFood:180},{seed:world.config.seed,generation:world.generation,dt,generationDuration:world.config.dayLength,currentFoodCount:world.food.length});world.environment.patches=step.state.patches;const produced=spawnRegrownFood(world,step.placements);world.food.push(...produced);world.dayFoodProduced+=produced.length;if(produced.length)recordActivity(world,'natural-regrowth',`Natural regrowth added ${produced.length} food.`,produced.length)}
   if(world.inspectedIndividualId!==null){
     const inspectedIndividualId=world.inspectedIndividualId,inspected=world.creatures.find(creature=>creature.individualId===inspectedIndividualId)
     if(!inspected?.alive){
@@ -301,6 +370,7 @@ export function finishGeneration(world:World,boundaryConfig:Config=world.config)
   const ledger:GenerationLedger={generation:world.generation,startPopulation:start.length,outcomes,foodAtStart:world.generationFoodStart,foodProduced:world.dayFoodProduced,foodRemoved:world.dayFoodRemoved,foodConsumed:world.dayFoodConsumed,foodRemaining:world.food.length,preyConsumed:world.dayPreyConsumed,attackAttempts:world.dayAttackAttempts,attackSuccesses:world.dayAttackSuccesses,attackFailures:world.dayAttackFailures,attackContested:world.dayAttackContested,attackAttemptBasis:world.config.predationMode==='threshold'?'claims':'admitted',birthsEligible:settlement.eligibleParents.length,birthsAdmitted:birthParents.length,birthsCapped:settlement.birthsCapped,selection:{start:selectionSummary(start),survivor:selectionSummary(survivors),reproducer:selectionSummary(birthParents)},selectionByOutcome,inheritance}
   world.ledger.push(ledger);if(world.ledger.length>MAX_HISTORY_POINTS)world.ledger=world.ledger.slice(-MAX_HISTORY_POINTS)
   world.lastReport={survived:outcomes.survived,born:birthParents.length,starved:outcomes.energy+outcomes.unfed+outcomes.late,hunted:outcomes.hunted,energy:outcomes.energy,unfed:outcomes.unfed,late:outcomes.late,aged:outcomes.aged,capped:ledger.birthsCapped}
+  recordActivity(world,'generation-settlement',`Generation ${world.generation} settled: ${activityCountLabel(outcomes.survived,'survivor')} + ${activityCountLabel(birthParents.length,'admitted birth')} → generation ${world.generation+1} starts with ${activityCountLabel(next.length,'creature')}.`,next.length)
   world.generation++;world.dayTime=0;world.tickIndex=0;world.creatures=next;if(world.inspectedIndividualId!==null&&!next.some(c=>c.individualId===world.inspectedIndividualId))world.inspectedIndividualId=null
   const nextFoodBudget=advanceFoodBudget(world.environment,boundaryConfig,world.generation);if(boundaryConfig.ecologyMode==='classic'){world.food=spawnFood(world,nextFoodBudget,boundaryConfig);syncPatchStocks(world)}world.generationFoodStart=world.food.length;world.history.push(averages(world.creatures,world.generation-1));if(world.history.length>MAX_HISTORY_POINTS)world.history=world.history.slice(-MAX_HISTORY_POINTS)
   world.dayHunted=0;world.dayFoodProduced=0;world.dayFoodRemoved=0;world.dayFoodConsumed=0;world.dayPreyConsumed=0;world.dayAttackAttempts=0;world.dayAttackSuccesses=0;world.dayAttackFailures=0;world.dayAttackContested=0

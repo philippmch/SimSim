@@ -79,6 +79,23 @@ export type AttackAttemptBasis='claims'|'admitted'
 export interface GenerationLedger{generation:number;startPopulation:number;outcomes:Record<EndCause,number>;foodAtStart:number;foodProduced:number;foodRemoved:number;foodConsumed:number;foodRemaining:number;preyConsumed:number;attackAttempts:number;attackSuccesses:number;attackFailures:number;/** Optional for legacy ledgers retained before contested-attack telemetry. */attackContested?:number;/** Optional for legacy ledgers retained before attempt-basis telemetry. */attackAttemptBasis?:AttackAttemptBasis;birthsEligible:number;birthsAdmitted:number;birthsCapped:number;selection:{start:SelectionSummary;survivor:SelectionSummary;reproducer:SelectionSummary};selectionByOutcome:Record<EndCause,SelectionSummary>;inheritance?:InheritanceSummary}
 export type InterventionKind='resource-bloom'|'drought'|'founder-migration'
 export interface WorldEvent{generation:number;day:number;kind:InterventionKind;summary:string;count:number;/** Optional for retained legacy records created before live-announcement sequencing. */sequence?:number}
+/**
+ * Salient, actor-level facts retained for the autoplay story.  Movement-only
+ * ticks deliberately do not create entries; aggregate events use `count` and
+ * omit actor IDs when there is no single actor to name.
+ */
+export type WorldActivityKind='food-collected'|'attack-success'|'attack-failure'|'energy-death'|'reached-home'|'natural-regrowth'|'intervention'|'generation-settlement'
+export interface WorldActivityEntry{
+  sequence:number;generation:number;day:number;tick:number;kind:WorldActivityKind;summary:string
+  /** Event units; for generation-settlement this is the exact next-population size. */
+  count:number
+  /** Individual IDs, in deterministic event order, when the event names actors. */
+  actorIds?:number[]
+  /** Individual IDs for an admitted attack; retained explicitly for consumers that need role labels. */
+  attackerId?:number;preyId?:number
+  /** Contest-mode success probability; omitted for threshold-mode attacks. */
+  contestChance?:number
+}
 export interface LineageShare{lineageId:number;count:number;share:number}
 export interface SelectionShift{trait:BiologicalTrait;survivor:number|null;reproducer:number|null}
 export interface LineageAnalytics{livingLineages:number;effectiveDiversity:number;topLineages:LineageShare[];latestGeneration:number|null;selectionShifts:SelectionShift[]}
@@ -89,5 +106,7 @@ export interface World {
   nextIndividualId:number;nextLineageId:number;inspectedIndividualId:number|null;lastInspectedOutcome:LastInspectedOutcome|null
   dayFoodProduced:number;dayFoodRemoved:number;dayFoodConsumed:number;dayPreyConsumed:number;dayAttackAttempts:number;dayAttackSuccesses:number;dayAttackFailures:number;dayAttackContested:number;generationFoodStart:number;ledger:GenerationLedger[]
   events:WorldEvent[]
+  /** Bounded salient activity trail; createWorld initializes it and engine writes repair older snapshots. */
+  activity:WorldActivityEntry[];activityDropped:number;activitySequence:number
   lastReport:{survived:number;born:number;starved:number;hunted:number;energy:number;unfed:number;late:number;aged:number;capped:number}
 }
