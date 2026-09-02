@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { formatCompactNextActionLabel, formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, hasOwnActivityField, InterventionFeedFallback, ObservedStepStoryFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveAcknowledgedFinishGeneration, resolveTerminalOutcome, reviewSettlementAndNavigate, shouldFocusSelectedInspector, SimulationActivityFallback, SimulationEventStory, stepActivityAnnouncementSequence, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
+import { canStartSimulationCommand, formatCompactNextActionLabel, formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, hasOwnActivityField, InterventionFeedFallback, ObservedStepStoryFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveAcknowledgedFinishGeneration, resolveTerminalOutcome, reviewSettlementAndNavigate, SelectedInspectorShell, shouldFocusSelectedInspector, SimulationActivityFallback, SimulationEventStory, simulationCommandAcknowledged, stepActivityAnnouncementSequence, type NextActionCopyInput, type PendingSimulationCommand, type TerminalOutcomeCreature } from './App'
 import { formatPerceptionTelemetry } from './components/CreatureInspector'
 import { createWorld, defaultConfig, finishGeneration as settleGeneration } from './simulation/engine'
 import { MAX_FOUNDER_MIGRATION_BATCH, MAX_POPULATION } from './simulation/config'
@@ -353,6 +353,85 @@ describe('parameters loading state', () => {
     expect(markup).toContain('role="status"')
     expect(markup).toContain('aria-busy="true"')
     expect(markup).toContain('Opening parameter controls…')
+  })
+})
+
+describe('selected inspector shell',()=>{
+  it('keeps the same local cohort controls and header mounted around dense details',()=>{
+    const selected=createWorld({...defaultConfig,initialPopulation:1}).creatures[0]
+    const actionControls={
+      nextAction:()=>{},
+      finishGeneration:()=>{},
+      nextActionLabel:'Next selected',
+      nextActionAriaLabel:'Pause and advance the simulation until Individual 17 reaches its next action beat',
+      nextActionTitle:'Advance the simulation until Individual 17 reaches its next decision beat.',
+      nextActionDisabled:false,
+      finishGenerationDisabled:false,
+      finishGenerationAriaLabel:'Pause and finish the current generation',
+      finishGenerationTitle:'Pause and finish the current generation',
+    }
+    const markup=renderToStaticMarkup(createElement(SelectedInspectorShell,{selected,actionControls,onClose:()=>{},children:createElement('p',null,'Dense details')}))
+    expect(markup).toContain('Continue simulation from selected individual details')
+    expect(markup).toContain('Continue observing')
+    expect(markup).toContain('Same simulation controls as above')
+    expect(markup).toContain('Next selected')
+    expect(markup).toContain('Individual 1')
+    expect(markup).toContain('Dense details')
+    expect(markup).toContain('Finish generation')
+    expect(markup).not.toContain('aria-live')
+  })
+
+  it('keeps loading copy noninteractive while dense details suspend',()=>{
+    const selected=createWorld({...defaultConfig,initialPopulation:1}).creatures[0]
+    const actionControls={
+      nextAction:()=>{},
+      finishGeneration:()=>{},
+      nextActionLabel:'Next selected',
+      nextActionAriaLabel:'Advance Individual 1',
+      nextActionTitle:'Advance Individual 1.',
+      nextActionDisabled:false,
+      finishGenerationDisabled:false,
+      finishGenerationAriaLabel:'Pause and finish the current generation',
+      finishGenerationTitle:'Pause and finish the current generation',
+    }
+    const Suspended=()=>{throw new Promise(()=>{})}
+    const markup=renderToStaticMarkup(createElement(SelectedInspectorShell,{selected,actionControls,onClose:()=>{},children:createElement(Suspended)}))
+
+    expect(markup).toContain('Opening individual details…')
+    expect(markup).toContain('Next selected')
+    expect(markup).toContain('Finish generation')
+    expect(markup).not.toContain('aria-live')
+  })
+})
+
+describe('simulation command coordination',()=>{
+  const step:PendingSimulationCommand={kind:'step',id:41}
+  const finish:PendingSimulationCommand={kind:'finish',id:42}
+
+  it('accepts only one synchronous command and rejects either attempted order',()=>{
+    expect(canStartSimulationCommand(null)).toBe(true)
+    expect(canStartSimulationCommand(step)).toBe(false)
+    expect(canStartSimulationCommand(finish)).toBe(false)
+  })
+
+  it('only clears the matching command acknowledgement',()=>{
+    expect(simulationCommandAcknowledged(step,{stepId:41})).toBe(true)
+    expect(simulationCommandAcknowledged(step,{stepId:40})).toBe(false)
+    expect(simulationCommandAcknowledged(step,{finishId:41})).toBe(false)
+    expect(simulationCommandAcknowledged(finish,{finishId:42})).toBe(true)
+    expect(simulationCommandAcknowledged(finish,{finishId:41})).toBe(false)
+    expect(simulationCommandAcknowledged(finish,{stepId:42})).toBe(false)
+    expect(simulationCommandAcknowledged(null,{finishId:42})).toBe(false)
+  })
+
+  it('makes finish-pending copy visible and keeps both controls blocked',()=>{
+    const input=ready({pending:true,pendingCommand:'finish',selectedIndividualId:17,selectedIsActive:true})
+    expect(formatCompactNextActionLabel(input)).toBe('Finishing…')
+    expect(formatNextActionCopy(input)).toEqual({
+      buttonLabel:'Finishing generation…',
+      ariaLabel:'Finish generation pending; wait for the current cohort to settle',
+      title:'Finish generation is in progress; wait for settlement before starting another action.',
+    })
   })
 })
 

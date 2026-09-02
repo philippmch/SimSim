@@ -1,5 +1,5 @@
-import type { BiologicalTrait, Config, Creature, DecisionCandidateSummary, DecisionProvenance, DecisionSelectionBasis, DecisionSummary, PerceptionDiagnostics, TargetType } from '../simulation/types'
-import { FORECAST_LOSS_LABELS, type SelectedSettlementPreview } from './SettlementPreview'
+import type { BiologicalTrait, Config, Creature, DecisionCandidateSummary, DecisionProvenance, DecisionSelectionBasis, DecisionSummary, PerceptionDiagnostics, TargetType, World } from '../simulation/types'
+import { FORECAST_LOSS_LABELS, summarizeSelectedSettlementPreview, type SelectedSettlementPreview } from './SettlementPreview'
 
 export interface PerceptionTelemetryCopy {
   creatures: string
@@ -115,24 +115,43 @@ export interface CreatureInspectorProps {
   targetLabel: string
   decisionTargetLabel?: string
   huntContactRule: string
+  /** Optional live snapshot used by the App path to derive the preview lazily. */
+  world?: World
   /** Scalar lifecycle facts derived from the complete cohort; never a World reference. */
   settlementPreview?: SelectedSettlementPreview|null
+  /** Optional aliases for the same cohort controls shown in the playback bar. */
+  actionControls?: CreatureInspectorActionControls
+  /** App-only mode: render dense details inside an already-mounted inspector shell. */
+  embedded?: boolean
   onClose: () => void
 }
 
-export function CreatureInspector({ selected, ecologyMode, dayTime, stateLabel, targetLabel, decisionTargetLabel, huntContactRule, settlementPreview, onClose }: CreatureInspectorProps) {
+export interface CreatureInspectorActionControls {
+  nextAction: () => void
+  finishGeneration: () => void
+  nextActionLabel: string
+  nextActionAriaLabel: string
+  nextActionTitle: string
+  nextActionDisabled: boolean
+  finishGenerationDisabled: boolean
+  finishGenerationLabel?: string
+  finishGenerationAriaLabel: string
+  finishGenerationTitle: string
+}
+
+export function CreatureInspector({ selected, world, ecologyMode, dayTime, stateLabel, targetLabel, decisionTargetLabel, huntContactRule, settlementPreview, actionControls, embedded=false, onClose }: CreatureInspectorProps) {
   const perceptionCopy = selected.perceptionDiagnostics ? formatPerceptionTelemetry(selected.perceptionDiagnostics) : null
   const decision=selected.decisionSummary
   const candidates=decision&&Array.isArray(decision.candidates)?decision.candidates:[]
   const chosenIndex=decision?candidates.findIndex(candidate=>decisionCandidateMatches(decision,candidate)):-1
   const decisionReason=typeof decision?.reason==='string'&&decision.reason.trim()?decision.reason:'Decision reason unavailable'
+  const selectedSettlementPreview=settlementPreview===undefined&&world?summarizeSelectedSettlementPreview(world,selected.individualId):settlementPreview??null
 
-  return <section className="inspector" aria-label={`Selected individual ${selected.individualId}`}>
-    <div className="inspector-head"><div><h2>Individual {selected.individualId}</h2><p>Lineage {selected.lineageId} · parent {selected.parentIndividualId??'founder'} · born generation {selected.birthGeneration}</p></div><button type="button" onClick={onClose} aria-label="Close individual inspector">×</button></div>
+  const details=<>
     <div className="utility-breakdown" role="note" style={settlementPreviewStyle}>
       <strong>If generation ended now</strong>
-      {settlementPreview
-        ? <span style={decisionLineStyle}>{`${formatSelectedSettlementOutcome(settlementPreview)} ${formatSelectedSettlementReproduction(settlementPreview)}`}</span>
+      {selectedSettlementPreview
+        ? <span style={decisionLineStyle}>{`${formatSelectedSettlementOutcome(selectedSettlementPreview)} ${formatSelectedSettlementReproduction(selectedSettlementPreview)}`}</span>
         : <span style={decisionLineStyle}>Settlement details unavailable for this individual.</span>}
       <small style={settlementFramingStyle}>Counterfactual snapshot · not a prediction · updates as the cohort changes</small>
     </div>
@@ -144,6 +163,16 @@ export function CreatureInspector({ selected, ecologyMode, dayTime, stateLabel, 
     {selected.mode==='hunting'&&<div className="utility-breakdown" role="note"><strong>Hunt contact rule</strong><span>{huntContactRule}</span></div>}
     <details key={`traits-${selected.individualId}`} className="utility-breakdown"><summary>Trait profile · 6 values</summary><dl>{(['speed','size','sense','aggression','caution','exploration']as BiologicalTrait[]).map(trait=><div key={trait}><dt>{trait}</dt><dd>{selected[trait].toFixed(3)}</dd></div>)}</dl></details>
     {decision&&<details key={`candidates-${selected.individualId}`} className="utility-breakdown"><summary>{formatCandidateUtilitySummary(candidates.length)}</summary><small style={{display:'block',marginTop:4,color:'var(--muted)'}}>Scores rank candidates within this captured decision—not probability or biological fitness; perception can refresh before the next decision.</small><table><caption className="sr-only">Captured candidate relative utilities; scores rank candidates within this decision, not probability or biological fitness</caption><thead><tr><th>Candidate</th><th>Relative utility</th><th>Reason</th></tr></thead><tbody>{candidates.map((candidate,i)=>{const chosen=i===chosenIndex;return <tr key={`${candidate.type}-${candidate.targetId}-${i}`} aria-label={chosen?`${candidate.type} chosen candidate`:undefined}><td>{candidate.type}{chosen&&<small> · Chosen</small>}</td><td>{Number.isFinite(candidate.score)?candidate.score.toFixed(2):'unavailable'}</td><td>{typeof candidate.reason==='string'&&candidate.reason.trim()?candidate.reason:'Reason unavailable'}</td></tr>})}</tbody></table></details>}
+  </>
+  if(embedded)return details
+  return <section className="inspector" aria-label={`Selected individual ${selected.individualId}`}>
+    <div className="inspector-head"><div><h2>Individual {selected.individualId}</h2><p>Lineage {selected.lineageId} · parent {selected.parentIndividualId??'founder'} · born generation {selected.birthGeneration}</p></div><button type="button" onClick={onClose} aria-label="Close individual inspector">×</button></div>
+    {actionControls&&<div className="interventions" role="group" aria-label="Continue simulation from selected individual details" style={{margin:'10px 0 0',alignItems:'stretch'}}>
+      <span><strong>Continue observing</strong><small>Same simulation controls as above</small></span>
+      <button type="button" onClick={actionControls.nextAction} disabled={actionControls.nextActionDisabled} aria-label={actionControls.nextActionAriaLabel} title={actionControls.nextActionTitle}>{actionControls.nextActionLabel}</button>
+      <button type="button" onClick={actionControls.finishGeneration} disabled={actionControls.finishGenerationDisabled} aria-label={actionControls.finishGenerationAriaLabel} title={actionControls.finishGenerationTitle}>{actionControls.finishGenerationLabel??'Finish generation'}</button>
+    </div>}
+    {details}
   </section>
 }
 

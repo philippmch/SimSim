@@ -5,7 +5,7 @@ import { defaultConfig } from '../simulation/config'
 import { createWorld } from '../simulation/engine'
 import type { DecisionSummary } from '../simulation/types'
 import { summarizeSelectedSettlementPreview, type SelectedSettlementPreview } from './GenerationForecast'
-import type { CreatureInspectorProps } from './CreatureInspector'
+import type { CreatureInspectorActionControls, CreatureInspectorProps } from './CreatureInspector'
 import { CreatureInspector, decisionCandidateMatches, formatCandidateUtilitySummary, formatDecisionActionLabel, formatDecisionBasis, formatDecisionProvenance, formatDecisionTargetLabel, formatSelectedSettlementOutcome, formatSelectedSettlementReproduction } from './CreatureInspector'
 
 const summary:DecisionSummary={
@@ -60,6 +60,19 @@ describe('captured decision inspector helpers',()=>{
 
 const renderInspector=(world:ReturnType<typeof createWorld>,selected=world.creatures[0],overrides:Partial<CreatureInspectorProps>={})=>renderToStaticMarkup(createElement(CreatureInspector,{selected,ecologyMode:world.config.ecologyMode,dayTime:world.dayTime,stateLabel:'Exploring',targetLabel:'No current target',huntContactRule:'Contact required',onClose:()=>{},...overrides}))
 
+const controls=(overrides:Partial<CreatureInspectorActionControls>={}):CreatureInspectorActionControls=>({
+  nextAction:()=>{},
+  finishGeneration:()=>{},
+  nextActionLabel:'Next selected',
+  nextActionAriaLabel:'Pause and advance the simulation until Individual 1 reaches its next action beat; other creatures may also move and react',
+  nextActionTitle:'Advance the simulation until Individual 1 reaches its next decision beat; other creatures may also move and react.',
+  nextActionDisabled:false,
+  finishGenerationDisabled:false,
+  finishGenerationAriaLabel:'Pause and finish the current generation',
+  finishGenerationTitle:'Pause and finish the current generation',
+  ...overrides,
+})
+
 describe('progressive individual inspector disclosure',()=>{
   it('keeps the plain-language decision explanation ahead of both dense disclosures',()=>{
     const world=createWorld({...defaultConfig,initialPopulation:1})
@@ -105,12 +118,128 @@ describe('progressive individual inspector disclosure',()=>{
   })
 })
 
+describe('selected individual cohort controls',()=>{
+  it('keeps the optional action group absent for reusable inspector callers',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1})
+    const markup=renderInspector(world)
+
+    expect(markup).not.toContain('Continue simulation from selected individual details')
+    expect(markup).not.toContain('Continue observing')
+  })
+
+  it('renders the same cohort actions with their full accessible names and titles',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1})
+    let nextCalls=0
+    let finishCalls=0
+    const nextAction=()=>{nextCalls++}
+    const finishGeneration=()=>{finishCalls++}
+    const actionControls=controls({nextAction,finishGeneration})
+    const markup=renderInspector(world,world.creatures[0],{actionControls})
+    const element=createElement(CreatureInspector,{selected:world.creatures[0],ecologyMode:world.config.ecologyMode,dayTime:world.dayTime,stateLabel:'Exploring',targetLabel:'No current target',huntContactRule:'Contact required',actionControls,onClose:()=>{}})
+
+    expect(markup).toContain('role="group" aria-label="Continue simulation from selected individual details"')
+    expect(markup).toContain('Continue observing')
+    expect(markup).toContain('Same simulation controls as above')
+    expect(markup).toMatch(/<button type="button"[^>]*aria-label="Pause and advance the simulation until Individual 1 reaches its next action beat; other creatures may also move and react"[^>]*title="Advance the simulation until Individual 1 reaches its next decision beat; other creatures may also move and react\."[^>]*>Next selected<\/button>/)
+    expect(markup).toMatch(/<button type="button"[^>]*aria-label="Pause and finish the current generation"[^>]*title="Pause and finish the current generation"[^>]*>Finish generation<\/button>/)
+    expect(markup).not.toMatch(/<button type="button"[^>]*disabled=""[^>]*>Next selected<\/button>/s)
+    expect((element.props as CreatureInspectorProps).actionControls?.nextAction).toBe(nextAction)
+    expect((element.props as CreatureInspectorProps).actionControls?.finishGeneration).toBe(finishGeneration)
+    expect(nextCalls).toBe(0)
+    expect(finishCalls).toBe(0)
+  })
+
+  it('keeps selected, pending, awaiting-settlement, and extinct copy truthful',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1})
+    const selected=world.creatures[0]
+
+    const inactiveMarkup=renderInspector(world,selected,{actionControls:controls({
+      nextActionLabel:'Next action',
+      nextActionAriaLabel:'Pause and advance the simulation to the next action beat',
+      nextActionTitle:'Advance the simulation to the next decision beat.',
+    })})
+    expect(inactiveMarkup).toContain('>Next action</button>')
+    expect(inactiveMarkup).not.toContain('disabled=""')
+    expect(inactiveMarkup).toContain('aria-label="Pause and advance the simulation to the next action beat"')
+
+    const pendingMarkup=renderInspector(world,selected,{actionControls:controls({
+      nextActionLabel:'Advancing selected…',
+      nextActionAriaLabel:'Advancing the simulation until Individual 1 reaches its next action beat; other creatures may also move and react',
+      nextActionTitle:'Advancing the simulation until Individual 1 reaches its next action beat.',
+      nextActionDisabled:true,
+      finishGenerationDisabled:true,
+    })})
+    expect(pendingMarkup).toContain('>Advancing selected…</button>')
+    expect(pendingMarkup).toMatch(/<button type="button"[^>]*disabled=""[^>]*>Advancing selected…<\/button>/)
+    expect(pendingMarkup).toContain('Advancing the simulation until Individual 1 reaches its next action beat')
+    expect(pendingMarkup).toMatch(/<button type="button"[^>]*disabled=""[^>]*>Finish generation<\/button>/)
+
+    const finishingMarkup=renderInspector(world,selected,{actionControls:controls({
+      nextActionLabel:'Finishing…',
+      nextActionAriaLabel:'Finish generation pending; wait for the current cohort to settle',
+      nextActionTitle:'Finish generation is in progress; wait for settlement before starting another action.',
+      nextActionDisabled:true,
+      finishGenerationLabel:'Finishing…',
+      finishGenerationDisabled:true,
+      finishGenerationAriaLabel:'Finishing generation; wait for the current cohort to settle',
+      finishGenerationTitle:'Finish generation is in progress; wait for settlement.',
+    })})
+    expect(finishingMarkup).toContain('>Finishing…</button>')
+    expect(finishingMarkup).toContain('Finish generation pending')
+    expect(finishingMarkup).toMatch(/<button type="button"[^>]*disabled=""[^>]*aria-label="Finishing generation; wait for the current cohort to settle"[^>]*title="Finish generation is in progress; wait for settlement\."[^>]*>Finishing…<\/button>/)
+
+    const awaitingMarkup=renderInspector(world,selected,{actionControls:controls({
+      nextActionLabel:'No actions',
+      nextActionAriaLabel:'Next action unavailable during awaiting settlement; use Finish generation to settle this cohort',
+      nextActionTitle:'No active creature actions remain; use Finish generation to settle this cohort.',
+      nextActionDisabled:true,
+    })})
+    expect(awaitingMarkup).toContain('>No actions</button>')
+    expect(awaitingMarkup).toMatch(/<button type="button"[^>]*disabled=""[^>]*>No actions<\/button>/)
+    expect(awaitingMarkup).toContain('Next action unavailable during awaiting settlement')
+    expect(awaitingMarkup).toMatch(/<button type="button"[^>]*aria-label="Pause and finish the current generation"[^>]*>Finish generation<\/button>/)
+
+    const extinctMarkup=renderInspector(world,selected,{actionControls:controls({
+      nextActionLabel:'Extinct',
+      nextActionAriaLabel:'Next action unavailable: population extinct',
+      nextActionTitle:'Population extinct; no next action is available.',
+      nextActionDisabled:true,
+      finishGenerationDisabled:true,
+    })})
+    expect(extinctMarkup).toContain('>Extinct</button>')
+    expect(extinctMarkup).toMatch(/<button type="button"[^>]*disabled=""[^>]*>Extinct<\/button>/)
+    expect(extinctMarkup).toMatch(/<button type="button"[^>]*disabled=""[^>]*>Finish generation<\/button>/)
+    expect(extinctMarkup).toContain('Population extinct; no next action is available.')
+  })
+
+  it('renders only dense details when embedded in the App-owned persistent shell',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1})
+    const markup=renderInspector(world,world.creatures[0],{embedded:true,actionControls:controls()})
+
+    expect(markup).not.toContain('<section class="inspector"')
+    expect(markup).not.toContain('Continue simulation from selected individual details')
+    expect(markup).not.toContain('Close individual inspector')
+    expect(markup).toContain('If generation ended now')
+    expect(markup).toContain('Latest captured decision')
+  })
+})
+
 const settlementPreview=(overrides:Partial<SelectedSettlementPreview>={}):SelectedSettlementPreview=>({
   individualId:1,generation:3,mode:'classic',outcome:'survived',nextAge:2,retainedEnergy:110,settledEnergy:110,
   reproductionStatus:'admitted',foodAtSettlement:2,reproductionCost:35,eligibleParentCount:1,availableBirthSlots:119,...overrides,
 })
 
 describe('selected individual settlement preview',()=>{
+  it('derives the lazy preview from a world only when no explicit override is supplied',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0})
+    const selected=world.creatures[0]
+    const derived=renderInspector(world,selected,{world})
+    const explicitNull=renderInspector(world,selected,{world,settlementPreview:null})
+
+    expect(derived).toMatch(/Would (survive|not survive)/)
+    expect(explicitNull).toContain('Settlement details unavailable for this individual.')
+  })
+
   it('explains classic admission and the strict energy reproduction threshold',()=>{
     expect(formatSelectedSettlementOutcome(settlementPreview())).toBe('Would survive → generation 4 · age 2 · 110.0 energy.')
     expect(formatSelectedSettlementReproduction(settlementPreview())).toBe('One offspring would be admitted · 2/2 food collected.')

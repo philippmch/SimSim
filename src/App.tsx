@@ -1,7 +1,6 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ARENA_FOCUS_OPTIONS, ARENA_HUNT_CONTACT_KEY, ARENA_PATCH_STOCK_KEY, ARENA_QUICK_START, ARENA_SELECTED_OVERLAY_KEY, ArenaCanvas, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress, formatArenaFocusDescription, formatArenaFocusOption, formatArenaPlaybackDetail, formatObservedPath, formatSelectedTarget, showArenaQuickStart } from './components/ArenaCanvas'
 import type { ArenaPlaybackStatus, CreatureState } from './components/ArenaCanvas'
-import { summarizeSelectedSettlementPreview } from './components/SettlementPreview'
 import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
 import { MAX_FOOD,MAX_FOUNDER_MIGRATION_BATCH,MAX_POPULATION, sanitizeConfig } from './simulation/config'
 import { createController } from './simulation/controller'
@@ -9,6 +8,7 @@ import type { SimulationController,SimulationSnapshotMeta } from './simulation/c
 import { experimentUrl,loadInitialConfig,persistExperiment } from './simulation/share'
 import type { Config,InterventionKind,LastInspectedOutcome, World } from './simulation/types'
 import type {StepActivityEvidence} from './components/ObservedStepStory'
+import type {CreatureInspectorActionControls} from './components/CreatureInspector'
 import DashboardNavigation, { DASHBOARD_SECTION_IDS, DASHBOARD_SECTION_SCROLL_STYLE, openDashboardSection } from './components/DashboardNavigation'
 
 const ExperimentPanel=lazy(()=>import('./components/ExperimentPanel').then(module=>({default:module.ExperimentPanel})))
@@ -56,6 +56,26 @@ export function SimulationActivityFallback(){
 
 export function ObservedStepStoryFallback({observedPath}:{observedPath:string}){
   return <div className="interventions" role="group" aria-label="Latest manual action" aria-busy="true"><span><strong>Observed path</strong><small>Opening step details…</small></span><output role="status" aria-live="polite" aria-atomic="true">{observedPath}</output></div>
+}
+
+export interface SelectedInspectorShellProps {
+  selected: Pick<World['creatures'][number], 'individualId'|'lineageId'|'parentIndividualId'|'birthGeneration'>
+  actionControls: CreatureInspectorActionControls
+  onClose: () => void
+  children: ReactNode
+}
+
+/** Keep selection chrome and actions mounted while dense details load lazily. */
+export function SelectedInspectorShell({selected,actionControls,onClose,children}:SelectedInspectorShellProps){
+  return <section className="inspector" aria-label={`Selected individual ${selected.individualId}`}>
+    <div className="inspector-head"><div><h2>Individual {selected.individualId}</h2><p>Lineage {selected.lineageId} · parent {selected.parentIndividualId??'founder'} · born generation {selected.birthGeneration}</p></div><button type="button" onClick={onClose} aria-label="Close individual inspector">×</button></div>
+    <div className="interventions" role="group" aria-label="Continue simulation from selected individual details" style={{margin:'10px 0 0',alignItems:'stretch'}}>
+      <span><strong>Continue observing</strong><small>Same simulation controls as above</small></span>
+      <button type="button" onClick={actionControls.nextAction} disabled={actionControls.nextActionDisabled} aria-label={actionControls.nextActionAriaLabel} title={actionControls.nextActionTitle}>{actionControls.nextActionLabel}</button>
+      <button type="button" onClick={actionControls.finishGeneration} disabled={actionControls.finishGenerationDisabled} aria-label={actionControls.finishGenerationAriaLabel} title={actionControls.finishGenerationTitle}>{actionControls.finishGenerationLabel??'Finish generation'}</button>
+    </div>
+    <Suspense fallback={<p className="utility-breakdown" aria-busy="true"><strong>Individual details</strong><span style={{display:'block',marginLeft:0}}>Opening individual details…</span></p>}>{children}</Suspense>
+  </section>
 }
 
 export function InterventionFeedFallback(){
@@ -136,10 +156,23 @@ export function PlaybackPhaseStatus({status,detail,playing,suppressed=false}:{st
   return <span id="playback-phase-status" className="sr-only" role="status" aria-live="polite" aria-atomic="true">{suppressed?'':formatPlaybackPhaseAnnouncement(status,detail,playing)}</span>
 }
 
+export type PendingSimulationCommandKind='step'|'finish'
+export interface PendingSimulationCommand {kind:PendingSimulationCommandKind;id:number}
+
+/** Both transport commands share one in-flight slot; this guard is synchronous. */
+export function canStartSimulationCommand(pending:PendingSimulationCommand|null):boolean{return pending===null}
+
+/** A command clears only on its own acknowledgement, never on a stale/wrong-kind event. */
+export function simulationCommandAcknowledged(pending:PendingSimulationCommand|null,meta:SimulationSnapshotMeta|undefined):boolean{
+  if(!pending)return false
+  return pending.kind==='step'?meta?.stepId===pending.id:meta?.finishId===pending.id
+}
+
 export interface NextActionCopyInput {
   extinct: boolean
   hasActiveCreatures: boolean
   pending: boolean
+  pendingCommand?: PendingSimulationCommandKind
   selectedIndividualId: number | null
   selectedIsActive: boolean
   livingCreatures: number
@@ -159,6 +192,11 @@ export function formatNextActionCopy(input: NextActionCopyInput): NextActionCopy
     buttonLabel: 'Population extinct',
     ariaLabel: 'Next action unavailable: population extinct',
     title: 'Population extinct; no next action is available.',
+  }
+  if (input.pending && input.pendingCommand === 'finish') return {
+    buttonLabel: 'Finishing generation…',
+    ariaLabel: 'Finish generation pending; wait for the current cohort to settle',
+    title: 'Finish generation is in progress; wait for settlement before starting another action.',
   }
   if (!input.hasActiveCreatures) return {
     buttonLabel: 'No active creatures',
@@ -191,6 +229,7 @@ export function formatNextActionCopy(input: NextActionCopyInput): NextActionCopy
 /** Keep the primary step control compact enough to share the first mobile row. */
 export function formatCompactNextActionLabel(input: NextActionCopyInput): string {
   if (input.extinct) return 'Extinct'
+  if (input.pending && input.pendingCommand === 'finish') return 'Finishing…'
   if (!input.hasActiveCreatures) return 'No actions'
   const selected = input.selectedIsActive && input.selectedIndividualId !== null && Number.isFinite(input.selectedIndividualId)
   if (input.pending) return selected ? 'Advancing selected…' : 'Advancing…'
@@ -297,20 +336,23 @@ function App(){
   const settingsRef=useRef<HTMLElement>(null)
   const settingsCloseRef=useRef<HTMLButtonElement>(null)
   const selectedInspectorRef=useRef<HTMLDivElement>(null)
+  const terminalOutcomeRef=useRef<HTMLDivElement>(null)
   const selectedInspectorFocusRequestRef=useRef<number|null>(null)
+  const terminalOutcomeFocusRequestRef=useRef<number|null>(null)
+  const selectedIndividualIdRef=useRef<number|null>(null)
   const activityFocusRequestRef=useRef(0)
   const [actionStatus,setActionStatus]=useState('')
   const suppressPlaybackAnnouncementRef=useRef(false)
   const [observedPath,setObservedPath]=useState('Inspect a creature, then choose Next action to observe its perception and decision path.')
   const [stepActivityEvidence,setStepActivityEvidence]=useState<StepActivityEvidence|null>(null)
-  const [stepPending,setStepPending]=useState(false)
-  const pendingStepRef=useRef<number|null>(null)
-  const pendingFinishRef=useRef<number|null>(null)
+  const [pendingCommand,setPendingCommand]=useState<PendingSimulationCommand|null>(null)
+  const pendingCommandRef=useRef<PendingSimulationCommand|null>(null)
   const pendingPulseResetRef=useRef(false)
   const nextStepIdRef=useRef(0)
   const nextFinishIdRef=useRef(0)
   const [runtimeMode,setRuntimeMode]=useState<'worker'|'fallback'>('worker')
   const [selectedIndividualId,setSelectedIndividualId]=useState<number|null>(null)
+  selectedIndividualIdRef.current=selectedIndividualId
   const [arenaFocus,setArenaFocus]=useState<'all'|CreatureState>('all')
   const [requestedGeneration,setRequestedGeneration]=useState<number|null>(null)
   const [generationRevealRequest,setGenerationRevealRequest]=useState<number|null>(null)
@@ -329,7 +371,6 @@ function App(){
   const arenaFocusCount=arenaFocus==='all'?living:stateCounts[arenaFocus]
   const lineage=getLineageAnalytics(world)
   const selected=world.creatures.find(c=>c.individualId===selectedIndividualId&&c.alive)
-  const settlementPreview=selected?summarizeSelectedSettlementPreview(world,selected.individualId):null
   const decisionTargetLabel=selected?.decisionSummary
     ? formatSelectedTarget({targetType:selected.decisionSummary.chosen,targetId:selected.decisionSummary.chosenTargetId??(selected.decisionSummary.chosen===selected.targetType?selected.targetId:null)},world.creatures,world.food)
     : undefined
@@ -338,7 +379,7 @@ function App(){
   const activeCreatures=world.creatures.filter(c=>c.alive&&!c.home).length
   const arenaStatus=arenaPlaybackStatus({playing,populationCount:world.creatures.length,activeCount:activeCreatures})
   const arenaDetail=formatArenaPlaybackDetail({status:arenaStatus,populationCount:world.creatures.length,livingCount:living})
-  const nextActionInput:NextActionCopyInput={extinct,hasActiveCreatures,pending:stepPending,selectedIndividualId,selectedIsActive:Boolean(selected&&!selected.home),livingCreatures:living},nextActionCopy=formatNextActionCopy(nextActionInput)
+  const nextActionInput:NextActionCopyInput={extinct,hasActiveCreatures,pending:pendingCommand!==null,pendingCommand:pendingCommand?.kind,selectedIndividualId,selectedIsActive:Boolean(selected&&!selected.home),livingCreatures:living},nextActionCopy=formatNextActionCopy(nextActionInput)
   const stepAnnouncementSequence=stepActivityAnnouncementSequence(stepActivityEvidence)
   const arenaDayLabel=formatArenaDayProgress(world.dayTime,world.config.dayLength,arenaStatus)
   const dayProgress=Math.max(0,Math.min(100,Math.round(world.dayTime/world.config.dayLength*100)))
@@ -347,18 +388,25 @@ function App(){
   const closeExperiment=useCallback(()=>{setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
   const replayExperiment=useCallback((config:Config)=>{setDraft(sanitizeConfig(config));setActionStatus('Control seed staged. Choose Apply & restart to replay it live.');setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
   const [terminalOutcome,setTerminalOutcome]=useState<LastInspectedOutcome|null>(null)
-  const reset=useCallback(()=>{suppressPlaybackAnnouncementRef.current=false;pendingStepRef.current=null;pendingFinishRef.current=null;selectedInspectorFocusRequestRef.current=null;activityFocusRequestRef.current++;setStepPending(false);const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);setTerminalOutcome(null);setRequestedGeneration(null);setGenerationRevealRequest(null);setObservedPath('Inspect a creature, then choose Next action to observe its perception and decision path.');setStepActivityEvidence(null);persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}const controller=controllerRef.current;if(controller){pendingPulseResetRef.current=true;controller.send({type:'reset',config:clean})}setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
+  const reset=useCallback(()=>{suppressPlaybackAnnouncementRef.current=false;pendingCommandRef.current=null;setPendingCommand(null);selectedInspectorFocusRequestRef.current=null;terminalOutcomeFocusRequestRef.current=null;activityFocusRequestRef.current++;const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);setTerminalOutcome(null);setRequestedGeneration(null);setGenerationRevealRequest(null);setObservedPath('Inspect a creature, then choose Next action to observe its perception and decision path.');setStepActivityEvidence(null);persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}const controller=controllerRef.current;if(controller){pendingPulseResetRef.current=true;controller.send({type:'reset',config:clean})}setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
   const applyParameters=useCallback(()=>{reset();closeSettings()},[reset,closeSettings])
-  const finishGeneration=()=>{const controller=controllerRef.current;if(!controller||pendingFinishRef.current!==null)return;suppressPlaybackAnnouncementRef.current=false;const interrupted=pendingStepRef.current!==null;pendingStepRef.current=null;setStepPending(false);const finishId=++nextFinishIdRef.current;pendingFinishRef.current=finishId;if(interrupted){setObservedPath('Manual step interrupted; choose Next action to retry.');setStepActivityEvidence(null)}setPlaying(false);controller.send({type:'finish',finishId})}
-  const nextAction=()=>{const controller=controllerRef.current;if(!controller||stepPending||pendingStepRef.current!==null)return;suppressPlaybackAnnouncementRef.current=false;const stepId=++nextStepIdRef.current;pendingStepRef.current=stepId;setStepPending(true);setObservedPath('Next action pending…');setStepActivityEvidence(null);setPlaying(false);controller.send({type:'step',stepId})}
-  const selectIndividual=(individualId:number|null)=>{activityFocusRequestRef.current++;selectedInspectorFocusRequestRef.current=individualId;setTerminalOutcome(null);setSelectedIndividualId(individualId);controllerRef.current?.send({type:'inspect',individualId})}
+  const rememberSelectedInspectorFocus=()=>{const individualId=selectedIndividualIdRef.current;terminalOutcomeFocusRequestRef.current=individualId!==null&&Boolean(selectedInspectorRef.current?.contains(document.activeElement))?individualId:null}
+  const finishGeneration=()=>{const controller=controllerRef.current;if(!controller||extinct||!canStartSimulationCommand(pendingCommandRef.current))return;rememberSelectedInspectorFocus();suppressPlaybackAnnouncementRef.current=false;const finishId=++nextFinishIdRef.current;const pending:{kind:'finish';id:number}={kind:'finish',id:finishId};pendingCommandRef.current=pending;setPendingCommand(pending);setPlaying(false);controller.send({type:'finish',finishId})}
+  const nextAction=()=>{const controller=controllerRef.current;if(!controller||extinct||nextActionUnavailable||!canStartSimulationCommand(pendingCommandRef.current))return;rememberSelectedInspectorFocus();suppressPlaybackAnnouncementRef.current=false;const stepId=++nextStepIdRef.current;const pending:{kind:'step';id:number}={kind:'step',id:stepId};pendingCommandRef.current=pending;setPendingCommand(pending);setObservedPath('Next action pending…');setStepActivityEvidence(null);setPlaying(false);controller.send({type:'step',stepId})}
+  const selectIndividual=(individualId:number|null)=>{activityFocusRequestRef.current++;selectedInspectorFocusRequestRef.current=individualId;terminalOutcomeFocusRequestRef.current=null;setTerminalOutcome(null);setSelectedIndividualId(individualId);controllerRef.current?.send({type:'inspect',individualId})}
   const showActivityIndividual=(individualId:number)=>{if(!Number.isSafeInteger(individualId)||individualId<1||!world.creatures.some(creature=>creature.alive&&creature.individualId===individualId))return;selectedInspectorFocusRequestRef.current=null;activityFocusRequestRef.current++;const request=activityFocusRequestRef.current;setTerminalOutcome(null);setSelectedIndividualId(individualId);setArenaFocus('all');controllerRef.current?.send({type:'inspect',individualId});const focusArena=()=>{if(activityFocusRequestRef.current!==request)return;const target=document.getElementById('arena-creature-picker') as HTMLSelectElement|null;if(!target)return;try{target.closest('.arena-wrap')?.scrollIntoView({block:'center',inline:'nearest'})}catch{/* A legacy browser may not support options. */}try{target.focus({preventScroll:true})}catch{target.focus()}};if(typeof window.requestAnimationFrame==='function')window.requestAnimationFrame(focusArena);else focusArena()}
   const intervene=(kind:InterventionKind)=>{suppressPlaybackAnnouncementRef.current=false;controllerRef.current?.send({type:'intervene',kind});setActionStatus(kind==='resource-bloom'?'Resource bloom released.':kind==='drought'?'Drought applied.':'Founder migration released.')}
   const reviewSettlement=useCallback((generation:number)=>{void reviewSettlementAndNavigate(generation,{onSelectGeneration:setRequestedGeneration})},[])
   const clearGenerationReveal=useCallback((generation:number)=>setGenerationRevealRequest(current=>current===generation?null:current),[])
+  const closeSelected=()=>selectIndividual(null)
+  const cancelTerminalFocusTransfer=(target:EventTarget)=>{if(terminalOutcomeFocusRequestRef.current!==null&&(!(target instanceof Node)||!selectedInspectorRef.current?.contains(target)))terminalOutcomeFocusRequestRef.current=null}
+  const finishPending=pendingCommand?.kind==='finish'
+  const finishGenerationAriaLabel=finishPending?'Finishing generation; wait for the current cohort to settle':'Pause and finish the current generation'
+  const finishGenerationTitle=finishPending?'Finish generation is in progress; wait for settlement.':'Pause and finish the current generation'
+  const actionControls:CreatureInspectorActionControls={nextAction,finishGeneration,nextActionLabel:formatCompactNextActionLabel(nextActionInput),nextActionAriaLabel:nextActionCopy.ariaLabel,nextActionTitle:nextActionCopy.title,nextActionDisabled:nextActionUnavailable||pendingCommand!==null,finishGenerationDisabled:extinct||pendingCommand!==null,finishGenerationLabel:finishPending?'Finishing…':'Finish generation',finishGenerationAriaLabel,finishGenerationTitle}
 
-  const handleSnapshot=useCallback((nextWorld:World,meta?:SimulationSnapshotMeta)=>{setWorld(nextWorld);setRevision(n=>n+1);const pendingFinishId=pendingFinishRef.current;if(pendingFinishId!==null&&meta?.finishId===pendingFinishId){pendingFinishRef.current=null;setGenerationRevealRequest(resolveAcknowledgedFinishGeneration(pendingFinishId,meta,nextWorld.ledger))}if(pendingPulseResetRef.current){pendingPulseResetRef.current=false;setLivePulseRun(n=>n+1)}if(pendingStepRef.current!==null&&meta?.stepResult&&meta.stepId===pendingStepRef.current){pendingStepRef.current=null;setStepPending(false);const stoppedWithoutActive=meta.stepResult.stop==='no-active';suppressPlaybackAnnouncementRef.current=stoppedWithoutActive;if(meta.stepContext)setObservedPath(formatObservedPath(nextWorld,meta.stepResult,meta.stepContext));else setObservedPath('Observed path unavailable; retry Next action.');setStepActivityEvidence({activity:nextWorld.activity,window:meta.stepResult.activity});setActionStatus(stoppedWithoutActive?'':formatStepCompletion(nextWorld,meta))}},[])
-  const handleFallback=useCallback(()=>{suppressPlaybackAnnouncementRef.current=false;const interrupted=pendingStepRef.current!==null;pendingStepRef.current=null;pendingFinishRef.current=null;setStepPending(false);if(interrupted){setObservedPath('Manual step interrupted; choose Next action to retry.');setStepActivityEvidence(null);setActionStatus('Step interrupted; retry Next action.')}setRuntimeMode('fallback')},[])
+  const handleSnapshot=useCallback((nextWorld:World,meta?:SimulationSnapshotMeta)=>{const pending=pendingCommandRef.current,acknowledged=simulationCommandAcknowledged(pending,meta),focusedIndividualId=selectedIndividualIdRef.current;if(!pending&&focusedIndividualId!==null&&selectedInspectorRef.current?.contains(document.activeElement))terminalOutcomeFocusRequestRef.current=focusedIndividualId;const requestedFocusId=terminalOutcomeFocusRequestRef.current;if(requestedFocusId!==null&&nextWorld.creatures.some(creature=>creature.alive&&creature.individualId===requestedFocusId)&&(!pending||acknowledged))terminalOutcomeFocusRequestRef.current=null;setWorld(nextWorld);setRevision(n=>n+1);if(pending&&acknowledged){if(controllerRef.current?.mode==='fallback')queueMicrotask(()=>{if(pendingCommandRef.current===pending)pendingCommandRef.current=null});else pendingCommandRef.current=null;setPendingCommand(null);if(pending.kind==='finish'){setGenerationRevealRequest(resolveAcknowledgedFinishGeneration(pending.id,meta,nextWorld.ledger))}else if(meta?.stepResult){const stoppedWithoutActive=meta.stepResult.stop==='no-active';suppressPlaybackAnnouncementRef.current=stoppedWithoutActive;if(meta.stepContext)setObservedPath(formatObservedPath(nextWorld,meta.stepResult,meta.stepContext));else setObservedPath('Observed path unavailable; retry Next action.');setStepActivityEvidence({activity:nextWorld.activity,window:meta.stepResult.activity});setActionStatus(stoppedWithoutActive?'':formatStepCompletion(nextWorld,meta))}else if(pending.kind==='step'){setObservedPath('Observed path unavailable; retry Next action.');setStepActivityEvidence(null)}}if(pendingPulseResetRef.current){pendingPulseResetRef.current=false;setLivePulseRun(n=>n+1)}},[])
+  const handleFallback=useCallback(()=>{suppressPlaybackAnnouncementRef.current=false;const interrupted=pendingCommandRef.current;pendingCommandRef.current=null;setPendingCommand(null);if(interrupted?.kind==='step'){setObservedPath('Manual step interrupted; choose Next action to retry.');setStepActivityEvidence(null);setActionStatus('Step interrupted; retry Next action.')}else if(interrupted?.kind==='finish'){setActionStatus('Finish generation interrupted; retry Finish generation.')}setRuntimeMode('fallback')},[])
 
   useEffect(()=>{const controller=createController(initialRef.current,handleSnapshot,handleFallback);controllerRef.current=controller;setRuntimeMode(controller.mode);return()=>{controller.dispose();controllerRef.current=null}},[handleSnapshot,handleFallback])
 
@@ -401,12 +449,19 @@ function App(){
     if(selectedIndividualId===null||world.creatures.some(creature=>creature.alive&&creature.individualId===selectedIndividualId))return
     activityFocusRequestRef.current++
     selectedInspectorFocusRequestRef.current=null
-    setTerminalOutcome(resolveTerminalOutcome({selectedIndividualId,creatures:world.creatures,recordedOutcome:world.lastInspectedOutcome,currentGeneration:world.generation}))
+    const outcome=resolveTerminalOutcome({selectedIndividualId,creatures:world.creatures,recordedOutcome:world.lastInspectedOutcome,currentGeneration:world.generation})
+    if(!outcome)terminalOutcomeFocusRequestRef.current=null
+    setTerminalOutcome(outcome)
     setSelectedIndividualId(null)
     if(world.inspectedIndividualId!==null)controllerRef.current?.send({type:'inspect',individualId:null})
   },[world,selectedIndividualId])
+  useEffect(()=>{
+    if(!terminalOutcome||terminalOutcomeFocusRequestRef.current!==terminalOutcome.individualId)return
+    terminalOutcomeFocusRequestRef.current=null
+    terminalOutcomeRef.current?.focus()
+  },[terminalOutcome])
 
-  return <div className="app-shell">
+  return <div className="app-shell" onFocusCapture={event=>cancelTerminalFocusTransfer(event.target)}>
     <header className="topbar" aria-hidden={experimentOpen||(settingsOpen&&isNarrow)||undefined}>
       <div className="brand"><div className="mark" aria-hidden="true">∿</div><div><h1>Evolution Field Lab</h1><p>Shape an ecosystem. Watch selection unfold.</p></div></div>
       <div className="top-actions"><button ref={experimentToggleRef} className="experiment-toggle" onClick={()=>{setPlaying(false);setSettingsOpen(false);setExperimentOpen(true)}} aria-haspopup="dialog"><span aria-hidden="true">◫</span> Experiment lab</button><button ref={settingsToggleRef} className="settings-toggle" onClick={()=>{setSettingsPanelRequested(true);setSettingsOpen(v=>!v)}} aria-label={settingsOpen?'Close parameters':'Open parameters'} aria-expanded={settingsOpen} aria-controls="settings" aria-haspopup={isNarrow?'dialog':undefined}>
@@ -428,16 +483,16 @@ function App(){
         </div>
         <div className="transport" role="group" aria-label="Playback controls">
           <button className="play" disabled={extinct} onClick={()=>{suppressPlaybackAnnouncementRef.current=false;setPlaying(v=>!v)}} aria-label={formatPlaybackControlLabel(arenaStatus,playing)}>{playing?'Ⅱ':'▶'}</button>
-          <button onClick={nextAction} disabled={nextActionUnavailable||stepPending} aria-label={nextActionCopy.ariaLabel} title={nextActionCopy.title}>{isNarrow?formatCompactNextActionLabel(nextActionInput):nextActionCopy.buttonLabel}</button>
-          <button onClick={finishGeneration} disabled={extinct} aria-label="Pause and finish the current generation">Finish generation</button>
+          <button onClick={actionControls.nextAction} disabled={actionControls.nextActionDisabled} aria-label={actionControls.nextActionAriaLabel} title={actionControls.nextActionTitle}>{isNarrow?actionControls.nextActionLabel:nextActionCopy.buttonLabel}</button>
+          <button onClick={actionControls.finishGeneration} disabled={actionControls.finishGenerationDisabled} aria-label={actionControls.finishGenerationAriaLabel} title={actionControls.finishGenerationTitle}>{actionControls.finishGenerationLabel}</button>
           <div className="day-progress" role="progressbar" aria-label="Current generation progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={dayProgress} aria-valuetext={arenaDayLabel}><i style={{width:`${dayProgress}%`}}/></div>
           <label className="speed-select">Playback speed <select value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value={.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option><option value={4}>4×</option></select></label>
           <button className="reset" onClick={reset}>{dirty?'Apply & restart':'Restart run'}</button>
         </div>
         <Suspense fallback={<ObservedStepStoryFallback observedPath={observedPath}/>}><ObservedStepStory observedPath={observedPath} evidence={stepActivityEvidence}/></Suspense>
         <SimulationEventStory world={world} selectedIndividualId={selectedIndividualId} onShowIndividual={showActivityIndividual} suppressAnnouncementSequence={stepAnnouncementSequence}/>
-        {selected&&<div ref={selectedInspectorRef} className="inspector-focus-target" tabIndex={-1} aria-label={`Selected individual ${selected.individualId} details`} style={{scrollMarginTop:'84px'}}><Suspense fallback={<section className="inspector" aria-busy="true" aria-label={`Selected individual ${selected.individualId}`}><div className="inspector-head"><div><h2>Individual {selected.individualId}</h2><p>Opening individual details…</p></div><button type="button" onClick={()=>selectIndividual(null)} aria-label="Close individual inspector">×</button></div></section>}><CreatureInspector selected={selected} ecologyMode={world.config.ecologyMode} dayTime={world.dayTime} stateLabel={CREATURE_STATE_METADATA[selected.home?'safe':selected.mode].label} targetLabel={formatSelectedTarget(selected,world.creatures,world.food)} decisionTargetLabel={decisionTargetLabel} huntContactRule={ARENA_HUNT_CONTACT_KEY} settlementPreview={settlementPreview} onClose={()=>selectIndividual(null)}/></Suspense></div>}
-        {terminalOutcome&&!selected&&<Suspense fallback={null}><TerminalOutcome outcome={terminalOutcome} onDismiss={()=>selectIndividual(null)}/></Suspense>}
+        {selected&&<div ref={selectedInspectorRef} className="inspector-focus-target" tabIndex={-1} aria-label={`Selected individual ${selected.individualId} details`} style={{scrollMarginTop:'84px'}}><SelectedInspectorShell selected={selected} actionControls={actionControls} onClose={closeSelected}><CreatureInspector embedded selected={selected} world={world} ecologyMode={world.config.ecologyMode} dayTime={world.dayTime} stateLabel={CREATURE_STATE_METADATA[selected.home?'safe':selected.mode].label} targetLabel={formatSelectedTarget(selected,world.creatures,world.food)} decisionTargetLabel={decisionTargetLabel} huntContactRule={ARENA_HUNT_CONTACT_KEY} onClose={closeSelected}/></SelectedInspectorShell></div>}
+        {terminalOutcome&&!selected&&<div ref={terminalOutcomeRef} className="inspector-focus-target" tabIndex={-1} aria-label={`Individual ${terminalOutcome.individualId} terminal outcome focus target`} style={{scrollMarginTop:'84px'}}><Suspense fallback={null}><TerminalOutcome outcome={terminalOutcome} onDismiss={()=>selectIndividual(null)}/></Suspense></div>}
         <Suspense fallback={<GenerationHandoffFallback/>}><GenerationHandoff world={world} playbackStatus={arenaStatus} playing={playing} onReviewGeneration={reviewSettlement} revealGeneration={generationRevealRequest} onRevealComplete={clearGenerationReveal}/></Suspense>
         {arenaStatus==='Awaiting settlement'&&<div className="pending" aria-label="Settlement status">{arenaDetail}</div>}
         <div className="interventions" role="group" aria-label="Live ecological interventions">
