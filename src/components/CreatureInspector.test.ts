@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { decisionCandidateMatches, formatDecisionBasis, formatDecisionProvenance, formatDecisionTargetLabel } from './CreatureInspector'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { defaultConfig } from '../simulation/config'
+import { createWorld } from '../simulation/engine'
 import type { DecisionSummary } from '../simulation/types'
+import { summarizeSelectedSettlementPreview, type SelectedSettlementPreview } from './GenerationForecast'
+import { CreatureInspector, decisionCandidateMatches, formatDecisionBasis, formatDecisionProvenance, formatDecisionTargetLabel, formatSelectedSettlementOutcome, formatSelectedSettlementReproduction } from './CreatureInspector'
 
 const summary:DecisionSummary={
   chosen:'prey',
@@ -37,5 +42,48 @@ describe('captured decision inspector helpers',()=>{
     expect(decisionCandidateMatches(legacy,legacy.candidates[0])).toBe(true)
     expect(formatDecisionBasis(undefined)).toBe('Selection basis unavailable')
     expect(formatDecisionProvenance({generation:0,dayTime:Number.NaN,reactionWindow:-1})).toBe('Decision capture time unavailable')
+  })
+})
+
+const settlementPreview=(overrides:Partial<SelectedSettlementPreview>={}):SelectedSettlementPreview=>({
+  individualId:1,generation:3,mode:'classic',outcome:'survived',nextAge:2,retainedEnergy:110,settledEnergy:110,
+  reproductionStatus:'admitted',foodAtSettlement:2,reproductionCost:35,eligibleParentCount:1,availableBirthSlots:119,...overrides,
+})
+
+describe('selected individual settlement preview',()=>{
+  it('explains classic admission and the strict energy reproduction threshold',()=>{
+    expect(formatSelectedSettlementOutcome(settlementPreview())).toBe('Would survive → generation 4 · age 2 · 110.0 energy.')
+    expect(formatSelectedSettlementReproduction(settlementPreview())).toBe('One offspring would be admitted · 2/2 food collected.')
+
+    const threshold=settlementPreview({mode:'energy-regrowth',retainedEnergy:35,settledEnergy:35,reproductionCost:35,reproductionStatus:'not-eligible'})
+    expect(formatSelectedSettlementReproduction(threshold)).toBe('No offspring · 35.0 retained energy must exceed the 35.0 cost.')
+  })
+
+  it('distinguishes eligibility from capacity admission',()=>{
+    const blocked=settlementPreview({mode:'energy-regrowth',reproductionStatus:'eligible-capacity-blocked',eligibleParentCount:3,availableBirthSlots:1})
+    expect(formatSelectedSettlementReproduction(blocked)).toBe('Eligible for offspring, but would not be admitted · 1 available birth slot for 3 eligible parents.')
+  })
+
+  it('names every authoritative loss cause without implying reproduction',()=>{
+    const labels={hunted:'Hunted',energy:'Energy depleted',unfed:'No food at settlement',late:'Missed return deadline',aged:'Old age'} as const
+    for(const [outcome,label] of Object.entries(labels) as [keyof typeof labels,string][]){
+      const preview=settlementPreview({outcome,nextAge:null,retainedEnergy:null,settledEnergy:null,reproductionStatus:'not-eligible'})
+      expect(formatSelectedSettlementOutcome(preview)).toBe(`Would not survive · ${label}.`)
+      expect(formatSelectedSettlementReproduction(preview)).toBe('It would produce no offspring.')
+    }
+  })
+
+  it('renders the current-state framing and consequence without live-announcement churn',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0})
+    const selected=world.creatures[0]
+    Object.assign(selected,{alive:true,home:true,energy:100})
+    const preview=summarizeSelectedSettlementPreview(world,selected.individualId)
+    const markup=renderToStaticMarkup(createElement(CreatureInspector,{selected,ecologyMode:world.config.ecologyMode,dayTime:world.dayTime,stateLabel:'Safe at home',targetLabel:'No current target',huntContactRule:'Contact required',settlementPreview:preview,onClose:()=>{}}))
+
+    expect(markup).toContain('role="note"')
+    expect(markup).toContain('<strong>If generation ended now</strong>')
+    expect(markup).toContain('Would survive')
+    expect(markup).toContain('Counterfactual snapshot · not a prediction · updates as the cohort changes')
+    expect(markup).not.toContain('aria-live')
   })
 })

@@ -1,4 +1,5 @@
 import type { BiologicalTrait, Config, Creature, DecisionCandidateSummary, DecisionProvenance, DecisionSelectionBasis, DecisionSummary, PerceptionDiagnostics, TargetType } from '../simulation/types'
+import { FORECAST_LOSS_LABELS, type SelectedSettlementPreview } from './GenerationForecast'
 
 export interface PerceptionTelemetryCopy {
   creatures: string
@@ -12,6 +13,28 @@ const decisionBasisLabels:Record<DecisionSelectionBasis,string>={
   'urgent-override':'Chosen by urgent safety override',
 }
 const decisionLineStyle={display:'block',marginLeft:0} as const
+const settlementPreviewStyle={fontSize:11,lineHeight:1.4} as const
+const settlementFramingStyle={display:'block',marginTop:3,color:'var(--muted)',fontSize:10,lineHeight:1.35} as const
+const formatPreviewNumber=(value:number|null)=>value===null||!Number.isFinite(value)?'unavailable':value.toFixed(1)
+const formatPreviewFood=(value:number)=>!Number.isFinite(value)?'unavailable':Number.isInteger(value)?String(value):value.toFixed(1)
+const formatPreviewCount=(count:number,singular:string)=>`${count} ${count===1?singular:`${singular}s`}`
+
+export function formatSelectedSettlementOutcome(preview:SelectedSettlementPreview):string{
+  if(preview.outcome!=='survived')return`Would not survive · ${FORECAST_LOSS_LABELS[preview.outcome]}.`
+  const age=preview.nextAge===null?'next age unavailable':`age ${preview.nextAge}`
+  return`Would survive → generation ${preview.generation+1} · ${age} · ${formatPreviewNumber(preview.settledEnergy)} energy.`
+}
+
+export function formatSelectedSettlementReproduction(preview:SelectedSettlementPreview):string{
+  if(preview.outcome!=='survived')return'It would produce no offspring.'
+  if(preview.reproductionStatus==='admitted')return preview.mode==='classic'
+    ?`One offspring would be admitted · ${formatPreviewFood(preview.foodAtSettlement)}/2 food collected.`
+    :`One offspring would be admitted · ${formatPreviewNumber(preview.retainedEnergy)} retained energy − ${formatPreviewNumber(preview.reproductionCost)} reproduction cost.`
+  if(preview.reproductionStatus==='eligible-capacity-blocked')return`Eligible for offspring, but would not be admitted · ${formatPreviewCount(preview.availableBirthSlots,'available birth slot')} for ${formatPreviewCount(preview.eligibleParentCount,'eligible parent')}.`
+  return preview.mode==='classic'
+    ?`No offspring · ${formatPreviewFood(preview.foodAtSettlement)}/2 food collected (needs at least 2).`
+    :`No offspring · ${formatPreviewNumber(preview.retainedEnergy)} retained energy must exceed the ${formatPreviewNumber(preview.reproductionCost)} cost.`
+}
 
 /** Keep captured-decision metadata readable even when an old snapshot omits it. */
 export function formatDecisionBasis(basis:DecisionSelectionBasis|undefined):string{
@@ -74,10 +97,12 @@ export interface CreatureInspectorProps {
   targetLabel: string
   decisionTargetLabel?: string
   huntContactRule: string
+  /** Scalar lifecycle facts derived from the complete cohort; never a World reference. */
+  settlementPreview?: SelectedSettlementPreview|null
   onClose: () => void
 }
 
-export function CreatureInspector({ selected, ecologyMode, dayTime, stateLabel, targetLabel, decisionTargetLabel, huntContactRule, onClose }: CreatureInspectorProps) {
+export function CreatureInspector({ selected, ecologyMode, dayTime, stateLabel, targetLabel, decisionTargetLabel, huntContactRule, settlementPreview, onClose }: CreatureInspectorProps) {
   const perceptionCopy = selected.perceptionDiagnostics ? formatPerceptionTelemetry(selected.perceptionDiagnostics) : null
   const decision=selected.decisionSummary
   const candidates=decision&&Array.isArray(decision.candidates)?decision.candidates:[]
@@ -85,6 +110,13 @@ export function CreatureInspector({ selected, ecologyMode, dayTime, stateLabel, 
 
   return <section className="inspector" aria-label={`Selected individual ${selected.individualId}`}>
     <div className="inspector-head"><div><h2>Individual {selected.individualId}</h2><p>Lineage {selected.lineageId} · parent {selected.parentIndividualId??'founder'} · born generation {selected.birthGeneration}</p></div><button type="button" onClick={onClose} aria-label="Close individual inspector">×</button></div>
+    <div className="utility-breakdown" role="note" style={settlementPreviewStyle}>
+      <strong>If generation ended now</strong>
+      {settlementPreview
+        ? <span style={decisionLineStyle}>{`${formatSelectedSettlementOutcome(settlementPreview)} ${formatSelectedSettlementReproduction(settlementPreview)}`}</span>
+        : <span style={decisionLineStyle}>Settlement details unavailable for this individual.</span>}
+      <small style={settlementFramingStyle}>Counterfactual snapshot · not a prediction · updates as the cohort changes</small>
+    </div>
     <div className="inspector-grid"><dl><div><dt>Age</dt><dd>{selected.age} generations</dd></div><div><dt>Energy</dt><dd>{selected.energy.toFixed(1)}</dd></div><div><dt>Food</dt><dd>{selected.food}{ecologyMode==='classic'?' / 2':' collected'}</dd></div><div><dt>State</dt><dd>{stateLabel}</dd></div><div><dt>Target</dt><dd>{targetLabel}</dd></div><div><dt>Attack ready</dt><dd>{selected.attackCooldownUntil<=dayTime?'now':`in ${(selected.attackCooldownUntil-dayTime).toFixed(2)}s`}</dd></div><div><dt>Memory</dt><dd>food {selected.memory.foodX===null?'none':'active'} · threat {selected.memory.threatX===null?'none':'active'}</dd></div></dl><dl>{(['speed','size','sense','aggression','caution','exploration']as BiologicalTrait[]).map(trait=><div key={trait}><dt>{trait}</dt><dd>{selected[trait].toFixed(3)}</dd></div>)}</dl></div>
     {selected.mode==='hunting'&&<div className="utility-breakdown" role="note"><strong>Hunt contact rule</strong><span>{huntContactRule}</span></div>}
     {selected.perceptionDiagnostics&&perceptionCopy&&<div className="perception-summary" role="group" aria-label="Selected creature perception telemetry"><strong>Perception window {selected.perceptionDiagnostics.reactionWindow}</strong><span>{perceptionCopy.creatures}</span><span>{perceptionCopy.food}</span><span>{perceptionCopy.notDetected}</span></div>}

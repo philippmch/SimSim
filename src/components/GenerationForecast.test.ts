@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { CLASSIC_MODES, defaultConfig, MAX_POPULATION } from '../simulation/config'
 import { createWorld } from '../simulation/engine'
-import { formatGenerationForecastAriaLabel, formatGenerationForecastBirths, formatGenerationForecastEquation, formatGenerationForecastLosses, GenerationForecast, summarizeGenerationForecast, type GenerationForecastSummary } from './GenerationForecast'
+import { formatGenerationForecastAriaLabel, formatGenerationForecastBirths, formatGenerationForecastEquation, formatGenerationForecastLosses, GenerationForecast, summarizeGenerationForecast, summarizeSelectedSettlementPreview, type GenerationForecastSummary } from './GenerationForecast'
 
 describe('generation forecast', () => {
   it('uses classic settlement rules for the current cohort and loss causes', () => {
@@ -129,5 +129,81 @@ describe('generation forecast', () => {
     expect(markup).not.toContain('Counterfactual')
     expect(markup).not.toContain('not a prediction')
     expect(markup).not.toContain('aria-live')
+  })
+
+  it('projects an exact classic survivor and admitted birth without mutating the world', () => {
+    const world = createWorld({ ...defaultConfig, ...CLASSIC_MODES, initialPopulation: 2, foodPerDay: 0 })
+    const [parent, bystander] = world.creatures
+    Object.assign(parent, { alive: true, home: true, food: 2, age: 3 })
+    Object.assign(bystander, { alive: true, home: true, food: 1, age: 1 })
+
+    const preview = summarizeSelectedSettlementPreview(world, parent.individualId)
+
+    expect(preview).toMatchObject({
+      individualId: parent.individualId,
+      generation: 1,
+      mode: 'classic',
+      outcome: 'survived',
+      nextAge: 4,
+      retainedEnergy: world.config.startingEnergy,
+      settledEnergy: world.config.startingEnergy,
+      reproductionStatus: 'admitted',
+      foodAtSettlement: 2,
+      eligibleParentCount: 1,
+      availableBirthSlots: MAX_POPULATION - 2,
+    })
+  })
+
+  it('explains the strict energy-regrowth no-birth threshold', () => {
+    const world = createWorld({ ...defaultConfig, initialPopulation: 1, foodPerDay: 0, energyRetention: .5, reproductionEnergyCost: 50 })
+    const [selected] = world.creatures
+    Object.assign(selected, { alive: true, home: true, energy: 100 })
+
+    const preview = summarizeSelectedSettlementPreview(world, selected.individualId)
+
+    expect(preview).toMatchObject({ mode: 'energy-regrowth', outcome: 'survived', retainedEnergy: 50, settledEnergy: 50, reproductionStatus: 'not-eligible' })
+  })
+
+  it('distinguishes an eligible parent blocked by cohort capacity', () => {
+    const world = createWorld({ ...defaultConfig, initialPopulation: MAX_POPULATION, foodPerDay: 0 })
+    world.creatures.forEach(creature => Object.assign(creature, { alive: true, home: true, energy: 100 }))
+    const preview = summarizeSelectedSettlementPreview(world, world.creatures[0].individualId)
+
+    expect(preview).toMatchObject({ outcome: 'survived', reproductionStatus: 'eligible-capacity-blocked', eligibleParentCount: MAX_POPULATION, availableBirthSlots: 0 })
+  })
+
+  it('keeps each authoritative loss cause in the selected projection', () => {
+    const classicWorld = createWorld({ ...defaultConfig, ...CLASSIC_MODES, initialPopulation: 2, foodPerDay: 0 })
+    const [unfed, late] = classicWorld.creatures
+    Object.assign(unfed, { alive: true, home: true, food: 0 })
+    Object.assign(late, { alive: true, home: false, food: 1 })
+    expect(summarizeSelectedSettlementPreview(classicWorld, unfed.individualId)?.outcome).toBe('unfed')
+    expect(summarizeSelectedSettlementPreview(classicWorld, late.individualId)?.outcome).toBe('late')
+
+    const energyWorld = createWorld({ ...defaultConfig, initialPopulation: 3, foodPerDay: 0 })
+    const [energy, aged, hunted] = energyWorld.creatures
+    Object.assign(energy, { alive: false, home: true, energy: 0, deathCause: 'energy' })
+    Object.assign(aged, { alive: true, home: true, energy: 100, age: energyWorld.config.maxAge })
+    Object.assign(hunted, { alive: false, home: false, energy: 100, deathCause: 'hunted' })
+    expect(summarizeSelectedSettlementPreview(energyWorld, energy.individualId)?.outcome).toBe('energy')
+    expect(summarizeSelectedSettlementPreview(energyWorld, aged.individualId)?.outcome).toBe('aged')
+    expect(summarizeSelectedSettlementPreview(energyWorld, hunted.individualId)?.outcome).toBe('hunted')
+  })
+
+  it('returns null for missing IDs and is deterministic and pure', () => {
+    const world = createWorld({ ...defaultConfig, initialPopulation: 12 })
+    const selected = world.creatures[0]
+    Object.assign(selected, { alive: true, home: true, energy: 100 })
+    const before = structuredClone(world)
+
+    expect(summarizeSelectedSettlementPreview(world, null)).toBeNull()
+    expect(summarizeSelectedSettlementPreview(world, undefined)).toBeNull()
+    expect(summarizeSelectedSettlementPreview(world, 999999)).toBeNull()
+    const first = summarizeSelectedSettlementPreview(world, selected.individualId)
+    const second = summarizeSelectedSettlementPreview(world, selected.individualId)
+
+    expect(first).toEqual(second)
+    expect(world).toEqual(before)
+    expect(world.rngState).toBe(before.rngState)
   })
 })
