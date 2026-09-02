@@ -63,6 +63,8 @@ describe('population story selection-shift helpers',()=>{
       ],
     }
     const markup=renderToStaticMarkup(createElement(PopulationStory,{lineage:analytics}))
+    expect(markup.startsWith('<div class="evolution-story">')).toBe(true)
+    expect(markup).not.toContain('<section')
     expect(markup).toContain('<h2 id="evolution-story-title">Current population · lineages</h2>')
     expect(markup).toContain('<h3 id="selection-shifts-title"')
     expect(markup).toContain('Parents of newborns Δ')

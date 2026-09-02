@@ -9,6 +9,7 @@ import type { SimulationController,SimulationSnapshotMeta } from './simulation/c
 import { experimentUrl,loadInitialConfig,persistExperiment } from './simulation/share'
 import type { Config,InterventionKind,LastInspectedOutcome, World } from './simulation/types'
 import InterventionFeed from './components/InterventionFeed'
+import DashboardNavigation, { DASHBOARD_SECTION_IDS, DASHBOARD_SECTION_SCROLL_STYLE } from './components/DashboardNavigation'
 
 const ExperimentPanel=lazy(()=>import('./components/ExperimentPanel').then(module=>({default:module.ExperimentPanel})))
 const GenerationJournal=lazy(()=>import('./components/GenerationJournal'))
@@ -328,7 +329,10 @@ function App(){
         <InterventionFeed events={world.events}/>
         {dirty&&<div className="pending" role="status">Changes are staged and will take effect when you choose <strong>Apply &amp; restart</strong>.</div>}
 
-        <section className="dashboard" aria-label="Live statistics">
+        <DashboardNavigation/>
+
+        <div className="dashboard">
+          <section id={DASHBOARD_SECTION_IDS.liveOverview} tabIndex={-1} className="dashboard" aria-label="Live statistics" style={DASHBOARD_SECTION_SCROLL_STYLE}>
           <div className="summary-strip">
             <div className="population-summary"><span>Living population</span><strong>{living}</strong><small>Generation {world.generation}</small></div>
             <dl className="trait-summary">
@@ -345,10 +349,11 @@ function App(){
           <div className="ecology-line" aria-label="Current model and energy statistics"><strong>{world.config.ecologyMode==='energy-regrowth'?'Ecological model':'Classic model'}</strong><span>{world.config.perceptionMode} perception</span><span>{world.config.predationMode} predation</span><span>mean energy <b>{stats.avgEnergy.toFixed(1)}</b></span><span>mean age <b>{stats.avgAge.toFixed(1)}</b></span></div>
           <GenerationForecast world={world} playbackStatus={arenaStatus}/>
           <Suspense fallback={<GenerationAccountingFallback/>}><GenerationAccounting world={world} globalFoodCap={MAX_FOOD}/></Suspense>
-          <section id="generation-journal" tabIndex={-1} aria-label="Generation journal review"><Suspense fallback={<div className="evolution-story generation-journal" aria-busy="true"><p className="journal-empty" role="status">Opening generation journal…</p></div>}><GenerationJournal ledgers={world.ledger} events={world.events} requestedGeneration={requestedGeneration} onRequestedGenerationChange={setRequestedGeneration}/></Suspense></section>
-          <Suspense fallback={<section className="evolution-story" aria-busy="true"><p className="journal-empty" role="status">Opening population story…</p></section>}><PopulationStory lineage={lineage}/></Suspense>
-          <Suspense fallback={<section className="evolution-story generation-journal" aria-busy="true"><p className="journal-empty" role="status">Opening insights…</p></section>}><InsightsPanel world={world} requestedGeneration={requestedGeneration} onSelectGeneration={setRequestedGeneration}/></Suspense>
-        </section>
+          </section>
+          <section id={DASHBOARD_SECTION_IDS.generationJournal} tabIndex={-1} aria-label="Generation journal review" style={DASHBOARD_SECTION_SCROLL_STYLE}><Suspense fallback={<div className="evolution-story generation-journal" aria-busy="true"><p className="journal-empty" role="status">Opening generation journal…</p></div>}><GenerationJournal ledgers={world.ledger} events={world.events} requestedGeneration={requestedGeneration} onRequestedGenerationChange={setRequestedGeneration}/></Suspense></section>
+          <section id={DASHBOARD_SECTION_IDS.populationLineages} tabIndex={-1} aria-label="Population & lineages" style={DASHBOARD_SECTION_SCROLL_STYLE}><Suspense fallback={<div className="evolution-story" aria-busy="true"><p className="journal-empty" role="status">Opening population story…</p></div>}><PopulationStory lineage={lineage}/></Suspense></section>
+          <section id={DASHBOARD_SECTION_IDS.insightsCharts} tabIndex={-1} aria-label="Insights & charts" style={DASHBOARD_SECTION_SCROLL_STYLE}><Suspense fallback={<div className="evolution-story generation-journal" aria-busy="true"><p className="journal-empty" role="status">Opening insights…</p></div>}><InsightsPanel world={world} requestedGeneration={requestedGeneration} onSelectGeneration={setRequestedGeneration}/></Suspense></section>
+        </div>
       </section>
       {settingsOpen&&isNarrow&&<div className="settings-backdrop" aria-hidden="true" onMouseDown={closeSettings}/>}
       <aside ref={settingsRef} id="settings" className={`settings ${settingsOpen?'open':''}`} role={isNarrow?'dialog':'region'} aria-modal={isNarrow&&settingsOpen||undefined} aria-labelledby="settings-title">

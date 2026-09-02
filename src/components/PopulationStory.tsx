@@ -47,7 +47,7 @@ export interface PopulationStoryProps{lineage:LineageAnalytics}
 export function PopulationStory({lineage}:PopulationStoryProps){
   const shifts=buildSelectionShiftRows(lineage.selectionShifts)
   const hasCompletedGeneration=hasCompletedSelectionGeneration(lineage.latestGeneration)
-  return <section className="evolution-story" aria-labelledby="evolution-story-title">
+  return <div className="evolution-story">
     <div className="story-head"><div><h2 id="evolution-story-title">Current population · lineages</h2><p>Lineages are live now. Shifts below use the latest completed generation, even when the journal above is pinned to an older one.</p></div><dl><div><dt>Living lineages</dt><dd>{Number.isFinite(lineage.livingLineages)?Math.max(0,Math.trunc(lineage.livingLineages)):'n/a'}</dd></div><div><dt>Effective diversity</dt><dd>{Number.isFinite(lineage.effectiveDiversity)?lineage.effectiveDiversity.toFixed(2):'n/a'}</dd></div></dl></div>
     <div className="selection-shifts utility-breakdown" role="group" aria-labelledby="selection-shifts-title">
       <h3 id="selection-shifts-title" style={{fontSize:'12px',margin:'12px 0 4px'}}>Latest selection shifts</h3>
@@ -60,7 +60,7 @@ export function PopulationStory({lineage}:PopulationStoryProps){
       <div><h3>How to read this</h3><p>Each bar is the share of the living population carrying that lineage. Effective diversity is higher when several lineages remain common. Positive shifts mean higher cohort means; negative shifts mean lower cohort means.</p></div>
       <div><h3>Live vs historical</h3><p>Lineages are live now; selection shifts come from the latest completed generation. Open the generation journal above for the full record and context.</p></div>
     </div>
-  </section>
+  </div>
 }
 
 export default PopulationStory
