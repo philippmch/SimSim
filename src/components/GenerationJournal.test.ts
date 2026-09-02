@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { meetsStandardizedEffectThreshold, SELECTION_PATTERN_THRESHOLD } from '../simulation/engine'
 import type { BiologicalTrait, GenerationLedger, InheritanceTraitSummary, SelectionSummary, TraitMoments, WorldEvent } from '../simulation/types'
-import GenerationJournal, { clampJournalGeneration, deriveGenerationInterpretation, deriveGenerationReview, deriveInheritanceAudit, deriveJournalEvents, derivePressureFingerprints, filterJournalEvents, formatAdaptivePair, formatAttackAttemptLabel, formatAttackBasisNote, formatJournalEventDay, formatJournalEventSummary, getJournalEventStatus, getRecentGenerationLedgers, isValidJournalEventDay, isValidJournalEventGeneration, isValidJournalEventKind, JOURNAL_EVENT_DAY_UNAVAILABLE, JOURNAL_EVENT_SUMMARY_UNAVAILABLE, MAX_JOURNAL_ENTRIES, pinCurrentGeneration, resolveJournalSelection } from './GenerationJournal'
+import GenerationJournal, { clampJournalGeneration, deriveGenerationInterpretation, deriveGenerationReview, deriveInheritanceAudit, deriveJournalEvents, derivePressureFingerprints, deriveSurvivorLossComparison, filterJournalEvents, formatAdaptivePair, formatAttackAttemptLabel, formatAttackBasisNote, formatJournalEventDay, formatJournalEventSummary, getJournalEventStatus, getRecentGenerationLedgers, isValidJournalEventDay, isValidJournalEventGeneration, isValidJournalEventKind, JOURNAL_EVENT_DAY_UNAVAILABLE, JOURNAL_EVENT_SUMMARY_UNAVAILABLE, MAX_JOURNAL_ENTRIES, pinCurrentGeneration, resolveJournalSelection } from './GenerationJournal'
 
 const moments=(mean:number|null)=>({mean,variance:mean===null?null:0,sd:mean===null?null:0})
 const selection=(mean:number|null)=>({speed:moments(mean),size:moments(mean),sense:moments(mean),aggression:moments(mean),caution:moments(mean),exploration:moments(mean)})
@@ -20,6 +20,15 @@ const makeLedger=(generation:number,overrides:Partial<GenerationLedger>={}):Gene
   selectionByOutcome:{survived:selection(1),hunted:selection(1),energy:selection(null),unfed:selection(1),late:selection(null),aged:selection(null)},
   ...overrides,
 })
+
+const comparisonMeans={speed:1.8,size:1.2,sense:.8,aggression:1.1,caution:.9,exploration:1} satisfies Record<BiologicalTrait,number>
+const comparisonHuntedMeans={speed:.6,size:1.1,sense:.7,aggression:.7,caution:1,exploration:.8} satisfies Record<BiologicalTrait,number>
+const comparisonEnergyMeans={speed:1,size:1,sense:.9,aggression:.9,caution:.8,exploration:.9} satisfies Record<BiologicalTrait,number>
+const profileFromMeans=(values:Record<BiologicalTrait,number>,sd:number|null=.5):SelectionSummary=>Object.fromEntries(traitKeys.map(trait=>[trait,{mean:values[trait],variance:sd===null?null:sd**2,sd}])) as SelectionSummary
+const comparisonLedger=():GenerationLedger=>{
+  const baseline=Object.fromEntries(traitKeys.map(trait=>[trait,(4*comparisonMeans[trait]+comparisonHuntedMeans[trait]+3*comparisonEnergyMeans[trait])/8])) as Record<BiologicalTrait,number>
+  return makeLedger(40,{startPopulation:8,outcomes:{survived:4,hunted:1,energy:3,unfed:0,late:0,aged:0},selection:{start:profileFromMeans(baseline),survivor:profileFromMeans(comparisonMeans),reproducer:profileFromMeans(comparisonMeans)},selectionByOutcome:{survived:profileFromMeans(comparisonMeans),hunted:profileFromMeans(comparisonHuntedMeans),energy:profileFromMeans(comparisonEnergyMeans),unfed:selection(null),late:selection(null),aged:selection(null)}})
+}
 
 describe('generation journal helpers',()=>{
   it('handles an empty run without inventing a selected generation',()=>{
@@ -233,6 +242,136 @@ describe('generation journal helpers',()=>{
     expect(text).toContain('admitted births: 0')
     expect(text).toContain('Hunted was the largest recorded loss (3)')
     expect(text).not.toMatch(/caused|because|led to/)
+  })
+
+  describe('survivors versus all recorded losses',()=>{
+    it('count-weights unequal loss groups, keeps all six rows, and applies the shared pattern threshold',()=>{
+      const comparison=deriveSurvivorLossComparison(comparisonLedger())
+      expect(comparison).toMatchObject({status:'available',patternStatus:'pattern',possiblePattern:true,survivorCount:4,lossCount:4,largestTrait:'speed'})
+      expect(comparison.traits.map(trait=>trait.trait)).toEqual(traitKeys)
+      expect(comparison.traits.every(trait=>typeof trait.survivorMean==='number'&&typeof trait.lossMean==='number'&&typeof trait.difference==='number')).toBe(true)
+      expect(comparison.traits.find(trait=>trait.trait==='speed')).toMatchObject({survivorMean:1.8,lossMean:.9,difference:.9,standardizedDifference:1.8})
+      expect(comparison.interpretation).toContain('Largest observed separation')
+      expect(comparison.interpretation).toContain('Descriptive within this generation')
+      expect(comparison.interpretation).toContain('all recorded loss outcomes combined')
+      expect(comparison.interpretation).toContain('does not establish that the trait caused survival')
+      expect(comparison.interpretation).not.toMatch(/advantage|selected for/i)
+    })
+
+    it('keeps deterministic trait order when standardized separations tie',()=>{
+      const ledger=comparisonLedger()
+      ledger.selection.survivor.speed.mean=2
+      ledger.selectionByOutcome.survived.speed.mean=2
+      ledger.selectionByOutcome.hunted.speed.mean=.5
+      ledger.selectionByOutcome.energy.speed.mean=1.5
+      ledger.selection.start.speed.mean=1.625
+      ledger.selection.survivor.size.mean=2
+      ledger.selectionByOutcome.survived.size.mean=2
+      ledger.selectionByOutcome.hunted.size.mean=.5
+      ledger.selectionByOutcome.energy.size.mean=1.5
+      ledger.selection.start.size.mean=1.625
+      const comparison=deriveSurvivorLossComparison(ledger)
+      expect(comparison.largestTrait).toBe('speed')
+      expect(comparison.traits.find(trait=>trait.trait==='speed')?.standardizedDifference).toBe(1.5)
+      expect(comparison.traits.find(trait=>trait.trait==='size')?.standardizedDifference).toBe(1.5)
+    })
+
+    it('reports explicit empty cohorts and retains six unavailable rows',()=>{
+      const noSurvivors=deriveSurvivorLossComparison(makeLedger(41,{startPopulation:3,outcomes:{survived:0,hunted:3,energy:0,unfed:0,late:0,aged:0}}))
+      const noLosses=deriveSurvivorLossComparison(makeLedger(42,{startPopulation:3,outcomes:{survived:3,hunted:0,energy:0,unfed:0,late:0,aged:0}}))
+      expect(noSurvivors.status).toBe('no-survivors')
+      expect(noSurvivors.traits).toHaveLength(6)
+      expect(noSurvivors.interpretation).toContain('No survivors were recorded')
+      expect(noLosses.status).toBe('no-losses')
+      expect(noLosses.traits).toHaveLength(6)
+      expect(noLosses.interpretation).toContain('No losses were recorded')
+    })
+
+    it('does not call a pattern when either cohort is below the minimum count',()=>{
+      const ledger=comparisonLedger()
+      ledger.outcomes={survived:2,hunted:2,energy:4,unfed:0,late:0,aged:0}
+      for(const trait of traitKeys)ledger.selection.start[trait].mean=(2*comparisonMeans[trait]+2*comparisonHuntedMeans[trait]+4*comparisonEnergyMeans[trait])/8
+      const comparison=deriveSurvivorLossComparison(ledger)
+      expect(comparison.status).toBe('available')
+      expect(comparison.patternStatus).toBe('too-few')
+      expect(comparison.possiblePattern).toBe(false)
+      expect(comparison.interpretation).toContain('requires at least 3 survivors and 3 losses')
+    })
+
+    it('keeps raw means when evaluated-cohort spread is zero or missing',()=>{
+      const ledger=comparisonLedger()
+      traitKeys.forEach((trait,index)=>{ledger.selection.start[trait].sd=index%2===0?0:null;ledger.selection.start[trait].variance=index%2===0?0:null})
+      const comparison=deriveSurvivorLossComparison(ledger)
+      expect(comparison).toMatchObject({status:'available',patternStatus:'spread-unavailable',possiblePattern:false,largestTrait:null,largestDifference:null,largestStandardizedDifference:null})
+      expect(comparison.traits.every(trait=>trait.standardizedDifference===null&&typeof trait.difference==='number')).toBe(true)
+      expect(comparison.interpretation).toContain('ranking unavailable')
+      expect(comparison.interpretation).toContain('raw means remain shown')
+    })
+
+    it('ranks only traits with comparable spread and discloses partial screening',()=>{
+      const ledger=comparisonLedger()
+      for(const trait of ['speed','size','sense','aggression'] as BiologicalTrait[]){ledger.selection.start[trait].sd=null;ledger.selection.start[trait].variance=null}
+      const comparison=deriveSurvivorLossComparison(ledger)
+      expect(comparison).toMatchObject({status:'available',patternStatus:'no-standout',possiblePattern:false,largestTrait:'exploration'})
+      expect(comparison.traits.filter(trait=>trait.standardizedDifference===null).map(trait=>trait.trait)).toEqual(['speed','size','sense','aggression'])
+      expect(comparison.interpretation).toContain('among the 2 traits with available evaluated-cohort spread')
+      expect(comparison.interpretation).toContain('4 traits were not screened')
+    })
+
+    it('rejects missing legacy profiles, partial/nonfinite profiles, and invalid counts',()=>{
+      const legacy=comparisonLedger()
+      delete (legacy as Partial<GenerationLedger>).selectionByOutcome
+      expect(deriveSurvivorLossComparison(legacy).status).toBe('unavailable')
+
+      const partial=comparisonLedger()
+      delete (partial.selectionByOutcome.energy as Partial<SelectionSummary>).speed
+      expect(deriveSurvivorLossComparison(partial).status).toBe('unavailable')
+
+      const nonfinite=comparisonLedger()
+      nonfinite.selectionByOutcome.energy.speed.mean=Number.NaN
+      expect(deriveSurvivorLossComparison(nonfinite).status).toBe('unavailable')
+
+      const mismatch=comparisonLedger()
+      mismatch.startPopulation=9
+      expect(deriveSurvivorLossComparison(mismatch).status).toBe('unavailable')
+
+      for(const invalid of [-1,1.5,Number.NaN,Number.POSITIVE_INFINITY,'1']){
+        const invalidCount=comparisonLedger()
+        ;(invalidCount.outcomes as unknown as Record<string,unknown>).hunted=invalid
+        expect(deriveSurvivorLossComparison(invalidCount).status).toBe('unavailable')
+      }
+    })
+
+    it('rejects contradictory survivor and weighted-baseline cross-checks',()=>{
+      const survivorMismatch=comparisonLedger()
+      survivorMismatch.selection.survivor.speed.mean=(survivorMismatch.selection.survivor.speed.mean as number)+.1
+      expect(deriveSurvivorLossComparison(survivorMismatch).status).toBe('unavailable')
+
+      const baselineMismatch=comparisonLedger()
+      baselineMismatch.selection.start.speed.mean=(baselineMismatch.selection.start.speed.mean as number)+.1
+      expect(deriveSurvivorLossComparison(baselineMismatch).status).toBe('unavailable')
+    })
+
+    it('renders six responsive trait rows with standardized differences and a non-causal caveat',()=>{
+      const markup=renderToStaticMarkup(createElement(GenerationJournal,{ledgers:[comparisonLedger()],events:[],requestedGeneration:null,onRequestedGenerationChange:()=>{}}))
+      expect(markup).toContain('Survivors vs recorded losses')
+      expect(markup).toContain('all recorded loss outcomes combined')
+      expect(markup).toContain('<strong>4</strong> survivors vs <strong>4</strong> recorded losses')
+      expect(markup).toContain('Survivors 1.80 · losses 0.90')
+      expect(markup).toContain('Survivor mean − loss mean: +1.8 cohort SD')
+      for(const label of ['Speed','Size','Sensing','Aggression','Caution','Exploration'])expect(markup).toContain(`<span>${label}</span>`)
+      expect(markup).toContain('does not establish that the trait caused survival')
+      expect(markup).not.toMatch(/NaN|Infinity|undefined/)
+      expect(markup).not.toMatch(/advantage|selected for/i)
+    })
+
+    it('does not promise trait rows when a cohort is empty',()=>{
+      const ledger=makeLedger(43,{startPopulation:3,outcomes:{survived:0,hunted:3,energy:0,unfed:0,late:0,aged:0}})
+      const markup=renderToStaticMarkup(createElement(GenerationJournal,{ledgers:[ledger],events:[],requestedGeneration:null,onRequestedGenerationChange:()=>{}}))
+      expect(markup).toContain('No survivors were recorded; trait means cannot be compared')
+      expect(markup).not.toContain('All six traits are shown')
+      expect(markup).not.toContain('Survivor and combined loss trait means')
+    })
   })
 
   it('finds one strong, descriptive outcome pattern against the evaluated cohort',()=>{

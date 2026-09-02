@@ -42,6 +42,32 @@ export interface PressureFingerprint {
   interpretation:string
 }
 
+export type SurvivorLossComparisonStatus='available'|'no-survivors'|'no-losses'|'unavailable'
+export type SurvivorLossPatternStatus='pattern'|'no-standout'|'too-few'|'spread-unavailable'|'unavailable'
+
+export interface SurvivorLossTraitComparison {
+  trait:BiologicalTrait
+  traitLabel:string
+  survivorMean:number|null
+  lossMean:number|null
+  difference:number|null
+  standardizedDifference:number|null
+}
+
+export interface SurvivorLossComparison {
+  status:SurvivorLossComparisonStatus
+  patternStatus:SurvivorLossPatternStatus
+  possiblePattern:boolean
+  evaluatedPopulation:number|null
+  survivorCount:number|null
+  lossCount:number|null
+  traits:SurvivorLossTraitComparison[]
+  largestTrait:BiologicalTrait|null
+  largestDifference:number|null
+  largestStandardizedDifference:number|null
+  interpretation:string
+}
+
 export interface GenerationReview {
   generation:number
   evaluatedPopulation:number
@@ -195,6 +221,138 @@ export function deriveJournalEvents(events:readonly WorldEvent[],generation:numb
 const finiteNumber=(value:unknown):value is number=>typeof value==='number'&&Number.isFinite(value)
 const unavailableFingerprint=(cause:EndCause,label:string,count:number):PressureFingerprint=>({cause,label,count,comparison:null,status:'unavailable',interpretation:'Pattern unavailable from this runtime data.'})
 
+/**
+ * The baseline reconstruction accepts small floating-point drift from a
+ * weighted sum, while still rejecting a contradictory retained record. Keep
+ * both tolerances explicit so future format changes do not hide a mismatch.
+ */
+export const SURVIVOR_LOSS_BASELINE_ABSOLUTE_TOLERANCE=1e-9
+export const SURVIVOR_LOSS_BASELINE_RELATIVE_TOLERANCE=1e-9
+
+const survivorLossTraits=():SurvivorLossTraitComparison[]=>JOURNAL_TRAITS.map(trait=>({trait,traitLabel:TRAIT_LABELS[trait],survivorMean:null,lossMean:null,difference:null,standardizedDifference:null}))
+const survivorLossField=(source:unknown,field:string):unknown=>{
+  if(!isJournalRecord(source))return undefined
+  try{return source[field]}catch{return undefined}
+}
+const safeNonnegativeInteger=(value:unknown):value is number=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0
+const survivorLossMean=(profile:unknown,trait:BiologicalTrait):number|null=>{
+  const moment=survivorLossField(profile,trait),mean=survivorLossField(moment,'mean')
+  return finiteNumber(mean)?mean:null
+}
+const survivorLossSd=(profile:unknown,trait:BiologicalTrait):number|null=>{
+  const moment=survivorLossField(profile,trait),sd=survivorLossField(moment,'sd')
+  return finiteNumber(sd)&&sd>0?sd:null
+}
+const survivorLossMeansAgree=(first:number,second:number):boolean=>{
+  const difference=Math.abs(first-second)
+  if(!finiteNumber(difference))return false
+  const scale=Math.max(1,Math.abs(first),Math.abs(second))
+  return difference<=SURVIVOR_LOSS_BASELINE_ABSOLUTE_TOLERANCE+SURVIVOR_LOSS_BASELINE_RELATIVE_TOLERANCE*scale
+}
+const survivorLossResult=(status:SurvivorLossComparisonStatus,evaluatedPopulation:number|null,survivorCount:number|null,lossCount:number|null,interpretation:string):SurvivorLossComparison=>({
+  status,
+  patternStatus:status==='available'?'spread-unavailable':'unavailable',
+  possiblePattern:false,
+  evaluatedPopulation,
+  survivorCount,
+  lossCount,
+  traits:survivorLossTraits(),
+  largestTrait:null,
+  largestDifference:null,
+  largestStandardizedDifference:null,
+  interpretation,
+})
+
+/**
+ * Compare survivors with all recorded losses for one retained generation.
+ * Every positive-count outcome must contribute all six trait means; a partial
+ * profile invalidates the complete comparison instead of silently dropping a
+ * trait or outcome. The baseline is independently reconstructed from the
+ * count-weighted outcome means before any rows are exposed.
+ */
+export function deriveSurvivorLossComparison(ledger:GenerationLedger|undefined):SurvivorLossComparison{
+  if(!ledger)return survivorLossResult('unavailable',null,null,null,'Comparison unavailable: this retained record is missing.')
+  const source=ledger as unknown
+  const evaluatedPopulation=survivorLossField(source,'startPopulation')
+  const outcomes=survivorLossField(source,'outcomes')
+  const rawCounts=JOURNAL_OUTCOME_KEYS.map(cause=>survivorLossField(outcomes,cause))
+  if(!safeNonnegativeInteger(evaluatedPopulation)||rawCounts.some(count=>!safeNonnegativeInteger(count)))return survivorLossResult('unavailable',null,null,null,'Comparison unavailable: evaluated-cohort counts are incomplete or invalid.')
+  const counts=Object.fromEntries(JOURNAL_OUTCOME_KEYS.map((cause,index)=>[cause,rawCounts[index]])) as Record<EndCause,number>
+  const total=JOURNAL_OUTCOME_KEYS.reduce((sum,cause)=>sum+counts[cause],0)
+  if(!Number.isSafeInteger(total)||total!==evaluatedPopulation)return survivorLossResult('unavailable',evaluatedPopulation,null,null,'Comparison unavailable: outcome counts do not reconcile to the evaluated cohort.')
+  const survivorCount=counts.survived
+  const lossCount=total-survivorCount
+  if(survivorCount===0)return survivorLossResult('no-survivors',evaluatedPopulation,survivorCount,lossCount,'No survivors were recorded, so survivor-versus-loss means are unavailable.')
+  if(lossCount===0)return survivorLossResult('no-losses',evaluatedPopulation,survivorCount,lossCount,'No losses were recorded, so survivor-versus-loss means are unavailable.')
+
+  const selection=survivorLossField(source,'selection')
+  const baselineProfile=survivorLossField(selection,'start')
+  const survivorProfile=survivorLossField(selection,'survivor')
+  const outcomeProfiles=survivorLossField(source,'selectionByOutcome')
+  const survivedProfile=survivorLossField(outcomeProfiles,'survived')
+  if(!isJournalRecord(baselineProfile)||!isJournalRecord(survivorProfile)||!isJournalRecord(outcomeProfiles)||!isJournalRecord(survivedProfile))return survivorLossResult('unavailable',evaluatedPopulation,survivorCount,lossCount,'Comparison unavailable: survivor, baseline, or outcome profiles are missing.')
+
+  const traits:SurvivorLossTraitComparison[]=[]
+  for(const trait of JOURNAL_TRAITS){
+    const baselineMean=survivorLossMean(baselineProfile,trait)
+    const survivorMean=survivorLossMean(survivorProfile,trait)
+    const survivedOutcomeMean=survivorLossMean(survivedProfile,trait)
+    if(baselineMean===null||survivorMean===null||survivedOutcomeMean===null||!survivorLossMeansAgree(survivorMean,survivedOutcomeMean))return survivorLossResult('unavailable',evaluatedPopulation,survivorCount,lossCount,'Comparison unavailable: survivor profile means disagree with the recorded survived outcome.')
+    let weightedTotal=0
+    let weightedLossTotal=0
+    for(const cause of JOURNAL_OUTCOME_KEYS){
+      const count=counts[cause]
+      const profile=survivorLossField(outcomeProfiles,cause)
+      if(count>0){
+        const mean=survivorLossMean(profile,trait)
+        if(mean===null)return survivorLossResult('unavailable',evaluatedPopulation,survivorCount,lossCount,'Comparison unavailable: a positive-count outcome has an incomplete trait profile.')
+        const contribution=count*mean
+        if(!finiteNumber(contribution))return survivorLossResult('unavailable',evaluatedPopulation,survivorCount,lossCount,'Comparison unavailable: weighted trait means overflowed the finite range.')
+        weightedTotal+=contribution
+        if(cause!=='survived')weightedLossTotal+=contribution
+      }
+    }
+    const reconstructedBaseline=weightedTotal/evaluatedPopulation
+    const combinedLossMean=weightedLossTotal/lossCount
+    const difference=survivorMean-combinedLossMean
+    if(!finiteNumber(reconstructedBaseline)||!survivorLossMeansAgree(reconstructedBaseline,baselineMean)||!finiteNumber(combinedLossMean)||!finiteNumber(difference))return survivorLossResult('unavailable',evaluatedPopulation,survivorCount,lossCount,'Comparison unavailable: outcome means contradict the evaluated-cohort baseline.')
+    const sd=survivorLossSd(baselineProfile,trait)
+    const standardizedDifference=sd===null||!finiteNumber(difference/sd)?null:difference/sd
+    traits.push({trait,traitLabel:TRAIT_LABELS[trait],survivorMean,lossMean:combinedLossMean,difference,standardizedDifference})
+  }
+
+  const standardized=traits.filter(trait=>trait.standardizedDifference!==null)
+  const strongest=standardized.length?standardized.reduce((best,current)=>Math.abs(current.standardizedDifference as number)>Math.abs(best.standardizedDifference as number)?current:best):null
+  const missingSpreadCount=traits.length-standardized.length
+  const enough=survivorCount>=SELECTION_PATTERN_MIN_COUNT&&lossCount>=SELECTION_PATTERN_MIN_COUNT
+  const patternStatus:SurvivorLossPatternStatus=!enough?'too-few':!strongest?'spread-unavailable':meetsStandardizedEffectThreshold(strongest.standardizedDifference as number,SELECTION_PATTERN_THRESHOLD)?'pattern':'no-standout'
+  const pattern=patternStatus==='pattern'
+  const ranking=strongest
+    ? `Largest observed separation${missingSpreadCount?` among the ${standardized.length} traits with available evaluated-cohort spread`:''}: ${strongest.traitLabel} (${formatSignedEffect(strongest.standardizedDifference as number)} evaluated-cohort SD).`
+    : 'Largest observed separation ranking unavailable because evaluated-cohort spread was unavailable for all six traits.'
+  const partialCoverage=missingSpreadCount?` ${missingSpreadCount} ${missingSpreadCount===1?'trait was':'traits were'} not screened because evaluated-cohort spread was unavailable.`:''
+  const screening=pattern
+    ? `Possible pattern threshold reached for ${strongest?.traitLabel} (${formatSignedEffect(strongest?.standardizedDifference as number)} evaluated-cohort SD).${partialCoverage}`
+    : patternStatus==='too-few'
+      ? `Pattern screening requires at least ${SELECTION_PATTERN_MIN_COUNT} survivors and ${SELECTION_PATTERN_MIN_COUNT} losses.`
+      : patternStatus==='spread-unavailable'
+        ? 'Pattern screening was unavailable because evaluated-cohort spread was unavailable for all six traits; raw means remain shown.'
+        : `No threshold pattern reached the ${SELECTION_PATTERN_THRESHOLD} evaluated-cohort SD threshold among the ${standardized.length} traits with available spread.${partialCoverage}`
+  return{
+    status:'available',
+    patternStatus,
+    possiblePattern:pattern,
+    evaluatedPopulation,
+    survivorCount,
+    lossCount,
+    traits,
+    largestTrait:strongest?.trait??null,
+    largestDifference:strongest?.difference??null,
+    largestStandardizedDifference:strongest?.standardizedDifference??null,
+    interpretation:`${ranking} Descriptive within this generation; survivors (n=${survivorCount}) are compared with all recorded loss outcomes combined (n=${lossCount}). ${screening} This does not establish that the trait caused survival.`,
+  }
+}
+
 /** Derive one cautious, outcome-specific trait comparison without making causal claims. */
 export function derivePressureFingerprints(ledger:GenerationLedger|undefined):PressureFingerprint[]{
   if(!ledger)return[]
@@ -324,12 +482,36 @@ const formatSignedEffect=(value:number)=>{
   return`${displayEffect>=0?'+':'-'}${magnitude.toFixed(decimals)}`
 }
 
+const formatSurvivorLossDifference=(trait:SurvivorLossTraitComparison)=>{
+  if(trait.difference===null||!finiteNumber(trait.difference))return'Unavailable'
+  if(trait.standardizedDifference!==null&&finiteNumber(trait.standardizedDifference))return`${formatSignedEffect(trait.standardizedDifference)} cohort SD`
+  return`${trait.difference>=0?'+':''}${formatNumber(trait.difference)} raw · cohort spread unavailable`
+}
+
+function SurvivorLossComparisonPanel({comparison}:{comparison:SurvivorLossComparison}){
+  const statusCopy=comparison.status==='no-survivors'
+    ? 'No survivors were recorded; trait means cannot be compared for this generation.'
+    : comparison.status==='no-losses'
+      ? 'No losses were recorded; trait means cannot be compared for this generation.'
+      : comparison.interpretation
+  return <div className="event-story journal-events pressure-patterns" data-comparison-status={comparison.status}>
+    <h3>Survivors vs recorded losses</h3>
+    {comparison.status==='available'&&<><p className="journal-kicker">All six traits are shown. Loss means count-weight all recorded loss outcomes combined; survivor-minus-loss differences use evaluated-cohort spread when available.</p><p className="journal-equation"><strong>{comparison.survivorCount}</strong> survivors vs <strong>{comparison.lossCount}</strong> recorded losses</p><ul className="story-grid" aria-label="Survivor and combined loss trait means for the selected generation">{comparison.traits.map(trait=>{
+      const means=trait.survivorMean===null||trait.lossMean===null?null:formatAdaptivePair(trait.survivorMean,trait.lossMean)
+      const label=trait.traitLabel[0].toUpperCase()+trait.traitLabel.slice(1)
+      return <li key={trait.trait}><span>{label}</span><strong>Survivors {means?.[0]??'Unavailable'} · losses {means?.[1]??'Unavailable'}</strong><span>Survivor mean − loss mean: {formatSurvivorLossDifference(trait)}</span></li>
+    })}</ul></>}
+    <p className={comparison.status==='available'?'journal-kicker':'journal-warning'} role="note">{statusCopy}</p>
+  </div>
+}
+
 export function GenerationJournal({ledgers,events,requestedGeneration,onRequestedGenerationChange}:GenerationJournalProps){
   const previousLatestGeneration=useRef<number|null>(null)
   const selection=useMemo(()=>resolveJournalSelection(ledgers,requestedGeneration),[ledgers,requestedGeneration])
   const selectedLedger=selection.entries.find(ledger=>ledger.generation===selection.selectedGeneration)
   const review=deriveGenerationReview(selectedLedger)
   const inheritance=deriveInheritanceAudit(selectedLedger)
+  const survivorLossComparison=deriveSurvivorLossComparison(selectedLedger)
   const pressureFingerprints=derivePressureFingerprints(selectedLedger)
   const eventReview=deriveJournalEvents(events,selection.selectedGeneration)
   const latestGeneration=selection.entries.at(-1)?.generation??null
@@ -373,6 +555,7 @@ export function GenerationJournal({ledgers,events,requestedGeneration,onRequeste
       <div className="journal-takeaway"><strong>Recorded outcome summary</strong><span>{deriveGenerationInterpretation(review)}</span></div>
       <div className="event-story journal-events pressure-patterns"><h3>How offspring inherited traits</h3><p className="journal-kicker">One admitted parent produces one same-lineage offspring. Newborns copy all six traits, then enabled traits may mutate independently.{inheritance.status==='available'?' Rows show parent mean → newborn mean.':''}</p>{inheritance.status==='available'?<><p className="journal-equation"><strong>Generation {review.generation} → {review.generation+1}</strong> · {inheritance.offspringCount} newborns · <strong>{inheritance.changedTraitValues}</strong> final trait values changed out of {inheritance.offspringCount*JOURNAL_TRAITS.length}</p><ul className="story-grid">{JOURNAL_TRAITS.map(trait=>{const summary=inheritance.traits[trait],means=formatAdaptivePair(summary.parentMean!,summary.offspringMean!);return <li key={trait}><span>{TRAIT_LABELS[trait][0].toUpperCase()+TRAIT_LABELS[trait].slice(1)}</span><strong>{means[0]} → {means[1]} · {summary.changedCount} of {inheritance.offspringCount} changed</strong></li>})}</ul></>:inheritance.status==='no-births'?<p className="journal-kicker">Generation {review.generation} → {review.generation+1}: no parent→offspring comparison; no admitted parent produced a newborn.</p>:<p className="journal-kicker">Generation {review.generation} → {review.generation+1}: this retained record has {review.births.admitted} births, but its parent→offspring trait comparison is unavailable.</p>}{inheritance.status==='available'&&<p className="journal-kicker">Changed means the final clamped value differed from the matched parent; this is not a mutation-attempt count. A zero here does not imply mutation was disabled.</p>}</div>
       <div className="journal-takeaway"><strong>Selection takeaway</strong><span>{review.takeaway}</span></div>
+      <SurvivorLossComparisonPanel comparison={survivorLossComparison}/>
       {pressureFingerprints.length>0&&<div className="event-story journal-events pressure-patterns"><h3>Outcome trait patterns</h3><p className="journal-kicker">Compared with the evaluated cohort; associations are descriptive, not proof of cause.</p><ul>{pressureFingerprints.map(fingerprint=>{const comparison=fingerprint.comparison,means=comparison?formatAdaptivePair(comparison.outcomeMean,comparison.baselineMean):null;return <li key={fingerprint.cause}><span>{fingerprint.label} · n={fingerprint.count}</span>{comparison&&means?<strong>{comparison.traitLabel}: {means[0]} vs cohort {means[1]} ({comparison.direction})</strong>:<strong>Trait comparison unavailable.</strong>}<span>{fingerprint.interpretation}</span></li>})}</ul></div>}
       <div className="event-story journal-events"><h3>Ecosystem events · generation {review.generation}</h3>{eventReview.events.length?<>{eventReview.status==='partial'&&<p className="journal-kicker">Showing retained events; earlier events from this generation may no longer be available.</p>}<ul>{eventReview.events.map((event,index)=><li key={`${isValidJournalEventGeneration(journalEventField(event,'generation'))?journalEventField(event,'generation'):'unknown'}-${isValidJournalEventDay(journalEventField(event,'day'))?journalEventField(event,'day'):'unavailable'}-${journalEventSortKind(event)}-${index}`}><span>{formatJournalEventDay(journalEventField(event,'day'))}</span><strong>{formatJournalEventSummary(journalEventField(event,'summary'))}</strong></li>)}</ul></>:<p className="journal-kicker">{eventReview.status==='unknown'?'Event history is unavailable for this generation.':'No shocks occurred in this generation.'}</p>}</div>
     </>}
