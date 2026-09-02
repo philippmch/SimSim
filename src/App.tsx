@@ -57,9 +57,15 @@ export function InterventionFeedFallback(){
   return <div className="interventions" role="group" aria-label="Recent shocks" aria-busy="true"><span><strong style={{fontSize:12}}>Recent shocks</strong><small style={{fontSize:10}}>Opening recorded shocks…</small></span></div>
 }
 
-export function SimulationEventStory({world}:{world:World}){
+export interface SimulationEventStoryProps {
+  world: World
+  selectedIndividualId?: number | null
+  onShowIndividual?: (individualId:number)=>void
+}
+
+export function SimulationEventStory({world,selectedIndividualId,onShowIndividual}:SimulationEventStoryProps){
   return hasOwnActivityField(world)
-    ? <Suspense fallback={<SimulationActivityFallback/>}><SimulationActivity world={world}/></Suspense>
+    ? <Suspense fallback={<SimulationActivityFallback/>}><SimulationActivity world={world} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual}/></Suspense>
     : <Suspense fallback={<InterventionFeedFallback/>}><InterventionFeed events={world.events}/></Suspense>
 }
 
@@ -281,6 +287,7 @@ function App(){
   const settingsCloseRef=useRef<HTMLButtonElement>(null)
   const selectedInspectorRef=useRef<HTMLDivElement>(null)
   const selectedInspectorFocusRequestRef=useRef<number|null>(null)
+  const activityFocusRequestRef=useRef(0)
   const [actionStatus,setActionStatus]=useState('')
   const suppressPlaybackAnnouncementRef=useRef(false)
   const [observedPath,setObservedPath]=useState('Inspect a creature, then choose Next action to observe its perception and decision path.')
@@ -327,11 +334,12 @@ function App(){
   const closeExperiment=useCallback(()=>{setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
   const replayExperiment=useCallback((config:Config)=>{setDraft(sanitizeConfig(config));setActionStatus('Control seed staged. Choose Apply & restart to replay it live.');setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
   const [terminalOutcome,setTerminalOutcome]=useState<LastInspectedOutcome|null>(null)
-  const reset=useCallback(()=>{suppressPlaybackAnnouncementRef.current=false;pendingStepRef.current=null;pendingFinishRef.current=null;selectedInspectorFocusRequestRef.current=null;setStepPending(false);const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);setTerminalOutcome(null);setRequestedGeneration(null);setGenerationRevealRequest(null);setObservedPath('Inspect a creature, then choose Next action to observe its perception and decision path.');persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}const controller=controllerRef.current;if(controller){pendingPulseResetRef.current=true;controller.send({type:'reset',config:clean})}setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
+  const reset=useCallback(()=>{suppressPlaybackAnnouncementRef.current=false;pendingStepRef.current=null;pendingFinishRef.current=null;selectedInspectorFocusRequestRef.current=null;activityFocusRequestRef.current++;setStepPending(false);const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);setTerminalOutcome(null);setRequestedGeneration(null);setGenerationRevealRequest(null);setObservedPath('Inspect a creature, then choose Next action to observe its perception and decision path.');persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}const controller=controllerRef.current;if(controller){pendingPulseResetRef.current=true;controller.send({type:'reset',config:clean})}setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
   const applyParameters=useCallback(()=>{reset();closeSettings()},[reset,closeSettings])
   const finishGeneration=()=>{const controller=controllerRef.current;if(!controller||pendingFinishRef.current!==null)return;suppressPlaybackAnnouncementRef.current=false;const interrupted=pendingStepRef.current!==null;pendingStepRef.current=null;setStepPending(false);const finishId=++nextFinishIdRef.current;pendingFinishRef.current=finishId;if(interrupted)setObservedPath('Manual step interrupted; choose Next action to retry.');setPlaying(false);controller.send({type:'finish',finishId})}
   const nextAction=()=>{const controller=controllerRef.current;if(!controller||stepPending||pendingStepRef.current!==null)return;suppressPlaybackAnnouncementRef.current=false;const stepId=++nextStepIdRef.current;pendingStepRef.current=stepId;setStepPending(true);setObservedPath('Next action pending…');setPlaying(false);controller.send({type:'step',stepId})}
-  const selectIndividual=(individualId:number|null)=>{selectedInspectorFocusRequestRef.current=individualId;setTerminalOutcome(null);setSelectedIndividualId(individualId);controllerRef.current?.send({type:'inspect',individualId})}
+  const selectIndividual=(individualId:number|null)=>{activityFocusRequestRef.current++;selectedInspectorFocusRequestRef.current=individualId;setTerminalOutcome(null);setSelectedIndividualId(individualId);controllerRef.current?.send({type:'inspect',individualId})}
+  const showActivityIndividual=(individualId:number)=>{if(!Number.isSafeInteger(individualId)||individualId<1||!world.creatures.some(creature=>creature.alive&&creature.individualId===individualId))return;selectedInspectorFocusRequestRef.current=null;activityFocusRequestRef.current++;const request=activityFocusRequestRef.current;setTerminalOutcome(null);setSelectedIndividualId(individualId);setArenaFocus('all');controllerRef.current?.send({type:'inspect',individualId});const focusArena=()=>{if(activityFocusRequestRef.current!==request)return;const target=document.getElementById('arena-creature-picker') as HTMLSelectElement|null;if(!target)return;try{target.closest('.arena-wrap')?.scrollIntoView({block:'center',inline:'nearest'})}catch{/* A legacy browser may not support options. */}try{target.focus({preventScroll:true})}catch{target.focus()}};if(typeof window.requestAnimationFrame==='function')window.requestAnimationFrame(focusArena);else focusArena()}
   const intervene=(kind:InterventionKind)=>{suppressPlaybackAnnouncementRef.current=false;controllerRef.current?.send({type:'intervene',kind});setActionStatus(kind==='resource-bloom'?'Resource bloom released.':kind==='drought'?'Drought applied.':'Founder migration released.')}
   const reviewSettlement=useCallback((generation:number)=>{void reviewSettlementAndNavigate(generation,{onSelectGeneration:setRequestedGeneration})},[])
   const clearGenerationReveal=useCallback((generation:number)=>setGenerationRevealRequest(current=>current===generation?null:current),[])
@@ -378,6 +386,7 @@ function App(){
   },[selected,selectedIndividualId])
   useEffect(()=>{
     if(selectedIndividualId===null||world.creatures.some(creature=>creature.alive&&creature.individualId===selectedIndividualId))return
+    activityFocusRequestRef.current++
     selectedInspectorFocusRequestRef.current=null
     setTerminalOutcome(resolveTerminalOutcome({selectedIndividualId,creatures:world.creatures,recordedOutcome:world.lastInspectedOutcome,currentGeneration:world.generation}))
     setSelectedIndividualId(null)
@@ -412,7 +421,7 @@ function App(){
           <label className="speed-select">Playback speed <select value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value={.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option><option value={4}>4×</option></select></label>
           <button className="reset" onClick={reset}>{dirty?'Apply & restart':'Restart run'}</button>
         </div>
-        <SimulationEventStory world={world}/>
+        <SimulationEventStory world={world} selectedIndividualId={selectedIndividualId} onShowIndividual={showActivityIndividual}/>
         <div className="interventions" role="status" aria-live="polite" aria-label="Observed action path">
           <span><strong>Observed path</strong><small>Latest manual step</small></span>
           <output>{observedPath}</output>

@@ -58,12 +58,29 @@ function safeSummary(value: unknown): string | null {
   return value.trim()
 }
 
+function safeArray(value: unknown): readonly unknown[] {
+  try {
+    return Array.isArray(value) ? value : []
+  } catch {
+    return []
+  }
+}
+
+function safeArrayLength(value: readonly unknown[]): number {
+  try {
+    const length = value.length
+    return Number.isSafeInteger(length) && length >= 0 ? length : 0
+  } catch {
+    return 0
+  }
+}
+
 function safeActorIds(value: unknown): number[] {
-  if (!Array.isArray(value)) return []
+  const source = safeArray(value)
   const actorIds: number[] = []
-  for (let index = 0; index < value.length; index++) {
+  for (let index = 0; index < safeArrayLength(source); index++) {
     try {
-      const actorId = value[index]
+      const actorId = source[index]
       if (safeInteger(actorId, 1)) actorIds.push(actorId)
     } catch {
       // A malformed legacy array must not prevent the rest of the snapshot from rendering.
@@ -86,6 +103,107 @@ export interface SimulationActivityMoment {
   attackerId: number | null
   preyId: number | null
   contestChance: number | null
+}
+
+export type ActivityActorStatus = 'living' | 'dead-but-present' | 'absent'
+export type ActivityActorRole = 'attacker' | 'prey' | 'collector' | 'returning individual' | 'involved individual'
+
+export interface ActivityActorTarget {
+  individualId: number
+  role: ActivityActorRole
+  roleLabel: string
+  status: ActivityActorStatus
+}
+
+const ACTIVITY_ACTOR_ROLE_LABELS: Record<ActivityActorRole, string> = {
+  attacker: 'Attacker',
+  prey: 'Prey',
+  collector: 'Collector',
+  'returning individual': 'Returning individual',
+  'involved individual': 'Involved individual',
+}
+
+const ACTIVITY_ACTOR_STATUS_LABELS: Record<ActivityActorStatus, string> = {
+  living: 'current arena state available',
+  'dead-but-present': 'dead in current cohort',
+  absent: 'not in current cohort',
+}
+
+export function formatActivityActorRole(role: ActivityActorRole): string {
+  return ACTIVITY_ACTOR_ROLE_LABELS[role] ?? ACTIVITY_ACTOR_ROLE_LABELS['involved individual']
+}
+
+export function formatActivityActorStatus(status: ActivityActorStatus): string {
+  return ACTIVITY_ACTOR_STATUS_LABELS[status] ?? ACTIVITY_ACTOR_STATUS_LABELS.absent
+}
+
+/**
+ * Resolve event actor IDs against the current cohort by stable individualId.
+ * Explicit attack roles are inserted first; older generic actorIds then retain
+ * their recorded order. A missing or malformed current cohort simply makes a
+ * target absent rather than preventing the activity story from rendering.
+ */
+export function deriveActivityActorTargets(moment: unknown, currentCreatures: unknown): ActivityActorTarget[] {
+  const currentStatus = new Map<number, ActivityActorStatus>()
+  const creatures = safeArray(currentCreatures)
+  for (let index = 0; index < safeArrayLength(creatures); index++) {
+    let creature: unknown
+    try {
+      creature = creatures[index]
+    } catch {
+      continue
+    }
+    const individualId = field(creature, 'individualId')
+    if (!safeInteger(individualId, 1)) continue
+    const alive = field(creature, 'alive')
+    if (alive === true) currentStatus.set(individualId, 'living')
+    else if (alive === false && currentStatus.get(individualId) !== 'living') currentStatus.set(individualId, 'dead-but-present')
+  }
+
+  const targets: ActivityActorTarget[] = []
+  const seen = new Set<number>()
+  const append = (value: unknown, role: ActivityActorRole) => {
+    if (!safeInteger(value, 1) || seen.has(value)) return
+    seen.add(value)
+    const status = currentStatus.get(value) ?? 'absent'
+    targets.push({ individualId: value, role, roleLabel: formatActivityActorRole(role), status })
+  }
+  append(field(moment, 'attackerId'), 'attacker')
+  append(field(moment, 'preyId'), 'prey')
+
+  const kind = field(moment, 'kind')
+  const remainingRole: ActivityActorRole = kind === 'food-collected'
+    ? 'collector'
+    : kind === 'reached-home'
+      ? 'returning individual'
+      : 'involved individual'
+  let remainingIndex = 0
+  for (const actorId of safeActorIds(field(moment, 'actorIds'))) {
+    append(actorId, remainingIndex === 0 ? remainingRole : 'involved individual')
+    remainingIndex++
+  }
+  return targets
+}
+
+/** Keep the relation sentence factual: event involvement is not causation. */
+export function formatActivityActorRelation(selectedIndividualId: unknown, actors: readonly ActivityActorTarget[]): string {
+  const selected = safeInteger(selectedIndividualId, 1) ? selectedIndividualId : null
+  const validActorIds: number[] = []
+  const actorList = safeArray(actors)
+  for (let index = 0; index < safeArrayLength(actorList); index++) {
+    let actor: unknown
+    try {
+      actor = actorList[index]
+    } catch {
+      continue
+    }
+    const actorId = field(actor, 'individualId')
+    if (safeInteger(actorId, 1) && !validActorIds.includes(actorId)) validActorIds.push(actorId)
+  }
+  if (validActorIds.length === 0) return 'Simulation-wide moment; no individual actor recorded.'
+  if (selected !== null && validActorIds.includes(selected)) return `Selected Individual ${selected} was involved in this moment.`
+  if (selected !== null) return `Other individuals acted in this moment; Individual ${selected} was not an actor.`
+  return 'Individuals were involved in this moment.'
 }
 
 /** Normalize one retained record; malformed records are omitted from the story. */
@@ -136,15 +254,23 @@ export interface SimulationActivityFeed {
 
 /** Normalize and order activity without mutating the engine's snapshot. */
 export function deriveSimulationActivity(activity: unknown, activityDropped: unknown = 0, retentionLimit: unknown = MAX_VISIBLE_ACTIVITY_ENTRIES): SimulationActivityFeed {
-  const source = Array.isArray(activity) ? activity : []
+  const source = safeArray(activity)
   const limit = safeRetentionLimit(retentionLimit)
   const normalized: SimulationActivityMoment[] = []
   let invalidCount = 0
-  source.forEach((entry, sourceIndex) => {
+  const rawCount = safeArrayLength(source)
+  for (let sourceIndex = 0; sourceIndex < rawCount; sourceIndex++) {
+    let entry: unknown
+    try {
+      entry = source[sourceIndex]
+    } catch {
+      invalidCount++
+      continue
+    }
     const moment = normalizeActivityMoment(entry, sourceIndex)
     if (moment) normalized.push(moment)
     else invalidCount++
-  })
+  }
   normalized.sort((first, second) => second.sequence - first.sequence || second.sourceIndex - first.sourceIndex)
   const entries = normalized.slice(0, limit)
   const overflowCount = Math.max(0, normalized.length - entries.length)
@@ -152,7 +278,7 @@ export function deriveSimulationActivity(activity: unknown, activityDropped: unk
   return {
     entries,
     latest: entries[0] ?? null,
-    rawCount: source.length,
+    rawCount,
     retainedCount: entries.length,
     displayedCount: entries.length,
     droppedCount: Math.min(Number.MAX_SAFE_INTEGER, explicitDropped + invalidCount + overflowCount),
@@ -287,16 +413,69 @@ function activityKey(moment: SimulationActivityMoment | null): string | null {
   return moment ? `${moment.sequence}:${moment.sourceIndex}:${moment.kind}:${moment.summary}` : null
 }
 
+type ActivityActorCallback = (individualId: number) => void
+
+interface ActivityActorAffordancesProps {
+  moment: SimulationActivityMoment
+  currentCreatures: unknown
+  selectedIndividualId?: number | null
+  onShowIndividual?: ActivityActorCallback
+}
+
+function activityActorDescription(target: ActivityActorTarget): string {
+  return `${target.roleLabel} Individual ${target.individualId}`
+}
+
+function activityActorControlLabel(target: ActivityActorTarget): string {
+  return `Show current arena state for ${activityActorDescription(target)}; this is not the historical event position.`
+}
+
+function ActivityActorAffordances({ moment, currentCreatures, selectedIndividualId, onShowIndividual }: ActivityActorAffordancesProps) {
+  const targets = deriveActivityActorTargets(moment, currentCreatures)
+  if (targets.length === 0) {
+    return <span style={{ flexBasis: '100%', minWidth: 0, whiteSpace: 'normal', fontSize: 11, lineHeight: 1.35 }}>{formatActivityActorRelation(selectedIndividualId, targets)}</span>
+  }
+
+  return <div role="group" aria-label="Individuals involved in this moment" style={{ flex: '1 1 100%', minWidth: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5 }}>
+    <span style={{ flexBasis: '100%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1, whiteSpace: 'normal' }}>
+      <strong>Event actors</strong>
+      <small>Controls show each actor’s current state in the arena, not a historical event position.</small>
+    </span>
+    <span style={{ flexBasis: '100%', minWidth: 0, whiteSpace: 'normal', fontSize: 11, lineHeight: 1.35 }}>{formatActivityActorRelation(selectedIndividualId, targets)}</span>
+    {onShowIndividual && targets.length > 2 && targets.some(target => target.status === 'living')
+      ? <label style={{ flex: '1 1 190px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3, fontSize: 10, color: 'var(--muted)' }}>
+        <span>Choose a living actor to show its current arena state</span>
+        <select aria-label="Choose an event actor to show its current arena state" value={targets.some(target => target.status === 'living' && target.individualId === selectedIndividualId) ? String(selectedIndividualId) : ''} onChange={event => {
+          const individualId = Number(event.target.value)
+          const target = targets.find(candidate => candidate.individualId === individualId && candidate.status === 'living')
+          if (target) onShowIndividual(target.individualId)
+        }} style={{ minWidth: 0, maxWidth: '100%', minHeight: 44, padding: '5px 7px', background: 'var(--paper)', color: 'var(--ink)', colorScheme: 'light dark' }}>
+          <option value="">Select a living actor</option>
+          {targets.map(target => <option key={`${target.role}-${target.individualId}`} value={target.individualId} disabled={target.status !== 'living'}>{`${target.roleLabel} · Individual ${target.individualId} · ${formatActivityActorStatus(target.status)}`}</option>)}
+        </select>
+      </label>
+      : <div style={{ flex: '1 1 100%', minWidth: 0, display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+        {targets.map(target => target.status === 'living' && onShowIndividual
+          ? <button key={`${target.role}-${target.individualId}`} type="button" onClick={() => onShowIndividual(target.individualId)} aria-label={activityActorControlLabel(target)} style={{ flex: '1 1 150px', minWidth: 0, whiteSpace: 'normal', lineHeight: 1.3 }}>{`${target.roleLabel} · Individual ${target.individualId} · current arena state`}</button>
+          : <span key={`${target.role}-${target.individualId}`} style={{ flex: '1 1 150px', minWidth: 0, whiteSpace: 'normal', fontSize: 10, lineHeight: 1.35 }}>{`${target.roleLabel} · Individual ${target.individualId} · ${formatActivityActorStatus(target.status)}`}</span>)}
+      </div>}
+  </div>
+}
+
 export interface SimulationActivityProps {
   /** The complete snapshot is accepted as unknown so old saved worlds remain renderable. */
   world: unknown
+  selectedIndividualId?: number | null
+  /** Activity navigation is separate from direct arena selection. */
+  onShowIndividual?: ActivityActorCallback
 }
 
-export function SimulationActivity({ world }: SimulationActivityProps) {
+export function SimulationActivity({ world, selectedIndividualId, onShowIndividual }: SimulationActivityProps) {
   const activityPresent = hasWorldActivityTelemetry(world)
   const activity = field(world, 'activity')
   const activityDropped = field(world, 'activityDropped')
   const config = field(world, 'config')
+  const currentCreatures = field(world, 'creatures')
   const feed = deriveSimulationActivity(activity, activityDropped)
   const latestKey = activityKey(feed.latest)
   const previousKey = useRef<string | null | undefined>(undefined)
@@ -326,6 +505,7 @@ export function SimulationActivity({ world }: SimulationActivityProps) {
         <span className="journal-kicker" style={{ margin: 0, fontSize: 10, overflowWrap: 'anywhere' }}>{latest.kindLabel} · {formatActivityProvenance(latest)}</span>
         <strong style={{ fontSize: 12, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{latest.summary}</strong>
         <span style={{ fontSize: 11, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{formatActivityContext(latest, config)}</span>
+        {(onShowIndividual || selectedIndividualId !== undefined) && <ActivityActorAffordances moment={latest} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual}/>}
       </div>
       {earlier.length > 0 && <details>
         <summary style={{ fontSize: 11, minHeight: 44, display: 'list-item', boxSizing: 'border-box', padding: '12px 0', lineHeight: '20px', cursor: 'pointer' }}>Show {earlier.length} earlier retained {earlier.length === 1 ? 'key moment' : 'key moments'}</summary>
@@ -334,6 +514,7 @@ export function SimulationActivity({ world }: SimulationActivityProps) {
             <span className="journal-kicker" style={{ margin: 0, fontSize: 10, overflowWrap: 'anywhere' }}>{moment.kindLabel} · {formatActivityProvenance(moment)}</span>
             <strong style={{ display: 'block', fontSize: 12, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{moment.summary}</strong>
             <span style={{ display: 'block', fontSize: 11, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{formatActivityContext(moment, config)}</span>
+            {(onShowIndividual || selectedIndividualId !== undefined) && <ActivityActorAffordances moment={moment} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual}/>}
           </li>)}
         </ol>
       </details>}

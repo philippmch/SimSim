@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { defaultConfig } from '../simulation/config'
 import type { Config, WorldActivityEntry, WorldActivityKind } from '../simulation/types'
-import SimulationActivity, { MAX_VISIBLE_ACTIVITY_ENTRIES, NO_ACTIVITY_MOMENTS, deriveActivityFeed, deriveSimulationActivity, formatActivityAnnouncement, formatActivityContext, formatActivityMoment, formatActivityRetentionContext, hasWorldActivityTelemetry, normalizeActivityMoment } from './SimulationActivity'
+import SimulationActivity, { MAX_VISIBLE_ACTIVITY_ENTRIES, NO_ACTIVITY_MOMENTS, deriveActivityActorTargets, deriveActivityFeed, deriveSimulationActivity, formatActivityActorRelation, formatActivityAnnouncement, formatActivityContext, formatActivityMoment, formatActivityRetentionContext, hasWorldActivityTelemetry, normalizeActivityMoment } from './SimulationActivity'
 
 const moment = (overrides: Partial<WorldActivityEntry> = {}): WorldActivityEntry => ({
   sequence: 1,
@@ -151,6 +151,51 @@ describe('simulation activity helpers', () => {
   })
 })
 
+describe('activity actor links', () => {
+  it('orders explicit attack roles first, deduplicates IDs, and classifies current status by individualId', () => {
+    const attack = normalizeActivityMoment(moment({
+      kind: 'attack-success',
+      attackerId: 2,
+      preyId: 1,
+      actorIds: [9, 2, 1, 3, 9],
+    }), 0)!
+
+    expect(deriveActivityActorTargets(attack, [
+      { individualId: 1, alive: false },
+      { individualId: 2, alive: true },
+      { individualId: 3, alive: false },
+      { id: 9, alive: true },
+    ])).toEqual([
+      { individualId: 2, role: 'attacker', roleLabel: 'Attacker', status: 'living' },
+      { individualId: 1, role: 'prey', roleLabel: 'Prey', status: 'dead-but-present' },
+      { individualId: 9, role: 'involved individual', roleLabel: 'Involved individual', status: 'absent' },
+      { individualId: 3, role: 'involved individual', roleLabel: 'Involved individual', status: 'dead-but-present' },
+    ])
+  })
+
+  it('uses event-specific collector and returning roles while tolerating malformed current data', () => {
+    const malformedCreature = new Proxy({}, { get() { throw new Error('bad current creature getter') } })
+    const food = normalizeActivityMoment(moment({ kind: 'food-collected', actorIds: [4, 5] }), 0)!
+    const returned = normalizeActivityMoment(moment({ kind: 'reached-home', actorIds: [7] }), 1)!
+
+    expect(deriveActivityActorTargets(food, [malformedCreature, { individualId: 4, alive: true }])).toMatchObject([
+      { individualId: 4, role: 'collector', status: 'living' },
+      { individualId: 5, role: 'involved individual', status: 'absent' },
+    ])
+    expect(deriveActivityActorTargets(returned, null)).toMatchObject([
+      { individualId: 7, role: 'returning individual', status: 'absent' },
+    ])
+  })
+
+  it('keeps relation copy selected-aware without inferring causation', () => {
+    const targets = deriveActivityActorTargets(normalizeActivityMoment(moment({ actorIds: [2, 4] }), 0)!, [{ individualId: 2, alive: true }])
+
+    expect(formatActivityActorRelation(2, targets)).toBe('Selected Individual 2 was involved in this moment.')
+    expect(formatActivityActorRelation(8, targets)).toBe('Other individuals acted in this moment; Individual 8 was not an actor.')
+    expect(formatActivityActorRelation(null, [])).toBe('Simulation-wide moment; no individual actor recorded.')
+  })
+})
+
 describe('SimulationActivity SSR markup', () => {
   it('renders empty/reset copy with one polite announcement surface', () => {
     const markup = renderToStaticMarkup(createElement(SimulationActivity, { world: { activity: [], activityDropped: 0 } }))
@@ -211,5 +256,56 @@ describe('SimulationActivity SSR markup', () => {
 
   it('does not render an activity panel for legacy worlds with no activity field', () => {
     expect(renderToStaticMarkup(createElement(SimulationActivity, { world: { events: [] } }))).toBe('')
+  })
+
+  it('labels attack roles separately and keeps stale actors factual and noninteractive', () => {
+    const markup = renderToStaticMarkup(createElement(SimulationActivity, {
+      world: {
+        activity: [moment({ kind: 'attack-success', attackerId: 2, preyId: 1, actorIds: [2, 1] })],
+        creatures: [{ individualId: 2, alive: true }, { individualId: 1, alive: false }],
+      },
+      selectedIndividualId: 2,
+      onShowIndividual: () => undefined,
+    }))
+
+    expect(markup).toContain('Attacker · Individual 2 · current arena state')
+    expect(markup).toContain('Prey · Individual 1 · dead in current cohort')
+    expect(markup).toContain('Show current arena state for Attacker Individual 2')
+    expect(markup).toContain('Selected Individual 2 was involved in this moment.')
+    expect(markup.match(/<button/g)).toHaveLength(1)
+    expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
+  })
+
+  it('uses one compact select for more than two actors and disables nonliving choices', () => {
+    const markup = renderToStaticMarkup(createElement(SimulationActivity, {
+      world: {
+        activity: [moment({ actorIds: [1, 2, 3] })],
+        creatures: [{ individualId: 1, alive: true }, { individualId: 2, alive: false }],
+      },
+      onShowIndividual: () => undefined,
+    }))
+
+    expect(markup).toContain('aria-label="Choose an event actor to show its current arena state"')
+    expect(markup.match(/<select/g)).toHaveLength(1)
+    expect(markup.match(/<option/g)).toHaveLength(4)
+    expect(markup.match(/<option[^>]*disabled=""/g)).toHaveLength(2)
+    expect(markup).toContain('Involved individual · Individual 2 · dead in current cohort')
+    expect(markup).toContain('Involved individual · Individual 3 · not in current cohort')
+    expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
+  })
+
+  it('shows factual statuses instead of an unusable select when every recorded actor is stale', () => {
+    const markup = renderToStaticMarkup(createElement(SimulationActivity, {
+      world: {
+        activity: [moment({ actorIds: [1, 2, 3] })],
+        creatures: [{ individualId: 1, alive: false }],
+      },
+      onShowIndividual: () => undefined,
+    }))
+
+    expect(markup).not.toContain('<select')
+    expect(markup).toContain('Individual 1 · dead in current cohort')
+    expect(markup).toContain('Individual 2 · not in current cohort')
+    expect(markup).toContain('Individual 3 · not in current cohort')
   })
 })
