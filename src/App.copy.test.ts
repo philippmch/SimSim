@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ArenaCanvasFallback, canStartSimulationCommand, formatCompactNextActionLabel, formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, hasOwnActivityField, InterventionFeedFallback, ObservedStepStoryFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveAcknowledgedFinishGeneration, resolveTerminalOutcome, reviewSettlementAndNavigate, SelectedInspectorShell, shouldFocusSelectedInspector, SimulationActivityFallback, SimulationEventStory, simulationCommandAcknowledged, stepActivityAnnouncementSequence, type NextActionCopyInput, type PendingSimulationCommand, type TerminalOutcomeCreature } from './App'
+import { ArenaCanvasFallback, canStartSimulationCommand, formatCompactNextActionLabel, formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, hasOwnActivityField, initialManualStepStoryState, INITIAL_OBSERVED_PATH, InterventionFeedFallback, isManualStepStoryGenerationBoundary, ObservedStepStoryFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveAcknowledgedFinishGeneration, resolveManualStepStoryTransition, resolveTerminalOutcome, reviewSettlementAndNavigate, SelectedInspectorShell, shouldFocusSelectedInspector, SimulationActivityFallback, SimulationEventStory, simulationCommandAcknowledged, stepActivityAnnouncementSequence, transitionManualStepStoryState, type ManualStepStoryState, type NextActionCopyInput, type PendingSimulationCommand, type TerminalOutcomeCreature } from './App'
 import { formatPerceptionTelemetry } from './components/CreatureInspector'
 import { createWorld, defaultConfig, finishGeneration as settleGeneration } from './simulation/engine'
 import { MAX_FOUNDER_MIGRATION_BATCH, MAX_POPULATION } from './simulation/config'
@@ -492,5 +492,64 @@ describe('manual-step announcement coordination', () => {
     expect(stepActivityAnnouncementSequence({activity,window:{startSequence:Number.MAX_SAFE_INTEGER,endSequence:2,recordedCount:0,sequenceReset:true}})).toBeNull()
     expect(stepActivityAnnouncementSequence({activity:[],window:{startSequence:1,endSequence:2,recordedCount:1,sequenceReset:false}})).toBeNull()
     expect(stepActivityAnnouncementSequence({activity,window:{startSequence:2,endSequence:2,recordedCount:0,sequenceReset:false}})).toBeNull()
+  })
+})
+
+describe('manual-step story visibility lifecycle',()=>{
+  const acknowledged=()=>transitionManualStepStoryState(initialManualStepStoryState(),{type:'step-acknowledged',observedPath:'Individual 1 foraged.',evidence:{activity:[],window:undefined}})
+
+  it('shows the instructional card initially and restores it on reset',()=>{
+    const initial=initialManualStepStoryState(),afterReset=transitionManualStepStoryState(acknowledged(),{type:'reset'})
+    expect(initial).toMatchObject({visible:true,observedPath:INITIAL_OBSERVED_PATH,evidence:null})
+    expect(afterReset).toEqual(initial)
+  })
+
+  it('hides stale manual narration and clears evidence for an explicitly acknowledged finish',()=>{
+    const state=acknowledged(),finished=transitionManualStepStoryState(state,{type:'generation-snapshot',previousGeneration:1,nextGeneration:2,finishAcknowledged:true})
+    expect(finished).toEqual({visible:false,observedPath:INITIAL_OBSERVED_PATH,evidence:null})
+  })
+
+  it('honors an explicit Finish acknowledgement even when the delivered generation is unchanged',()=>{
+    const state=acknowledged(),finished=transitionManualStepStoryState(state,{type:'generation-snapshot',previousGeneration:2,nextGeneration:2,finishAcknowledged:true})
+    expect(finished).toEqual({visible:false,observedPath:INITIAL_OBSERVED_PATH,evidence:null})
+  })
+
+  it('hides stale manual narration at an autoplay generation boundary',()=>{
+    const state=acknowledged(),advanced=transitionManualStepStoryState(state,{type:'generation-snapshot',previousGeneration:1,nextGeneration:2})
+    expect(advanced.visible).toBe(false)
+    expect(advanced.evidence).toBeNull()
+  })
+
+  it('restores a hidden story immediately when a new manual Next action starts',()=>{
+    const hidden=transitionManualStepStoryState(acknowledged(),{type:'generation-snapshot',previousGeneration:1,nextGeneration:2}),pending=transitionManualStepStoryState(hidden,{type:'next-action'})
+    expect(pending).toEqual({visible:true,observedPath:'Next action pending…',evidence:null})
+  })
+
+  it('keeps acknowledged evidence on same-generation snapshots',()=>{
+    const state=acknowledged(),sameGeneration=transitionManualStepStoryState(state,{type:'generation-snapshot',previousGeneration:1,nextGeneration:1})
+    expect(sameGeneration).toBe(state)
+  })
+
+  it('lets a generation boundary win over a crossing acknowledged step, while same-generation acknowledgement restores the story',()=>{
+    const state=acknowledged()
+    const crossing=resolveManualStepStoryTransition({previousGeneration:1,nextGeneration:2,finishAcknowledged:false,stepAcknowledged:true,stepObservedPath:'New step path.',stepEvidence:state.evidence})
+    const sameGeneration=resolveManualStepStoryTransition({previousGeneration:1,nextGeneration:1,finishAcknowledged:false,stepAcknowledged:true,stepObservedPath:'New step path.',stepEvidence:state.evidence})
+    expect(crossing).toMatchObject({type:'generation-snapshot'})
+    expect(sameGeneration).toEqual({type:'step-acknowledged',observedPath:'New step path.',evidence:state.evidence})
+    expect(transitionManualStepStoryState(state,crossing!)).toMatchObject({visible:false,evidence:null})
+    expect(transitionManualStepStoryState(state,sameGeneration!)).toMatchObject({visible:true,observedPath:'New step path.'})
+  })
+
+  it('keeps an interrupted manual step visible and retryable',()=>{
+    const interrupted=transitionManualStepStoryState(acknowledged(),{type:'step-interrupted'})
+    expect(interrupted).toMatchObject({visible:true,observedPath:'Manual step interrupted; choose Next action to retry.',evidence:null})
+  })
+
+  it('does not treat invalid or unchanged generation values as a boundary',()=>{
+    expect(isManualStepStoryGenerationBoundary(1,1)).toBe(false)
+    expect(isManualStepStoryGenerationBoundary(1,2)).toBe(true)
+    expect(isManualStepStoryGenerationBoundary(2,1)).toBe(false)
+    expect(isManualStepStoryGenerationBoundary(Number.NaN,2)).toBe(false)
+    expect(isManualStepStoryGenerationBoundary(1.5,2)).toBe(false)
   })
 })
