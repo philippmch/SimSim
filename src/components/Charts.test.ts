@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { BEHAVIOR_HISTORY_CONTEXT, buildGenerationDelta, buildHistoryTimeline, buildObservedNonnegativeDomain, buildOutcomeFlowTimeline, buildRetainedShockNavigator, buildSpeedHistogram, completePendingGenerationJournalFocus, contrastRatio, formatGenerationDelta, formatOutcomeFlowSummary, formatRetainedShockNavigatorNotice, formatTimelineSummary, GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE, GENERATION_JOURNAL_SCROLL_OPTIONS, HistoryChart, historyCoordinate, MAX_TIMELINE_ENTRIES, openGenerationJournalReview, OUTCOME_FLOW_CARD_SURFACES, OUTCOME_FLOW_LEGEND, OUTCOME_FLOW_MISSING_TEXT, RETAINED_SHOCK_ARIA_LABEL_LIMIT, RETAINED_SHOCK_CONTEXT, RETAINED_SHOCK_ORDER_NOTE, resolveOutcomeFlowGeneration, resolveTimelineGeneration, safeFiniteHistoryValue, safeNonnegativeHistoryValue, SPEED_HISTOGRAM_DOMAIN, traitColor, outcomeFlowScrollLeft, outcomeFlowSlotCenter } from './Charts'
+import { BEHAVIOR_HISTORY_CONTEXT, BehaviorHistory, buildGenerationDelta, buildGenerationRuler, buildHistoryTimeline, buildObservedNonnegativeDomain, buildOutcomeFlowTimeline, buildRetainedShockNavigator, buildSpeedHistogram, completePendingGenerationJournalFocus, contrastRatio, formatGenerationDelta, formatOutcomeFlowSummary, formatRetainedShockNavigatorNotice, formatTimelineSummary, generationRulerOffset, GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE, GENERATION_JOURNAL_SCROLL_OPTIONS, HistoryChart, historyCoordinate, MAX_TIMELINE_ENTRIES, openGenerationJournalReview, OUTCOME_FLOW_CARD_SURFACES, OUTCOME_FLOW_LEGEND, OUTCOME_FLOW_MISSING_TEXT, RETAINED_SHOCK_ARIA_LABEL_LIMIT, RETAINED_SHOCK_CONTEXT, RETAINED_SHOCK_ORDER_NOTE, resolveOutcomeFlowGeneration, resolveTimelineGeneration, safeFiniteHistoryValue, safeNonnegativeHistoryValue, SPEED_HISTOGRAM_DOMAIN, traitColor, outcomeFlowScrollLeft, outcomeFlowSlotCenter } from './Charts'
 import { speedColor } from './ArenaCanvas'
 import type { EndCause, GenerationLedger, HistoryPoint, World, WorldEvent } from '../simulation/types'
 
@@ -312,12 +312,12 @@ describe('energy and age history facets',()=>{
     expect(markup).toContain('<strong>Next population</strong>')
     expect(markup).toContain('<strong>Mean energy</strong>')
     expect(markup).toContain('<strong>Mean age</strong>')
-    expect(markup).toContain('aria-label="Next population, selected generation 2, 20 creatures, scale 0 to 20."')
+    expect(markup).toContain('<title id="history-next-population-title">Next population history</title>')
     expect(markup).toContain('Energy and age are observed means in each next population; descriptive, not causal.</p>')
     expect(markup).toContain('Gen 2 · 2.25 mean</span>')
     expect(markup).toContain('Gen 2 · 3.75 mean</span>')
-    expect(markup).toContain('Mean energy history, selected generation 2, observed mean 2.25 in the next population; descriptive, not causal, scale 0.00 to 4.50.')
-    expect(markup).toContain('Mean age history, selected generation 2, observed mean 3.75 in the next population; descriptive, not causal, scale 0.00 to 3.75.')
+    expect(markup).toContain('<desc id="history-mean-energy-description">Mean energy values across retained generations 1 through 2')
+    expect(markup).toContain('<desc id="history-mean-age-description">Mean age values across retained generations 1 through 2')
     expect(markup).toContain('0.00–4.50')
     expect(markup).toContain('0.00–3.75')
     expect(markup).not.toContain('Population mean')
@@ -337,16 +337,16 @@ describe('energy and age history facets',()=>{
     const markup=renderToStaticMarkup(createElement(HistoryChart,{world:{...chartWorld([], [1,2]),history},requestedGeneration:1,onSelectGeneration:()=>{}}))
     expect(markup).toContain('<strong>Mean energy</strong><span>Gen 1 · Unavailable</span>')
     expect(markup).toContain('<strong>Mean age</strong><span>Gen 1 · Unavailable</span>')
-    expect(markup).toContain('Mean energy history, selected generation 1, observed mean unavailable in the next population; descriptive, not causal, scale 0.00 to 1.00.')
-    expect(markup).toContain('Mean age history, selected generation 1, observed mean unavailable in the next population; descriptive, not causal, scale 0.00 to 1.00.')
+    expect(markup).toContain('<desc id="history-mean-energy-description">Mean energy values across retained generations 1 through 2')
+    expect(markup).toContain('<desc id="history-mean-age-description">Mean age values across retained generations 1 through 2')
     expect(markup).not.toMatch(/NaN|Infinity/)
     expect(markup).not.toMatch(/d="[^"]*(?:NaN|Infinity)/)
   })
 
   it('keeps a single observed point finite and gives it a minimum one-unit domain',()=>{
     const markup=renderToStaticMarkup(createElement(HistoryChart,{world:{...chartWorld([], [7]),history:[point(7,10,0,.5)]},requestedGeneration:null,onSelectGeneration:()=>{}}))
-    expect(markup).toContain('Mean energy history, selected generation 7, observed mean 0.00 in the next population; descriptive, not causal, scale 0.00 to 1.00.')
-    expect(markup).toContain('Mean age history, selected generation 7, observed mean 0.50 in the next population; descriptive, not causal, scale 0.00 to 1.00.')
+    expect(markup).toContain('<desc id="history-mean-energy-description">Mean energy values across retained generations 7 through 7')
+    expect(markup).toContain('<desc id="history-mean-age-description">Mean age values across retained generations 7 through 7')
     expect(markup).not.toMatch(/NaN|Infinity/)
   })
 })
@@ -466,5 +466,80 @@ describe('observed generation deltas',()=>{
     expect(formatGenerationDelta(result)).toContain('mean energy unavailable')
     expect(formatGenerationDelta(result)).toContain('mean age unavailable')
     expect(formatGenerationDelta(result)).toContain('speed unavailable')
+  })
+})
+
+describe('generation ruler and chart semantics',()=>{
+  it('keeps unique first, middle, and last retained generations for gaps and short histories',()=>{
+    const entries=[{generation:2},{generation:4},{generation:9},{generation:15}]
+    expect(buildGenerationRuler(entries,9)).toEqual([
+      {generation:2,index:0,position:'first',selected:false},
+      {generation:9,index:2,position:'middle',selected:true},
+      {generation:15,index:3,position:'last',selected:false},
+    ])
+    expect(buildGenerationRuler([{generation:7}],7)).toEqual([{generation:7,index:0,position:'first',selected:true}])
+    expect(buildGenerationRuler([{generation:2},{generation:9}],2).map(mark=>mark.generation)).toEqual([2,9])
+    expect(buildGenerationRuler([{generation:2},{generation:Number.NaN},{generation:4},{generation:4},{generation:9},{generation:Number.POSITIVE_INFINITY}] as {generation:number}[],4).map(mark=>mark.generation)).toEqual([2,4,9])
+    expect(buildGenerationRuler([{generation:2}],Number.NaN)).toEqual([{generation:2,index:0,position:'first',selected:false}])
+  })
+
+  it('adds a selected interior generation without losing exact chart positions',()=>{
+    const entries=[{generation:2},{generation:4},{generation:9},{generation:15},{generation:20},{generation:27}]
+    expect(buildGenerationRuler(entries,4).map(mark=>({generation:mark.generation,index:mark.index,position:mark.position,selected:mark.selected}))).toEqual([
+      {generation:2,index:0,position:'first',selected:false},
+      {generation:4,index:1,position:'selected',selected:true},
+      {generation:15,index:3,position:'middle',selected:false},
+      {generation:27,index:5,position:'last',selected:false},
+    ])
+    expect(generationRulerOffset(0,1)).toBe(50)
+    expect(generationRulerOffset(0,2)).toBeCloseTo(3/320*100)
+    expect(generationRulerOffset(1,2)).toBeCloseTo(317/320*100)
+    expect(generationRulerOffset(0,4)).toBeCloseTo(3/320*100)
+    expect(generationRulerOffset(2,4)).toBeCloseTo((3+2/3*314)/320*100)
+    expect(generationRulerOffset(0,6)).toBeCloseTo(3/320*100)
+    expect(generationRulerOffset(3,6)).toBeCloseTo((3+3/5*314)/320*100)
+    expect(generationRulerOffset(5,6)).toBeCloseTo(317/320*100)
+    expect(generationRulerOffset(-1,6)).toBeNull()
+    expect(generationRulerOffset(0,0)).toBeNull()
+    expect(generationRulerOffset(0,6,Number.NaN)).toBeNull()
+  })
+
+  it('keeps the ruler selection aligned with the history slider and gives every history SVG unique semantics',()=>{
+    const markup=renderToStaticMarkup(createElement(HistoryChart,{world:chartWorld([],[2,4,9,15]),requestedGeneration:9,onSelectGeneration:()=>{}}))
+    expect(markup).toContain('class="generation-ruler"')
+    expect(markup).toContain('Earlier generations → later generations')
+    expect(markup).toContain('Inspecting Gen 9')
+    expect(markup).toContain('aria-current="true" aria-label="Generation 9 selected"')
+    expect(markup).toContain('width:64px')
+    expect(markup).toContain('white-space:nowrap')
+    expect(markup).toContain('id="history-next-population-title"')
+    expect(markup).toContain('id="history-next-population-description"')
+    expect(markup).toContain('aria-labelledby="history-next-population-title" aria-describedby="history-next-population-description"')
+    expect(markup).toContain('preserveAspectRatio="none"')
+    expect(markup).toContain('id="history-speed-title"')
+    expect(markup).not.toContain('aria-label="Next population history')
+    expect(markup).toContain('value="2"')
+    expect(markup).toContain('<th scope="col">Generation</th>')
+    expect(markup).toContain('<th scope="row">2</th>')
+    expect(markup).not.toMatch(/NaN|Infinity/)
+    const semanticIds=Array.from(markup.matchAll(/<(?:title|desc) id="([^"]+)"/g),match=>match[1])
+    expect(semanticIds.length).toBeGreaterThan(0)
+    expect(new Set(semanticIds).size).toBe(semanticIds.length)
+  })
+
+  it('gives behavior history the same selected ruler and scoped accessible table',()=>{
+    const markup=renderToStaticMarkup(createElement(BehaviorHistory,{world:chartWorld([],[2,4,9,15]),requestedGeneration:9}))
+    expect(markup).toContain('Generation ruler from Gen 2 to Gen 15')
+    expect(markup).toContain('Inspecting Gen 9')
+    expect(markup).toContain('width:56px')
+    expect(markup).toContain('id="behavior-aggression-line-title"')
+    expect(markup).toContain('aria-labelledby="behavior-aggression-line-title" aria-describedby="behavior-aggression-line-description"')
+    expect(markup).not.toContain('aria-label="Aggression, selected generation')
+    expect(markup).toContain('<th scope="col">Aggression mean</th>')
+    expect(markup).toContain('<th scope="col">Exploration SD</th>')
+    expect(markup).toContain('<th scope="row">2</th>')
+    const row=markup.match(/<tr><th scope="row">2<\/th>(.*?)<\/tr>/)?.[1]??''
+    expect(row.match(/<td>/g)).toHaveLength(6)
+    expect(markup).not.toMatch(/NaN|Infinity/)
   })
 })
