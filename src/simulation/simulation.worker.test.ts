@@ -54,5 +54,11 @@ describe('simulation worker transport',()=>{
     expect(boundaryBeat).toMatchObject({type:'snapshot',epoch:8,lastCommandId:0,stepId:2,stepResult:{stop:'beat'},stepContext:{selectedIndividualId:null,selectedWasActive:false}})
     expect(boundary).toMatchObject({type:'snapshot',epoch:8,lastCommandId:0,stepId:3,stepResult:{stop:'generation-boundary'},stepContext:{selectedIndividualId:null,selectedWasActive:false}})
     expect(boundary.world.generation).toBe(2)
+
+    send({type:'finish',finishId:75})
+    const finished=snapshot(messages.at(-1))
+    expect(finished).toMatchObject({type:'snapshot',epoch:8,lastCommandId:0,finishId:75})
+    expect(finished.world.ledger.at(-1)?.generation).toBe(2)
+    expect(finished.world.generation).toBe(3)
   })
 })

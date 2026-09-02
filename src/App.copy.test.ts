@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveTerminalOutcome, reviewSettlementAndNavigate, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
+import { formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveAcknowledgedFinishGeneration, resolveTerminalOutcome, reviewSettlementAndNavigate, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
 import { formatPerceptionTelemetry } from './components/CreatureInspector'
-import { createWorld, defaultConfig } from './simulation/engine'
+import { createWorld, defaultConfig, finishGeneration as settleGeneration } from './simulation/engine'
 import { MAX_FOUNDER_MIGRATION_BATCH, MAX_POPULATION } from './simulation/config'
 import type { LastInspectedOutcome, PerceptionDiagnostics } from './simulation/types'
 
@@ -128,6 +128,17 @@ describe('next action control copy', () => {
 })
 
 describe('settlement review orchestration', () => {
+  it('reveals only the settlement acknowledged by the matching explicit Finish command', () => {
+    const queuedAutoplay = createWorld({ ...defaultConfig, seed: 612, initialPopulation: 2 })
+    settleGeneration(queuedAutoplay)
+    expect(resolveAcknowledgedFinishGeneration(17, undefined, queuedAutoplay.ledger)).toBeNull()
+    expect(resolveAcknowledgedFinishGeneration(17, { finishId: 16 }, queuedAutoplay.ledger)).toBeNull()
+
+    const explicitFinish = structuredClone(queuedAutoplay)
+    settleGeneration(explicitFinish)
+    expect(resolveAcknowledgedFinishGeneration(17, { finishId: 17 }, explicitFinish.ledger)).toBe(2)
+  })
+
   it('selects the generation before opening the exact journal review helper', async () => {
     const calls: string[] = []
     const result = await reviewSettlementAndNavigate(7, {

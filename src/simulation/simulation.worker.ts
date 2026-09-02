@@ -14,5 +14,5 @@ self.onmessage=(event:MessageEvent<WorkerCommand>)=>{try{const command=event.dat
   else if(command.type==='speed')speed=Math.max(.5,Math.min(4,command.speed))
   else if(command.type==='inspect'&&world){setInspectedIndividual(world,command.individualId);emit({type:'snapshot',world,epoch,lastCommandId})}
   else if(command.type==='intervene'&&world){applyIntervention(world,command.kind);lastCommandId=Math.max(lastCommandId,command.commandId??0);emit({type:'snapshot',world,epoch,lastCommandId})}
-  else if(command.type==='finish'&&world){playing=false;runGeneration(world);emit({type:'snapshot',world,epoch,lastCommandId})}
+  else if(command.type==='finish'&&world){playing=false;runGeneration(world);emit({type:'snapshot',world,epoch,lastCommandId,finishId:command.finishId})}
 }catch(error){emit({type:'error',message:error instanceof Error?error.message:'Simulation worker error',epoch})}}

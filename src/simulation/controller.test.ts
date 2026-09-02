@@ -72,6 +72,15 @@ describe('controller failover and ordering',()=>{
     expect(snapshots.at(-1)!.events.at(-1)).toMatchObject({kind:'resource-bloom'})
     controller.dispose()
   })
+  it('correlates only the fallback snapshot caused by an explicit finish',()=>{
+    const snapshots:ReturnType<typeof createWorld>[]=[],metas:unknown[]=[]
+    const controller=fallbackController({...defaultConfig,seed:310,initialPopulation:2},(world,meta)=>{snapshots.push(world);metas.push(meta)})
+    expect(metas.at(-1)).toBeUndefined()
+    controller.send({type:'finish',finishId:73})
+    expect(snapshots.at(-1)!.ledger.at(-1)?.generation).toBe(1)
+    expect(metas.at(-1)).toEqual({finishId:73})
+    controller.dispose()
+  })
   it('advances one deterministic next action in fallback mode',()=>{
     const snapshots:ReturnType<typeof createWorld>[]=[]
     const controller=fallbackController({...defaultConfig,seed:304,initialPopulation:1,foodPerDay:0},world=>snapshots.push(structuredClone(world)))
@@ -114,7 +123,7 @@ describe('controller failover and ordering',()=>{
     vi.advanceTimersByTime(50)
     expect(snapshots.length).toBeGreaterThan(beforeTimer)
     controller.send({type:'pause'})
-    controller.send({type:'finish'})
+    controller.send({type:'finish',finishId:5})
     controller.send({type:'reset',config:{...defaultConfig,seed:307,initialPopulation:1,dayLength:5,foodPerDay:8}})
     expect(snapshots.length).toBeGreaterThan(6)
 
@@ -188,6 +197,21 @@ describe('controller failover and ordering',()=>{
     const before=observed.dayTime
     vi.advanceTimersByTime(250)
     expect(observed.dayTime).toBe(before)
+    controller.dispose()
+  })
+  it('forwards a worker finish acknowledgement without tagging a queued autoplay snapshot',()=>{
+    vi.stubGlobal('Worker',FakeWorker as unknown as typeof Worker)
+    const metas:unknown[]=[]
+    const controller=createController(defaultConfig,(_world,meta)=>metas.push(meta),()=>{}),worker=FakeWorker.instances[0]
+    const queuedAutoplay=createWorld(defaultConfig);finishGeneration(queuedAutoplay)
+    worker.emit({type:'snapshot',world:queuedAutoplay,epoch:1,lastCommandId:0})
+    expect(metas.at(-1)).toBeUndefined()
+    controller.send({type:'finish',finishId:74})
+    expect(worker.sent.at(-1)).toEqual({type:'finish',finishId:74})
+    const acknowledged=structuredClone(queuedAutoplay);finishGeneration(acknowledged)
+    worker.emit({type:'snapshot',world:acknowledged,epoch:1,lastCommandId:0,finishId:74})
+    expect(metas.at(-1)).toMatchObject({finishId:74})
+    expect(acknowledged.ledger.at(-1)?.generation).toBe(2)
     controller.dispose()
   })
   it('invokes fallback before any worker step result when the worker fails',()=>{
