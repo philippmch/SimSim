@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { CLASSIC_MODES, defaultConfig, MAX_POPULATION } from '../simulation/config'
 import { createWorld } from '../simulation/engine'
-import { formatGenerationForecastAriaLabel, formatGenerationForecastBirths, formatGenerationForecastEquation, formatGenerationForecastLosses, GenerationForecast, summarizeGenerationForecast, summarizeSelectedSettlementPreview, type GenerationForecastSummary } from './GenerationForecast'
+import { formatGenerationForecastAriaLabel, formatGenerationForecastBirths, formatGenerationForecastEquation, formatGenerationForecastLosses, formatGenerationForecastTransition, GenerationForecast, summarizeGenerationForecast, summarizeSelectedSettlementPreview, type GenerationForecastSummary } from './GenerationForecast'
 
 describe('generation forecast', () => {
   it('uses classic settlement rules for the current cohort and loss causes', () => {
@@ -52,7 +52,9 @@ describe('generation forecast', () => {
 
     expect(formatGenerationForecastEquation(summary)).toBe('2 creatures evaluated → 1 survived + 1 newborn = 2 in the next population')
     expect(formatGenerationForecastLosses(summary)).toBe('Hunted: 1')
+    expect(formatGenerationForecastTransition(summary)).toBe('Forecast transition · Generation 1 → 2')
     const ariaLabel = formatGenerationForecastAriaLabel(summary)
+    expect(ariaLabel).toContain('Forecast transition · Generation 1 → 2')
     expect(ariaLabel).toContain('Counterfactual snapshot · not a prediction · updates as creatures act')
     expect(ariaLabel.match(/counterfactual/gi)).toHaveLength(1)
     expect(ariaLabel.match(/updates as creatures act/gi)).toHaveLength(1)
@@ -73,6 +75,8 @@ describe('generation forecast', () => {
     expect(formatGenerationForecastBirths(singular)).toBe('0 eligible parents · 0 admitted newborns · 0 births blocked by the population cap')
     expect(formatGenerationForecastLosses(singular)).toBe('No current losses')
     expect(formatGenerationForecastLosses({ ...singular, losses: { hunted: 1, energy: 2, unfed: 3, late: 4, aged: 5 } })).toBe('Hunted: 1 · Energy depleted: 2 · No food at settlement: 3 · Missed return deadline: 4 · Old age: 5')
+    expect(formatGenerationForecastTransition({ ...singular, generation: Number.NaN })).toBe('Forecast transition unavailable')
+    expect(formatGenerationForecastTransition(singular, 'Extinct')).toBe('Forecast transition unavailable · no current cohort')
   })
 
   it('is deterministic and leaves the world untouched', () => {
@@ -91,7 +95,9 @@ describe('generation forecast', () => {
 
     for (const playbackStatus of ['Running', 'Paused'] as const) {
       const markup = renderToStaticMarkup(createElement(GenerationForecast, { world, playbackStatus }))
+      expect(markup).toContain('data-handoff-kind="forecast"')
       expect(markup).toContain('<strong>If generation ended now</strong>')
+      expect(markup).toContain('Forecast transition · Generation 1 → 2')
       expect(markup).toContain('Counterfactual snapshot · not a prediction · updates as creatures act')
       expect(markup).toContain(formatGenerationForecastEquation(summary))
       expect(markup).toContain(`aria-label="${formatGenerationForecastAriaLabel(summary, playbackStatus)}"`)
@@ -105,6 +111,7 @@ describe('generation forecast', () => {
     const markup = renderToStaticMarkup(createElement(GenerationForecast, { world, playbackStatus: 'Awaiting settlement' }))
 
     expect(markup).toContain('<strong>Settlement preview</strong>')
+    expect(markup).toContain('Forecast transition · Generation 1 → 2')
     expect(markup).toContain('Not recorded until Finish generation')
     expect(markup).toContain(formatGenerationForecastEquation(summary))
     expect(markup).toContain(formatGenerationForecastLosses(summary))

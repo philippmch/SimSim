@@ -2,6 +2,7 @@ import { MAX_POPULATION } from '../simulation/config'
 import { settleLifecycle, type LifecycleOutcomeCause } from '../simulation/lifecycle'
 import type { World } from '../simulation/types'
 import type { ArenaPlaybackStatus } from './ArenaCanvas'
+import type { CSSProperties } from 'react'
 
 export const FORECAST_LOSS_CAUSES = ['hunted', 'energy', 'unfed', 'late', 'aged'] as const satisfies readonly Exclude<LifecycleOutcomeCause, 'survived'>[]
 export type ForecastLossCause = (typeof FORECAST_LOSS_CAUSES)[number]
@@ -127,6 +128,17 @@ export function formatGenerationForecastHeading(status: ArenaPlaybackStatus): st
   return 'If generation ended now'
 }
 
+function safeGeneration(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value < Number.MAX_SAFE_INTEGER ? value : null
+}
+
+/** Keep the counterfactual transition explicit without implying that it has been recorded. */
+export function formatGenerationForecastTransition(summary: GenerationForecastSummary, status: ArenaPlaybackStatus = 'Running'): string {
+  if (status === 'Extinct') return 'Forecast transition unavailable · no current cohort'
+  const generation = safeGeneration(summary.generation)
+  return generation === null ? 'Forecast transition unavailable' : `Forecast transition · Generation ${generation} → ${generation + 1}`
+}
+
 export function formatGenerationForecastFraming(status: ArenaPlaybackStatus): string {
   if (status === 'Awaiting settlement') return 'Not recorded until Finish generation'
   if (status === 'Extinct') return 'No cohort remains to evaluate'
@@ -135,28 +147,40 @@ export function formatGenerationForecastFraming(status: ArenaPlaybackStatus): st
 
 export function formatGenerationForecastAriaLabel(summary: GenerationForecastSummary, status: ArenaPlaybackStatus = 'Running'): string {
   const heading = formatGenerationForecastHeading(status)
+  const transition = formatGenerationForecastTransition(summary, status)
   const framing = formatGenerationForecastFraming(status)
-  if (status === 'Extinct') return `${heading}. ${framing}.`
+  if (status === 'Extinct') return `${heading}. ${transition}. ${framing}.`
   const details = `${formatGenerationForecastEquation(summary)}. Loss causes: ${formatGenerationForecastLosses(summary)}. ${formatGenerationForecastBirths(summary)}.`
-  return `${heading}. ${framing}. ${details}`
+  return `${heading}. ${transition}. ${framing}. ${details}`
 }
+
+const forecastLaneStyle: CSSProperties = {
+  flex: '1 1 320px',
+  minWidth: 0,
+  borderLeft: '3px dotted var(--muted)',
+  paddingLeft: '9px',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '4px',
+}
+
+const labelStyle: CSSProperties = { display: 'flex', flexDirection: 'column', minWidth: 0 }
+const detailStyle: CSSProperties = { color: 'var(--muted)', lineHeight: 1.45, whiteSpace: 'normal' }
 
 export function GenerationForecast({ world, playbackStatus }: { world: World; playbackStatus: ArenaPlaybackStatus }) {
   const summary = summarizeGenerationForecast(world)
   const heading = formatGenerationForecastHeading(playbackStatus)
+  const transition = formatGenerationForecastTransition(summary, playbackStatus)
   const framing = formatGenerationForecastFraming(playbackStatus)
-  if (playbackStatus === 'Extinct') return <div className="ecology-line activity-line" role="group" aria-label={formatGenerationForecastAriaLabel(summary, playbackStatus)}>
-    <strong>{heading}</strong>
-    <span>{framing}</span>
+  if (playbackStatus === 'Extinct') return <div data-handoff-kind="forecast" role="group" aria-label={formatGenerationForecastAriaLabel(summary, playbackStatus)} style={forecastLaneStyle}>
+    <span style={labelStyle}><strong>{heading}</strong><small>{transition}</small></span>
+    <span style={detailStyle}>{framing}</span>
   </div>
-  const losses = FORECAST_LOSS_CAUSES.filter(cause => summary.losses[cause] > 0)
-  return <div className="ecology-line activity-line" role="group" aria-label={formatGenerationForecastAriaLabel(summary, playbackStatus)}>
-    <strong>{heading}</strong>
-    <span><b>{summary.evaluatedCohort}</b> creatures evaluated → <b>{summary.survivors}</b> survived</span>
-    <span>+ <b>{summary.admittedBirths}</b> {summary.admittedBirths === 1 ? 'newborn' : 'newborns'} = <b>{summary.projectedNextPopulation}</b> next</span>
-    {losses.length ? losses.map(cause => <span key={cause}>{FORECAST_LOSS_LABELS[cause]} <b>{summary.losses[cause]}</b></span>) : <span>No current losses</span>}
-    <span><b>{summary.eligibleParents}</b> eligible {summary.eligibleParents === 1 ? 'parent' : 'parents'}</span>
-    <span><b>{summary.cappedBirths}</b> {summary.cappedBirths === 1 ? 'birth' : 'births'} blocked by cap</span>
-    <span>{framing}</span>
+  return <div data-handoff-kind="forecast" role="group" aria-label={formatGenerationForecastAriaLabel(summary, playbackStatus)} style={forecastLaneStyle}>
+    <span style={labelStyle}><strong>{heading}</strong><small>{transition}</small></span>
+    <span style={{ ...detailStyle, color: 'var(--ink)' }}>{formatGenerationForecastEquation(summary)}</span>
+    <span style={detailStyle}>Losses if settled now: {formatGenerationForecastLosses(summary)}</span>
+    <span style={detailStyle}>{formatGenerationForecastBirths(summary)}</span>
+    <span style={detailStyle}>{framing}</span>
   </div>
 }

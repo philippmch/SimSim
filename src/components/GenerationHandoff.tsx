@@ -1,8 +1,7 @@
-import { lazy, Suspense, type CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import type { World } from '../simulation/types'
 import type { ArenaPlaybackStatus } from './ArenaCanvas'
-
-const RecordedGenerationHandoff = lazy(() => import('./RecordedGenerationHandoff'))
+import RecordedGenerationHandoff from './RecordedGenerationHandoff'
 
 interface RecordLike {
   [key: string]: unknown
@@ -89,6 +88,7 @@ export interface GenerationHandoffProps {
   world: World | unknown
   playbackStatus: ArenaPlaybackStatus
   playing?: boolean
+  forecast?: ReactNode
   onReviewGeneration: (generation: number) => void
   /** Set only for an explicit Finish generation request; autoplay leaves this null. */
   revealGeneration?: number | null
@@ -164,6 +164,7 @@ export function GenerationHandoff({
   world,
   playbackStatus,
   playing = false,
+  forecast,
   onReviewGeneration,
   revealGeneration,
   onRevealComplete,
@@ -171,9 +172,14 @@ export function GenerationHandoff({
   const { living, total, active } = countCreatures(world)
   const ledgers = read(world, 'ledger')
   const hasRecords = Array.isArray(ledgers) && ledgers.length > 0
+  const currentContext = playbackStatus === 'Extinct' ? 'No current cohort' : 'Current cohort'
+  const forecastContext = forecast ? playbackStatus === 'Extinct' ? 'no settlement preview' : 'if settled now' : null
+  const comparisonContext = [currentContext, forecastContext, hasRecords ? 'previous recorded result' : 'no recorded result yet'].filter(Boolean).join(' · ')
   return <div className="interventions" role="group" aria-label="Generation handoff" style={{ alignItems: 'stretch', flexWrap: 'wrap', gap: '8px 14px' }}>
+    <span style={{ flex: '1 1 100%', minWidth: 0, marginRight: 0, whiteSpace: 'normal' }}><strong style={{ fontSize: 12 }}>Generation handoff</strong><small>{comparisonContext}</small></span>
     <CurrentStateLane world={world} playbackStatus={playbackStatus} playing={playing} living={living} total={total} active={active}/>
-    {hasRecords && <Suspense fallback={null}><RecordedGenerationHandoff ledgers={ledgers} onReviewGeneration={onReviewGeneration} revealGeneration={revealGeneration} onRevealComplete={onRevealComplete}/></Suspense>}
+    {forecast}
+    {hasRecords && <RecordedGenerationHandoff ledgers={ledgers} onReviewGeneration={onReviewGeneration} revealGeneration={revealGeneration} onRevealComplete={onRevealComplete}/>}
   </div>
 }
 

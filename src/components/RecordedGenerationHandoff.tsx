@@ -1,6 +1,7 @@
 import { useEffect, useRef, type CSSProperties } from 'react'
 import type { GenerationLedger } from '../simulation/types'
 import {
+  formatSettlementAnnouncement,
   formatSettlementEquation,
   getSettlementGeneration,
   summarizeLatestSettlement,
@@ -102,22 +103,28 @@ export function RecordedGenerationHandoff({ ledgers, onReviewGeneration, revealG
     const provenance = latest.generation === null
       ? 'Latest retained settlement record is incomplete or invalid.'
       : `Latest retained record for Generation ${latest.generation} is incomplete or invalid.`
-    return <div data-handoff-kind="actual-unavailable" style={actualLaneStyle}>
-      <span style={labelStyle}><strong>Actual recorded result</strong><small>Latest settlement</small></span>
-      <span style={detailStyle}>{provenance} No forecast is shown for this record.</span>
-    </div>
+    return <>
+      <div data-handoff-kind="actual-unavailable" style={actualLaneStyle}>
+        <span style={labelStyle}><strong>Actual recorded result</strong><small>Latest settlement</small></span>
+        <span style={detailStyle}>{provenance} No forecast is shown for this record.</span>
+      </div>
+      <output className="sr-only" role="status" aria-live="polite" aria-atomic="true">{provenance}</output>
+    </>
   }
 
   const summary = latest.summary
   const equation = settlementDescription(summary)
-  return <div ref={actualRef} data-handoff-kind="actual" style={actualLaneStyle}>
-    <span style={labelStyle}><strong>Actual recorded result</strong><small>Generation {summary.generation} → {summary.nextGeneration} · recorded at settlement</small></span>
-    <span style={{ ...detailStyle, color: 'var(--ink)' }}>{equation}</span>
-    <span style={actionRowStyle}>
-      <button type="button" className="settings-toggle" onClick={() => onReviewGeneration(summary.generation)} aria-label={`Review generation ${summary.generation}`}>Review generation {summary.generation}</button>
-      <small style={detailStyle}>Actual result · not a counterfactual forecast</small>
-    </span>
-  </div>
+  return <>
+    <div ref={actualRef} data-handoff-kind="actual" style={actualLaneStyle}>
+      <span style={labelStyle}><strong>Actual recorded result</strong><small>Generation {summary.generation} → {summary.nextGeneration} · recorded at settlement</small></span>
+      <span style={{ ...detailStyle, color: 'var(--ink)' }}>{equation}</span>
+      <span style={actionRowStyle}>
+        <button type="button" className="settings-toggle" onClick={() => onReviewGeneration(summary.generation)} aria-label={`Review generation ${summary.generation}`}>Review generation {summary.generation}</button>
+        <small style={detailStyle}>Actual result · not a counterfactual forecast</small>
+      </span>
+    </div>
+    <output className="sr-only" role="status" aria-live="polite" aria-atomic="true">{formatSettlementAnnouncement(summary)}</output>
+  </>
 }
 
 export default RecordedGenerationHandoff

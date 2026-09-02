@@ -17,7 +17,6 @@ const LivePulse=lazy(()=>import('./components/LivePulse'))
 const TerminalOutcome=lazy(()=>import('./components/TerminalOutcome'))
 const CreatureInspector=lazy(()=>import('./components/CreatureInspector'))
 const PopulationStory=lazy(()=>import('./components/PopulationStory'))
-const SettlementReport=lazy(()=>import('./components/SettlementReport'))
 const GenerationHandoff=lazy(()=>import('./components/GenerationHandoff'))
 const GenerationAccounting=lazy(()=>import('./components/GenerationAccounting'))
 const SimulationActivity=lazy(()=>import('./components/SimulationActivity'))
@@ -40,7 +39,7 @@ export function GenerationAccountingFallback(){
 
 export function GenerationHandoffFallback(){
   return <div className="interventions" role="group" aria-label="Generation handoff" aria-busy="true">
-    <span><strong>Generation handoff</strong><small>Opening current state and latest recorded result…</small></span>
+    <span><strong>Generation handoff</strong><small>Opening current state, settlement preview, and latest recorded result…</small></span>
     <span style={{ flex: '1 1 100%', whiteSpace: 'normal', color: 'var(--muted)' }}>Finish generation remains available above; the handoff will appear as soon as it loads.</span>
   </div>
 }
@@ -428,7 +427,7 @@ function App(){
         </div>
         {selected&&<div ref={selectedInspectorRef} className="inspector-focus-target" tabIndex={-1} aria-label={`Selected individual ${selected.individualId} details`} style={{scrollMarginTop:'84px'}}><Suspense fallback={<section className="inspector" aria-busy="true" aria-label={`Selected individual ${selected.individualId}`}><div className="inspector-head"><div><h2>Individual {selected.individualId}</h2><p>Opening individual details…</p></div><button type="button" onClick={()=>selectIndividual(null)} aria-label="Close individual inspector">×</button></div></section>}><CreatureInspector selected={selected} ecologyMode={world.config.ecologyMode} dayTime={world.dayTime} stateLabel={CREATURE_STATE_METADATA[selected.home?'safe':selected.mode].label} targetLabel={formatSelectedTarget(selected,world.creatures,world.food)} decisionTargetLabel={decisionTargetLabel} huntContactRule={ARENA_HUNT_CONTACT_KEY} settlementPreview={settlementPreview} onClose={()=>selectIndividual(null)}/></Suspense></div>}
         {terminalOutcome&&!selected&&<Suspense fallback={null}><TerminalOutcome outcome={terminalOutcome} onDismiss={()=>selectIndividual(null)}/></Suspense>}
-        <Suspense fallback={<GenerationHandoffFallback/>}><GenerationHandoff world={world} playbackStatus={arenaStatus} playing={playing} onReviewGeneration={reviewSettlement} revealGeneration={generationRevealRequest} onRevealComplete={clearGenerationReveal}/></Suspense>
+        <Suspense fallback={<GenerationHandoffFallback/>}><GenerationHandoff world={world} playbackStatus={arenaStatus} playing={playing} forecast={<GenerationForecast world={world} playbackStatus={arenaStatus}/>} onReviewGeneration={reviewSettlement} revealGeneration={generationRevealRequest} onRevealComplete={clearGenerationReveal}/></Suspense>
         {arenaStatus==='Awaiting settlement'&&<div className="pending" aria-label="Settlement status">{arenaDetail}</div>}
         <div className="interventions" role="group" aria-label="Live ecological interventions">
           <span><strong>Live shocks</strong><small>No restart needed</small></span>
@@ -456,8 +455,6 @@ function App(){
           <div className="mode-line activity-line" aria-label={`What creatures are doing now. ${living} living creatures total.`}><strong>What creatures are doing now</strong>{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/><b>{stateCounts[state]}</b> {metadata.label.toLowerCase()}</span>)}</div>
           <Suspense fallback={<div className="ecology-line activity-line" role="group" aria-label="Live simulation pulse. Waiting for the next simulation update."><strong>Live pulse</strong><span>Waiting for the next simulation update.</span></div>}><LivePulse key={livePulseRun} world={world}/></Suspense>
           <div className="ecology-line" aria-label="Current model and energy statistics"><strong>{world.config.ecologyMode==='energy-regrowth'?'Ecological model':'Classic model'}</strong><span>{world.config.perceptionMode} perception</span><span>{world.config.predationMode} predation</span><span>mean energy <b>{stats.avgEnergy.toFixed(1)}</b></span><span>mean age <b>{stats.avgAge.toFixed(1)}</b></span></div>
-          {world.ledger.length > 0 && <Suspense fallback={null}><SettlementReport ledgers={world.ledger} onReviewGeneration={reviewSettlement}/></Suspense>}
-          <GenerationForecast world={world} playbackStatus={arenaStatus}/>
           <Suspense fallback={<GenerationAccountingFallback/>}><GenerationAccounting world={world} globalFoodCap={MAX_FOOD}/></Suspense>
           </section>
           <section id={DASHBOARD_SECTION_IDS.generationJournal} tabIndex={-1} aria-label="Generation journal review" style={DASHBOARD_SECTION_SCROLL_STYLE}><Suspense fallback={<div className="evolution-story generation-journal" aria-busy="true"><p className="journal-empty" role="status">Opening generation journal…</p></div>}><GenerationJournal ledgers={world.ledger} events={world.events} requestedGeneration={requestedGeneration} onRequestedGenerationChange={setRequestedGeneration}/></Suspense></section>
