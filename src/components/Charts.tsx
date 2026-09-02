@@ -1,7 +1,7 @@
 import { END_CAUSES } from '../simulation/types'
 import type { BiologicalTrait,EndCause,GenerationLedger,HistoryPoint,World,WorldEvent } from '../simulation/types'
 import { MAX_WORLD_EVENTS } from '../simulation/engine'
-import { useEffect,useRef } from 'react'
+import { useEffect,useRef,useState } from 'react'
 import { speedColor } from './ArenaCanvasModel'
 
 export const SPEED_HISTOGRAM_DOMAIN = {min:.3,max:2.8} as const
@@ -299,6 +299,72 @@ const isRecord=(value:unknown):value is Record<string,unknown>=>Boolean(value&&t
 const readRecordValue=(record:Record<string,unknown>,key:string):unknown=>{
   try{return record[key]}catch{return undefined}
 }
+
+export interface SelectionShiftTimelineEntry {
+  generation:number
+  evaluatedCount:number|null
+  survivorCount:number|null
+  reproducerCount:number|null
+  evaluatedMean:number|null
+  survivorMean:number|null
+  reproducerMean:number|null
+  survivorDelta:number|null
+  reproducerDelta:number|null
+  /** False when the retained record predates selection telemetry. */
+  selectionAvailable:boolean
+}
+
+export type SelectionShiftRetainedGeneration=number|Pick<HistoryTimelineEntry,'generation'>
+
+const selectionShiftMean=(ledger:Record<string,unknown>|null,cohort:string,trait:BiologicalTrait):number|null=>{
+  const selectionValue=ledger?readRecordValue(ledger,'selection'):undefined
+  const selection=isRecord(selectionValue)?selectionValue:null
+  const cohortValue=selection?readRecordValue(selection,cohort):undefined
+  const cohortSummary=isRecord(cohortValue)?cohortValue:null
+  const traitValue=cohortSummary?readRecordValue(cohortSummary,trait):undefined
+  const moments=isRecord(traitValue)?traitValue:null
+  return safeFiniteHistoryValue(moments?readRecordValue(moments,'mean'):undefined)
+}
+
+const selectionShiftCount=(record:Record<string,unknown>|null,key:string):number|null=>{
+  const value=record?readRecordValue(record,key):undefined
+  return isSafeNonnegativeInteger(value)?value:null
+}
+
+const selectionShiftDifference=(cohortCount:number|null,evaluatedCount:number|null,cohortMean:number|null,evaluatedMean:number|null):number|null=>{
+  if(cohortCount===null||evaluatedCount===null||cohortCount===0||evaluatedCount===0||cohortMean===null||evaluatedMean===null)return null
+  const difference=cohortMean-evaluatedMean
+  if(!Number.isFinite(difference))return null
+  return difference===0?0:difference
+}
+
+const selectionShiftGeneration=(value:unknown):value is number=>isSafeNonnegativeInteger(value)&&value>=1
+const selectionShiftLimit=(value:unknown)=>typeof value==='number'&&Number.isFinite(value)?Math.max(0,Math.floor(value)):MAX_TIMELINE_ENTRIES
+
+const buildSelectionShiftEntry=(rawLedger:unknown,generation:number,trait:BiologicalTrait):SelectionShiftTimelineEntry=>{
+  const ledger=isRecord(rawLedger)?rawLedger:null,evaluatedCount=selectionShiftCount(ledger,'startPopulation'),rawOutcomes=ledger&&isRecord(readRecordValue(ledger,'outcomes'))?readRecordValue(ledger,'outcomes'):null,survivorCount=isRecord(rawOutcomes)?selectionShiftCount(rawOutcomes,'survived'):null,reproducerCount=selectionShiftCount(ledger,'birthsAdmitted'),evaluatedMean=selectionShiftMean(ledger,'start',trait),survivorMean=selectionShiftMean(ledger,'survivor',trait),reproducerMean=selectionShiftMean(ledger,'reproducer',trait),selectionValue=ledger?readRecordValue(ledger,'selection'):undefined,selection=isRecord(selectionValue)?selectionValue:null,selectionAvailable=Boolean(selection&&['start','survivor','reproducer'].every(cohort=>isRecord(readRecordValue(selection,cohort)))),survivorCountsConsistent=evaluatedCount!==null&&survivorCount!==null&&survivorCount<=evaluatedCount,reproducerCountsConsistent=survivorCountsConsistent&&reproducerCount!==null&&reproducerCount<=survivorCount
+  return{generation,evaluatedCount,survivorCount,reproducerCount,evaluatedMean,survivorMean,reproducerMean,survivorDelta:survivorCountsConsistent?selectionShiftDifference(survivorCount,evaluatedCount,survivorMean,evaluatedMean):null,reproducerDelta:reproducerCountsConsistent?selectionShiftDifference(reproducerCount,evaluatedCount,reproducerMean,evaluatedMean):null,selectionAvailable}
+}
+
+/**
+ * Build selection shifts from retained settlement ledgers.  A shift is a
+ * cohort mean minus the evaluated-cohort mean; it is unavailable whenever a
+ * required count is missing/empty or either mean is not finite.
+ */
+export function buildSelectionShiftTimeline(ledgers:unknown,retainedGenerations?:readonly SelectionShiftRetainedGeneration[],trait:BiologicalTrait='speed'):SelectionShiftTimelineEntry[]{
+  if(!Array.isArray(ledgers))return[]
+  const ledgerByGeneration=new Map<number,unknown>()
+  for(const rawLedger of ledgers){
+    if(!isRecord(rawLedger))continue
+    const generation=readRecordValue(rawLedger,'generation')
+    if(selectionShiftGeneration(generation))ledgerByGeneration.set(generation,rawLedger)
+  }
+  const generations=retainedGenerations
+    ? retainedGenerations.map(value=>typeof value==='number'?value:value?.generation).filter(selectionShiftGeneration)
+    : ledgers.slice(-selectionShiftLimit(MAX_TIMELINE_ENTRIES)).map(rawLedger=>isRecord(rawLedger)?readRecordValue(rawLedger,'generation'):undefined).filter(selectionShiftGeneration)
+  return generations.map(generation=>buildSelectionShiftEntry(ledgerByGeneration.get(generation),generation,trait))
+}
+
 const safeAddIntegers=(left:number|null,right:number|null):number|null=>{
   if(left===null||right===null||!isSafeNonnegativeInteger(left)||!isSafeNonnegativeInteger(right)||left>Number.MAX_SAFE_INTEGER-right)return null
   return left+right
@@ -662,8 +728,65 @@ function OutcomeFlowHistory({ledgers,requestedGeneration}:{ledgers:unknown;reque
   </div>
 }
 
+const SELECTION_SHIFT_TRAITS:BiologicalTrait[]=HISTORY_TRAITS
+const selectionShiftTraitLabel=(trait:BiologicalTrait)=>trait.charAt(0).toUpperCase()+trait.slice(1)
+
+/** Format a finite cohort-minus-evaluated shift without turning tiny changes into false zero. */
+export function formatSelectionShiftValue(value:number|null){
+  if(value===null||!Number.isFinite(value))return'Unavailable'
+  if(value===0)return'0'
+  const rounded=Number(value.toFixed(2))
+  if(rounded===0)return value>0?'+<0.01':'-<0.01'
+  const formatted=rounded.toFixed(2)
+  return rounded>0?`+${formatted}`:formatted
+}
+
+const selectionShiftDirection=(value:number|null)=>{
+  if(value===null||!Number.isFinite(value))return'Unavailable'
+  if(value===0)return'Zero (same as evaluated)'
+  return value>0?`Positive ${formatSelectionShiftValue(value)} (above evaluated)`: `Negative ${formatSelectionShiftValue(value)} (below evaluated)`
+}
+const selectionShiftMeanText=(value:number|null)=>value===null||!Number.isFinite(value)?'Unavailable':value.toFixed(2)
+const selectionShiftCountText=(value:number|null)=>value===null?'Unavailable':String(value)
+const selectionShiftStatus=(row:SelectionShiftTimelineEntry,cohort:'survivor'|'reproducer')=>{
+  const count=cohort==='survivor'?row.survivorCount:row.reproducerCount,delta=cohort==='survivor'?row.survivorDelta:row.reproducerDelta
+  if(count===0)return'Unavailable (empty cohort; n=0)'
+  if(count===null)return'Unavailable (count unavailable)'
+  if(row.evaluatedCount===null)return'Unavailable (evaluated count unavailable)'
+  if(row.evaluatedCount===0)return'Unavailable (evaluated cohort empty; n=0)'
+  if(row.survivorCount!==null&&row.survivorCount>row.evaluatedCount)return'Unavailable (inconsistent cohort counts)'
+  if(cohort==='reproducer'&&(row.survivorCount===null||count>row.survivorCount))return row.survivorCount===null?'Unavailable (survivor count unavailable)':'Unavailable (inconsistent cohort counts)'
+  if(delta===null)return'Unavailable (mean unavailable)'
+  return selectionShiftDirection(delta)
+}
+
+const selectionShiftCoordinate=(value:number|null,domain:number,index:number,count:number,width:number,height:number,pad:number):ChartCoordinate|null=>{
+  if(value===null||!Number.isFinite(value)||!Number.isFinite(domain)||domain<=0||!Number.isSafeInteger(index)||!Number.isSafeInteger(count)||count<1||index<0||index>=count||width<=pad*2||height<=pad*2)return null
+  const denominator=Math.max(1,count-1),x=count===1?width/2:pad+index/denominator*(width-pad*2),ratio=value/domain,normalized=Math.max(0,Math.min(1,.5+ratio*.5)),y=height-pad-normalized*(height-pad*2)
+  return Number.isFinite(x)&&Number.isFinite(y)?{x,y}:null
+}
+
+/**
+ * Show two cohort-minus-evaluated series within the existing generation
+ * history.  The shared scrubber remains the only generation control.
+ */
+export function SelectionShiftHistory({entries,ledgers,selectedGeneration,selectedIndex,selectedX,trait,onTraitChange}:{entries:readonly HistoryTimelineEntry[];ledgers:unknown;selectedGeneration:number;selectedIndex:number;selectedX:number;trait:BiologicalTrait;onTraitChange:(trait:BiologicalTrait)=>void}){
+  const rows=buildSelectionShiftTimeline(ledgers,entries,trait),w=320,h=44,pad=3,observed=rows.flatMap(row=>[row.survivorDelta,row.reproducerDelta].filter((value):value is number=>value!==null&&Number.isFinite(value))),selectionMax=observed.length?Math.max(.01,...observed.map(value=>Math.abs(value))):1,zeroY=h/2
+  const path=(values:(number|null)[])=>{let drawing=false;return values.map((value,index)=>{const point=selectionShiftCoordinate(value,selectionMax,index,values.length,w,h,pad);if(!point){drawing=false;return''}const command=drawing?'L':'M';drawing=true;return`${command} ${point.x} ${point.y}`}).join(' ')}
+  const survivorMarker=selectionShiftCoordinate(rows[selectedIndex]?.survivorDelta??null,selectionMax,selectedIndex,rows.length,w,h,pad),reproducerMarker=selectionShiftCoordinate(rows[selectedIndex]?.reproducerDelta??null,selectionMax,selectedIndex,rows.length,w,h,pad),selectedRow=rows[selectedIndex]??null,fallbackRow:SelectionShiftTimelineEntry={generation:selectedGeneration,evaluatedCount:null,survivorCount:null,reproducerCount:null,evaluatedMean:null,survivorMean:null,reproducerMean:null,survivorDelta:null,reproducerDelta:null,selectionAvailable:false},statusRow=selectedRow??fallbackRow,traitLabel=selectionShiftTraitLabel(trait),svg=chartSvgSemantics('history-selection-shifts',trait),start=entries[0]?.generation??selectedGeneration,end=entries.at(-1)?.generation??selectedGeneration,allLegacy=rows.length>0&&rows.every(row=>!row.selectionAvailable),hasSurvivors=rows.some(row=>row.survivorCount!==null&&row.survivorCount>0),hasReproducers=rows.some(row=>row.reproducerCount!==null&&row.reproducerCount>0),notice=[rows.length===1&&!allLegacy?'One retained generation: no across-generation trend yet; the cohort comparison is shown for the selected generation.':null,allLegacy?'Selection shifts unavailable: retained ledgers have no selection summaries.':null,!allLegacy&&!hasSurvivors?'Survivor shifts unavailable: no non-empty survivor cohort was retained.':null,!allLegacy&&!hasReproducers?'Parents of newborns unavailable: no admitted births were recorded.':null].filter((value):value is string=>value!==null).join(' ')
+  return <div className="history-facet" data-selection-shift="true" role="group" aria-label={`Selection shifts across generations for ${traitLabel}, generations ${start} through ${end}. Selected generation ${selectedGeneration}. Solid line: survivors minus evaluated cohort. Dashed line: parents of newborns minus evaluated cohort. Positive is above evaluated; negative is below; zero is the same mean.`} style={{gridColumn:'1 / -1',height:'auto',minHeight:96,display:'grid',gridTemplateColumns:'1fr',gap:4,alignItems:'start',padding:'4px 0'}}>
+    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}><div className="facet-label"><strong>Selection shifts across generations</strong><span>Gen {selectedGeneration} · {traitLabel}</span></div><label className="metric-select" htmlFor="history-selection-trait">Trait <select id="history-selection-trait" value={trait} onChange={event=>onTraitChange(event.target.value as BiologicalTrait)}>{SELECTION_SHIFT_TRAITS.map(option=><option key={option} value={option}>{selectionShiftTraitLabel(option)}</option>)}</select></label></div>
+    <p className="journal-kicker" style={{fontSize:10,margin:'0 0 1px',gridArea:'auto',gridColumn:'1'}}>Shift = cohort mean − evaluated mean. Descriptive association, not proof of cause.</p>
+    {notice&&<p className="journal-warning" style={{margin:'0 0 1px'}}>{notice}</p>}
+    <div style={{display:'grid',gap:0,minWidth:0,width:'100%',alignContent:'start'}}><svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" role="img" aria-labelledby={svg.titleId} aria-describedby={svg.descriptionId} data-selection-shift-plot="true"><title id={svg.titleId}>{`Selection shifts across generations · ${traitLabel}`}</title><desc id={svg.descriptionId}>Solid survivors minus evaluated cohort and dashed parents of newborns minus evaluated cohort for {traitLabel} across retained generations {start} through {end}. The zero line marks the evaluated mean. Selected generation {selectedGeneration}: survivors {selectionShiftStatus(statusRow,'survivor')}; parents of newborns {selectionShiftStatus(statusRow,'reproducer')}.</desc><line className="facet-grid" x1={pad} x2={w-pad} y1={zeroY} y2={zeroY}/><line className="history-cursor" x1={selectedX} x2={selectedX} y1={pad} y2={h-pad}/><path className="speed-line" data-selection-shift-series="survivors-minus-evaluated" d={path(rows.map(row=>row.survivorDelta))} strokeDasharray="none"/><path className="size-line" data-selection-shift-series="parents-minus-evaluated" d={path(rows.map(row=>row.reproducerDelta))} strokeDasharray="4 3"/>{survivorMarker&&<circle className="history-point" data-selection-shift-marker="survivors" cx={survivorMarker.x} cy={survivorMarker.y} r="3"/>}{reproducerMarker&&<rect className="history-point" data-selection-shift-marker="parents" x={reproducerMarker.x-2.25} y={reproducerMarker.y-2.25} width="4.5" height="4.5" transform={`rotate(45 ${reproducerMarker.x} ${reproducerMarker.y})`}/>}</svg><GenerationRuler entries={entries} selectedGeneration={selectedGeneration} compact/></div>
+    <div className="journal-kicker" role="group" aria-label="Selection shift legend" style={{display:'flex',flexWrap:'wrap',gap:'2px 10px',lineHeight:1.35}}><span><strong>Solid:</strong> survivors − evaluated</span><span><strong>Dashed:</strong> parents of newborns − evaluated</span><span><strong>Positive:</strong> above evaluated · <strong>Negative:</strong> below · <strong>Zero:</strong> same mean · zero line shown</span></div>
+    <div className="journal-kicker" style={{display:'flex',flexWrap:'wrap',gap:'2px 10px',lineHeight:1.35}}><span>Selected Gen {selectedGeneration} · solid survivors: {selectionShiftStatus(statusRow,'survivor')}</span><span>dashed parents: {selectionShiftStatus(statusRow,'reproducer')}</span><span>Range {formatSelectionShiftValue(-selectionMax)} to {formatSelectionShiftValue(selectionMax)} · zero centered</span></div>
+    <table className="sr-only" data-selection-shift-table="true"><caption>Selection shifts for {traitLabel} across retained generations. Selected generation {selectedGeneration}. Counts and means are cohort observations; unavailable values are missing, malformed, or empty.</caption><thead><tr><th scope="col">Generation</th><th scope="col">Evaluated count</th><th scope="col">Survivors count</th><th scope="col">Parents of newborns count</th><th scope="col">Evaluated mean</th><th scope="col">Survivor mean</th><th scope="col">Survivor delta</th><th scope="col">Parents of newborns mean</th><th scope="col">Parents of newborns delta</th></tr></thead><tbody>{rows.map(row=><tr key={row.generation} data-selected-generation={row.generation===selectedGeneration?'true':undefined}><th scope="row">{row.generation}</th><td>{selectionShiftCountText(row.evaluatedCount)}</td><td>{selectionShiftCountText(row.survivorCount)}</td><td>{selectionShiftCountText(row.reproducerCount)}</td><td>{selectionShiftMeanText(row.evaluatedMean)}</td><td>{selectionShiftMeanText(row.survivorMean)}</td><td>{row.survivorDelta===null?selectionShiftStatus(row,'survivor'):formatSelectionShiftValue(row.survivorDelta)}</td><td>{selectionShiftMeanText(row.reproducerMean)}</td><td>{row.reproducerDelta===null?selectionShiftStatus(row,'reproducer'):formatSelectionShiftValue(row.reproducerDelta)}</td></tr>)}</tbody></table>
+  </div>
+}
+
 export function HistoryChart({world,requestedGeneration,onSelectGeneration}:HistoryChartProps){
-  const entries=buildHistoryTimeline(world.ledger,world.history,world.events),selectedGeneration=resolveTimelineGeneration(entries,requestedGeneration),selectedIndex=Math.max(0,entries.findIndex(entry=>entry.generation===selectedGeneration)),shockNavigator=buildRetainedShockNavigator(entries,world.events),shockNotice=formatRetainedShockNavigatorNotice(shockNavigator),w=320,h=34,pad=3
+  const [selectionTrait,setSelectionTrait]=useState<BiologicalTrait>('speed'),entries=buildHistoryTimeline(world.ledger,world.history,world.events),selectedGeneration=resolveTimelineGeneration(entries,requestedGeneration),selectedIndex=Math.max(0,entries.findIndex(entry=>entry.generation===selectedGeneration)),shockNavigator=buildRetainedShockNavigator(entries,world.events),shockNotice=formatRetainedShockNavigatorNotice(shockNavigator),w=320,h=34,pad=3
   if(!entries.length)return <div className="chart-empty">Complete one generation to begin the timeline.</div>
   const populations=entries.map(entry=>safeNonnegativeHistoryValue(entry.nextPopulation)).filter((value):value is number=>value!==null),popMax=Math.max(1,...populations),energyDomain=buildObservedNonnegativeDomain(entries.map(entry=>entry.nextMeanEnergy)),ageDomain=buildObservedNonnegativeDomain(entries.map(entry=>entry.nextMeanAge))
   type HistoryFacetKind='population'|'trait'|'observed-mean'
@@ -681,7 +804,7 @@ export function HistoryChart({world,requestedGeneration,onSelectGeneration}:Hist
     <label className="metric-select" htmlFor="history-generation">Inspect generation <input id="history-generation" type="range" min={0} max={Math.max(0,entries.length-1)} step={1} value={selectedIndex} disabled={entries.length<2} aria-valuetext={formatTimelineSummary(selectedEntry)} onChange={event=>{const entry=entries[Number(event.target.value)];if(entry)onSelectGeneration(entry.generation)}}/></label>
     <output className="journal-equation">{formatTimelineSummary(selectedEntry)} · {requestedGeneration===null?'Following latest completed generation':`Pinned to generation ${selectedEntry.generation}`}</output>
     <button type="button" className="settings-toggle journal-pin" aria-label={`Open journal review for generation ${selectedEntry.generation}`} onClick={()=>openGenerationJournalReview()}>Open journal review</button>
-  </div>{shockNotice&&<div className="journal-events"><p className={shockNavigator.groups.length?'journal-kicker':'journal-warning'}>{shockNotice}</p>{shockNavigator.groups.length>0&&<div className="history-scrubber journal-controls" role="group" aria-label="Retained shocks by generation">{shockNavigator.groups.map(group=>{const selected=group.generation===selectedGeneration;return <button key={group.generation} type="button" className="settings-toggle journal-latest" aria-label={group.ariaLabel} aria-current={selected?'true':undefined} aria-pressed={selected} onClick={()=>onSelectGeneration(group.generation)}>{group.label}{group.partial?' · partial':''}</button>})}</div>}</div>}<OutcomeFlowHistory ledgers={world.ledger} requestedGeneration={selectedGeneration}/><div className="history-facets" role="group" aria-label={`Evolution history from generation ${start} to ${end}. Selected generation ${selectedEntry.generation}. Each row uses its own labeled scale. Population is a count; energy and age are observed means in each next population, descriptive, not causal.`}>
+  </div><SelectionShiftHistory entries={entries} ledgers={world.ledger} selectedGeneration={selectedEntry.generation} selectedIndex={selectedIndex} selectedX={selectedX} trait={selectionTrait} onTraitChange={setSelectionTrait}/>{shockNotice&&<div className="journal-events"><p className={shockNavigator.groups.length?'journal-kicker':'journal-warning'}>{shockNotice}</p>{shockNavigator.groups.length>0&&<div className="history-scrubber journal-controls" role="group" aria-label="Retained shocks by generation">{shockNavigator.groups.map(group=>{const selected=group.generation===selectedGeneration;return <button key={group.generation} type="button" className="settings-toggle journal-latest" aria-label={group.ariaLabel} aria-current={selected?'true':undefined} aria-pressed={selected} onClick={()=>onSelectGeneration(group.generation)}>{group.label}{group.partial?' · partial':''}</button>})}</div>}</div>}<OutcomeFlowHistory ledgers={world.ledger} requestedGeneration={selectedGeneration}/><div className="history-facets" role="group" aria-label={`Evolution history from generation ${start} to ${end}. Selected generation ${selectedEntry.generation}. Each row uses its own labeled scale. Population is a count; energy and age are observed means in each next population, descriptive, not causal.`}>
     <p className="journal-kicker">Energy and age are observed means in each next population; descriptive, not causal.</p>
     {series.map(s=>{
       const current=s.values[selectedIndex]??null,sd=s.sdValues?.[selectedIndex]??null,currentLabel=current===null?'Unavailable':s.kind==='population'?`${current.toFixed(s.decimals)} creatures`:s.kind==='observed-mean'?`${current.toFixed(s.decimals)} mean`:`${current.toFixed(s.decimals)} ${s.short}${sd===null?'':` · ±1 SD ${sd.toFixed(s.decimals)}`}`,lower=s.sdValues?.map((spread,index)=>spread===null||s.values[index]===null?null:Math.max(s.min,s.values[index]!-spread)),upper=s.sdValues?.map((spread,index)=>spread===null||s.values[index]===null?null:Math.min(s.max,s.values[index]!+spread)),marker=historyCoordinate(current,s.min,s.max,selectedIndex,entries.length,w,h,pad),ariaValue=current===null?s.kind==='observed-mean'?'observed mean unavailable in the next population':'Unavailable':s.kind==='population'?`${current.toFixed(s.decimals)} creatures`:s.kind==='observed-mean'?`observed mean ${current.toFixed(s.decimals)} in the next population`:`mean ${current.toFixed(s.decimals)}${sd===null?'':`, standard deviation ${sd.toFixed(s.decimals)}`}`,svg=chartSvgSemantics('history',s.label),svgTitle=`${s.label} history`,svgDescription=`${s.label} values across retained generations ${start} through ${end}, from earlier generations on the left to later generations on the right. Selected generation ${selectedEntry.generation}: ${ariaValue}.`

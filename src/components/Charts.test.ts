@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { BEHAVIOR_HISTORY_CONTEXT, BehaviorHistory, buildGenerationDelta, buildGenerationRuler, buildHistoryTimeline, buildObservedNonnegativeDomain, buildOutcomeFlowTimeline, buildRetainedShockNavigator, buildSpeedHistogram, completePendingGenerationJournalFocus, contrastRatio, formatGenerationDelta, formatOutcomeFlowSummary, formatRetainedShockNavigatorNotice, formatTimelineSummary, generationRulerOffset, GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE, GENERATION_JOURNAL_SCROLL_OPTIONS, HistoryChart, historyCoordinate, MAX_TIMELINE_ENTRIES, openGenerationJournalReview, OUTCOME_FLOW_CARD_SURFACES, OUTCOME_FLOW_LEGEND, OUTCOME_FLOW_MISSING_TEXT, RETAINED_SHOCK_ARIA_LABEL_LIMIT, RETAINED_SHOCK_CONTEXT, RETAINED_SHOCK_ORDER_NOTE, resolveOutcomeFlowGeneration, resolveTimelineGeneration, safeFiniteHistoryValue, safeNonnegativeHistoryValue, SPEED_HISTOGRAM_DOMAIN, traitColor, outcomeFlowScrollLeft, outcomeFlowSlotCenter } from './Charts'
+import { BEHAVIOR_HISTORY_CONTEXT, BehaviorHistory, buildGenerationDelta, buildGenerationRuler, buildHistoryTimeline, buildObservedNonnegativeDomain, buildOutcomeFlowTimeline, buildRetainedShockNavigator, buildSelectionShiftTimeline, buildSpeedHistogram, completePendingGenerationJournalFocus, contrastRatio, formatGenerationDelta, formatOutcomeFlowSummary, formatRetainedShockNavigatorNotice, formatSelectionShiftValue, formatTimelineSummary, generationRulerOffset, GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE, GENERATION_JOURNAL_SCROLL_OPTIONS, HistoryChart, historyCoordinate, MAX_TIMELINE_ENTRIES, openGenerationJournalReview, OUTCOME_FLOW_CARD_SURFACES, OUTCOME_FLOW_LEGEND, OUTCOME_FLOW_MISSING_TEXT, RETAINED_SHOCK_ARIA_LABEL_LIMIT, RETAINED_SHOCK_CONTEXT, RETAINED_SHOCK_ORDER_NOTE, resolveOutcomeFlowGeneration, resolveTimelineGeneration, safeFiniteHistoryValue, safeNonnegativeHistoryValue, SPEED_HISTOGRAM_DOMAIN, traitColor, outcomeFlowScrollLeft, outcomeFlowSlotCenter } from './Charts'
 import { speedColor } from './ArenaCanvasModel'
 import type { EndCause, GenerationLedger, HistoryPoint, World, WorldEvent } from '../simulation/types'
 
@@ -12,6 +12,13 @@ const chartWorld=(events:readonly WorldEvent[],generations=[1,2]):World=>({ledge
 const flowOutcomes=(overrides:Partial<Record<EndCause,number>>={}):Record<EndCause,number>=>({survived:0,hunted:0,energy:0,unfed:0,late:0,aged:0,...overrides})
 const flowLedger=(generation:number,startPopulation:number,outcomes:Record<EndCause,number>,birthsEligible=outcomes.survived,birthsAdmitted=birthsEligible,birthsCapped=birthsEligible-birthsAdmitted):GenerationLedger=>({generation,startPopulation,outcomes,birthsEligible,birthsAdmitted,birthsCapped} as unknown as GenerationLedger)
 const flowWorld=(ledgers:readonly GenerationLedger[]):World=>({...chartWorld([],ledgers.map(item=>item.generation)),ledger:[...ledgers]} as World)
+const selectionMoment=(mean:number|null)=>({mean,variance:mean===null?null:.01,sd:mean===null?null:.1})
+const selectionSummary=(speed:number|null,aggression:number|null=.5)=>({speed:selectionMoment(speed),size:selectionMoment(1),sense:selectionMoment(.2),aggression:selectionMoment(aggression),caution:selectionMoment(.5),exploration:selectionMoment(.6)})
+const selectionLedger=(generation:number,evaluated=1,survivor=1.25,reproducer=.75,counts={start:4,survivors:3,births:2}):GenerationLedger=>({
+  ...flowLedger(generation,counts.start,flowOutcomes({survived:counts.survivors}),counts.survivors,counts.births,0),
+  selection:{start:selectionSummary(evaluated,.5),survivor:selectionSummary(survivor,.6),reproducer:selectionSummary(reproducer,.4)},
+  inheritance:{offspringCount:counts.births,changedTraitValues:0,traits:{speed:{parentMean:99,offspringMean:99,changedCount:0}}} as never,
+} as GenerationLedger)
 type JournalTargetSpy={disabled?:boolean;attributes:Set<string>;scrollCalls:ScrollIntoViewOptions[];focusCalls:FocusOptions[];scrollIntoView:(options?:ScrollIntoViewOptions)=>void;focus:(options?:FocusOptions)=>void;setAttribute:(name:string,value:string)=>void;removeAttribute:(name:string)=>void;hasAttribute:(name:string)=>boolean}
 const journalTarget=(disabled=false):JournalTargetSpy=>({disabled,attributes:new Set(),scrollCalls:[],focusCalls:[],scrollIntoView(options){this.scrollCalls.push(options??{})},focus(options){this.focusCalls.push(options??{})},setAttribute(name){this.attributes.add(name)},removeAttribute(name){this.attributes.delete(name)},hasAttribute(name){return this.attributes.has(name)}})
 
@@ -541,5 +548,84 @@ describe('generation ruler and chart semantics',()=>{
     const row=markup.match(/<tr><th scope="row">2<\/th>(.*?)<\/tr>/)?.[1]??''
     expect(row.match(/<td>/g)).toHaveLength(6)
     expect(markup).not.toMatch(/NaN|Infinity/)
+  })
+})
+
+describe('selection shifts across generations',()=>{
+  it('computes survivor and reproducer deltas from selection summaries',()=>{
+    const [row]=buildSelectionShiftTimeline([selectionLedger(1,1,1.25,.75)])
+    expect(row).toMatchObject({generation:1,evaluatedCount:4,survivorCount:3,reproducerCount:2,evaluatedMean:1,survivorMean:1.25,reproducerMean:.75,survivorDelta:.25,reproducerDelta:-.25,selectionAvailable:true})
+  })
+
+  it('keeps finite zero as zero and does not read inheritance parentMean',()=>{
+    const [row]=buildSelectionShiftTimeline([selectionLedger(1,0,0,0)])
+    expect(row).toMatchObject({evaluatedMean:0,survivorMean:0,reproducerMean:0})
+    expect(row.survivorDelta).toBe(0)
+    expect(row.reproducerDelta).toBe(0)
+    const [mismatch]=buildSelectionShiftTimeline([selectionLedger(2,1,1.2,.8)])
+    expect(mismatch.survivorDelta).toBeCloseTo(.2)
+    expect(mismatch.reproducerDelta).toBeCloseTo(-.2)
+  })
+
+  it('marks empty, malformed, and legacy records unavailable without false zero',()=>{
+    const [empty]=buildSelectionShiftTimeline([selectionLedger(1,0,0,0,{start:0,survivors:0,births:0})])
+    expect(empty).toMatchObject({evaluatedCount:0,survivorCount:0,reproducerCount:0,evaluatedMean:0,survivorMean:0,reproducerMean:0,survivorDelta:null,reproducerDelta:null})
+    const malformed={generation:2,startPopulation:'4',outcomes:{survived:3},birthsAdmitted:Number.POSITIVE_INFINITY,selection:{start:{speed:{mean:Number.NaN}},survivor:{speed:{mean:Number.POSITIVE_INFINITY}},reproducer:{speed:{mean:0}}}}
+    const [bad]=buildSelectionShiftTimeline([malformed])
+    expect(bad).toMatchObject({evaluatedCount:null,survivorCount:3,reproducerCount:null,evaluatedMean:null,survivorMean:null,reproducerMean:0,survivorDelta:null,reproducerDelta:null,selectionAvailable:true})
+    const [legacy]=buildSelectionShiftTimeline([{generation:3,startPopulation:4,outcomes:{survived:3},birthsAdmitted:2}])
+    expect(legacy).toMatchObject({evaluatedCount:4,survivorCount:3,reproducerCount:2,evaluatedMean:null,survivorMean:null,reproducerMean:null,survivorDelta:null,reproducerDelta:null,selectionAvailable:false})
+    expect(JSON.stringify([empty,bad,legacy])).not.toMatch(/NaN|Infinity/)
+  })
+
+  it('rejects impossible nested cohort counts instead of plotting authoritative shifts',()=>{
+    const [tooManySurvivors]=buildSelectionShiftTimeline([selectionLedger(1,1,1.2,.8,{start:2,survivors:3,births:1})])
+    expect(tooManySurvivors).toMatchObject({survivorDelta:null,reproducerDelta:null})
+    const [tooManyParents]=buildSelectionShiftTimeline([selectionLedger(2,1,1.2,.8,{start:3,survivors:1,births:2})])
+    expect(tooManyParents.survivorDelta).toBeCloseTo(.2)
+    expect(tooManyParents.reproducerDelta).toBeNull()
+    const markup=renderToStaticMarkup(createElement(HistoryChart,{world:{...chartWorld([],[1]),ledger:[selectionLedger(1,1,1.2,.8,{start:2,survivors:3,births:1})]} as World,requestedGeneration:1,onSelectGeneration:()=>{}}))
+    expect(markup).toContain('Unavailable (inconsistent cohort counts)')
+  })
+
+  it('renders one compact zero-centered facet with shared generation semantics and one native trait selector',()=>{
+    const ledgers=[selectionLedger(1,1,1.25,.75),selectionLedger(2,1,1,.9)]
+    const markup=renderToStaticMarkup(createElement(HistoryChart,{world:{...chartWorld([],[1,2]),ledger:ledgers} as World,requestedGeneration:2,onSelectGeneration:()=>{}}))
+    expect(markup.match(/<select/g)).toHaveLength(1)
+    expect(markup).toContain('data-selection-shift="true"')
+    expect(markup).toContain('Selection shifts across generations')
+    expect(markup).toContain('Shift = cohort mean − evaluated mean')
+    expect(markup).toContain('Descriptive association, not proof of cause.')
+    expect(markup).toContain('Solid:</strong> survivors − evaluated')
+    expect(markup).toContain('Dashed:</strong> parents of newborns − evaluated')
+    expect(markup).toContain('<strong>Positive:</strong> above evaluated')
+    expect(markup).toContain('<strong>Negative:</strong> below')
+    expect(markup).toContain('<strong>Zero:</strong> same mean')
+    expect(markup).toContain('zero line shown')
+    expect(markup).toContain('Inspecting Gen 2')
+    expect(markup).toContain('data-selection-shift-table="true"')
+    expect(markup).toContain('<circle class="history-point" data-selection-shift-marker="survivors"')
+    expect(markup).toContain('<rect class="history-point" data-selection-shift-marker="parents"')
+    expect(markup).toContain('<th scope="col">Evaluated count</th>')
+    expect(markup).toContain('<th scope="col">Parents of newborns delta</th>')
+    expect(markup.match(/data-selected-generation="true"/g)).toHaveLength(1)
+    expect(markup).not.toMatch(/NaN|Infinity/)
+  })
+
+  it('states one-generation, no-birth, and legacy limitations plainly',()=>{
+    const oneGeneration=renderToStaticMarkup(createElement(HistoryChart,{world:{...chartWorld([],[7]),ledger:[selectionLedger(7,1,1.1,1,{start:4,survivors:3,births:0})]} as World,requestedGeneration:7,onSelectGeneration:()=>{}}))
+    expect(oneGeneration).toContain('One retained generation: no across-generation trend yet')
+    expect(oneGeneration).toContain('Parents of newborns unavailable: no admitted births were recorded.')
+    const legacy=renderToStaticMarkup(createElement(HistoryChart,{world:{...chartWorld([],[7]),ledger:[{generation:7,startPopulation:4,outcomes:{survived:3},birthsAdmitted:2}]} as unknown as World,requestedGeneration:7,onSelectGeneration:()=>{}}))
+    expect(legacy).toContain('Selection shifts unavailable: retained ledgers have no selection summaries.')
+    expect(legacy).toContain('Unavailable')
+    expect(legacy).not.toMatch(/NaN|Infinity/)
+  })
+
+  it('formats positive, negative, zero, and unavailable labels explicitly',()=>{
+    expect(formatSelectionShiftValue(.25)).toBe('+0.25')
+    expect(formatSelectionShiftValue(-.25)).toBe('-0.25')
+    expect(formatSelectionShiftValue(0)).toBe('0')
+    expect(formatSelectionShiftValue(null)).toBe('Unavailable')
   })
 })
