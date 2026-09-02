@@ -1,7 +1,7 @@
 import { MAX_POPULATION } from '../simulation/config'
 import { settleLifecycle } from '../simulation/lifecycle'
 import type { World } from '../simulation/types'
-import type { ArenaPlaybackStatus } from './ArenaCanvas'
+import type { ArenaPlaybackStatus } from './ArenaCanvasModel'
 import type { CSSProperties } from 'react'
 import { FORECAST_LOSS_CAUSES, FORECAST_LOSS_LABELS } from './SettlementPreview'
 import type { ForecastLossCause } from './SettlementPreview'

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { canStartSimulationCommand, formatCompactNextActionLabel, formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, hasOwnActivityField, InterventionFeedFallback, ObservedStepStoryFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveAcknowledgedFinishGeneration, resolveTerminalOutcome, reviewSettlementAndNavigate, SelectedInspectorShell, shouldFocusSelectedInspector, SimulationActivityFallback, SimulationEventStory, simulationCommandAcknowledged, stepActivityAnnouncementSequence, type NextActionCopyInput, type PendingSimulationCommand, type TerminalOutcomeCreature } from './App'
+import { ArenaCanvasFallback, canStartSimulationCommand, formatCompactNextActionLabel, formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, hasOwnActivityField, InterventionFeedFallback, ObservedStepStoryFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveAcknowledgedFinishGeneration, resolveTerminalOutcome, reviewSettlementAndNavigate, SelectedInspectorShell, shouldFocusSelectedInspector, SimulationActivityFallback, SimulationEventStory, simulationCommandAcknowledged, stepActivityAnnouncementSequence, type NextActionCopyInput, type PendingSimulationCommand, type TerminalOutcomeCreature } from './App'
 import { formatPerceptionTelemetry } from './components/CreatureInspector'
 import { createWorld, defaultConfig, finishGeneration as settleGeneration } from './simulation/engine'
 import { MAX_FOUNDER_MIGRATION_BATCH, MAX_POPULATION } from './simulation/config'
@@ -353,6 +353,18 @@ describe('parameters loading state', () => {
     expect(markup).toContain('role="status"')
     expect(markup).toContain('aria-busy="true"')
     expect(markup).toContain('Opening parameter controls…')
+  })
+})
+
+describe('arena loading state', () => {
+  it('preserves the arena footprint with concise accessible loading copy', () => {
+    const markup = renderToStaticMarkup(createElement(ArenaCanvasFallback))
+    expect(markup).toContain('data-arena-canvas-fallback="true"')
+    expect(markup).toContain('Opening live arena…')
+    expect(markup).toContain('Creature positions and action paths will appear shortly.')
+    expect(markup).toContain('role="status"')
+    expect(markup).toContain('aria-busy="true"')
+    expect(markup).toContain('height:100%')
   })
 })
 

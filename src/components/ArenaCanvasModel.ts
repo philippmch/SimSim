@@ -1,0 +1,356 @@
+import type { NextActionContext, NextActionResult } from '../simulation/scheduler'
+import type { DecisionSummary, Mode, TargetType, World } from '../simulation/types'
+
+export type CreatureState = 'safe'|Mode
+export type ArenaFocus = 'all'|CreatureState
+
+export type ArenaPlaybackStatus = 'Running'|'Paused'|'Awaiting settlement'|'Extinct'
+
+export interface ArenaPlaybackStatusInput {
+  playing: boolean
+  populationCount: number
+  activeCount: number
+}
+
+export interface ArenaPlaybackDetailInput {
+  status: ArenaPlaybackStatus
+  populationCount: number
+  livingCount: number
+}
+
+export const ARENA_PATCH_STOCK_KEY = 'Patch arcs = current food stock.'
+export const ARENA_SELECTED_OVERLAY_KEY = 'Selected: gold ring = focus · gold area = sight · dashed path = held destination captured at last decision · endpoint: solid dot = target still present (not current position), × = target gone at its last-known held location, diamond = waypoint · colored rings = memory · dotted rings = kin. Held decisions can persist between reaction windows.'
+export const ARENA_HUNT_CONTACT_KEY = 'Hunts resolve against the nearest eligible prey at contact, which may differ from the dashed held destination.'
+export const ARENA_FOCUS_TARGET_PATH_KEY = 'Active matches show dashed held destinations captured at last decision: solid dot = target still present (not current position), × = target gone at its last-known held location, diamond = waypoint. Held decisions can persist between reaction windows.'
+export const ARENA_SAFE_FOCUS_TARGET_PATH_KEY = 'Safe-at-home creatures have no active target paths.'
+export const ARENA_QUICK_START = [
+  'Try this: pause → inspect a creature → finish generation.',
+  'Then change one parameter and restart to compare.',
+] as const
+
+export const ARENA_FOCUS_LABELS = {
+  all:'All creatures',
+  safe:'Safe at home',
+  exploring:'Exploring',
+  foraging:'Finding food',
+  hunting:'Hunting prey',
+  fleeing:'Fleeing danger',
+  returning:'Going home',
+} as const satisfies Record<ArenaFocus,string>
+
+export const ARENA_FOCUS_OPTIONS = [
+  {value:'all',label:ARENA_FOCUS_LABELS.all},
+  {value:'safe',label:ARENA_FOCUS_LABELS.safe},
+  {value:'exploring',label:ARENA_FOCUS_LABELS.exploring},
+  {value:'foraging',label:ARENA_FOCUS_LABELS.foraging},
+  {value:'hunting',label:ARENA_FOCUS_LABELS.hunting},
+  {value:'fleeing',label:ARENA_FOCUS_LABELS.fleeing},
+  {value:'returning',label:ARENA_FOCUS_LABELS.returning},
+] as const
+
+export const ARENA_FOCUS_DIM_ALPHA = .24
+
+export function arenaCreatureAlpha(focus: ArenaFocus, state: CreatureState, selected = false): number {
+  return focus === 'all' || selected || focus === state ? 1 : ARENA_FOCUS_DIM_ALPHA
+}
+
+export type ArenaTargetPathCreature = Pick<World['creatures'][number], 'individualId' | 'x' | 'y' | 'alive' | 'home' | 'mode' | 'targetType' | 'targetX' | 'targetY'>
+
+/** The visual meaning of a held destination endpoint. Threats intentionally
+ * resolve to a waypoint: their target coordinates are an escape point, not
+ * the threat's current location. */
+export type ArenaHeldPathEndpointKind = 'none'|'live-food'|'live-prey'|'last-known-food'|'last-known-prey'|'waypoint'
+
+export interface ArenaHeldPathEndpointInput {
+  targetType: TargetType | null
+  targetId: number | null
+  targetX: number
+  targetY: number
+}
+
+export type ArenaHeldPathCreature = Pick<World['creatures'][number], 'id'|'individualId'|'alive'>
+export type ArenaHeldPathFood = Pick<World['food'][number], 'id'>
+
+/** Classify a path endpoint using only current world facts and finite path data. */
+export function classifyArenaHeldPathEndpoint(
+  target: ArenaHeldPathEndpointInput,
+  creatures: ReadonlyArray<ArenaHeldPathCreature> = [],
+  food: ReadonlyArray<ArenaHeldPathFood> = [],
+): ArenaHeldPathEndpointKind {
+  if (target.targetType === null || !Number.isFinite(target.targetX) || !Number.isFinite(target.targetY)) return 'none'
+  if (target.targetType === 'home' || target.targetType === 'memory' || target.targetType === 'explore' || target.targetType === 'threat') return 'waypoint'
+  if (target.targetType === 'food') return target.targetId !== null && food.some(item => item.id === target.targetId) ? 'live-food' : 'last-known-food'
+  return target.targetId !== null && creatures.some(creature => creature.id === target.targetId && creature.alive) ? 'live-prey' : 'last-known-prey'
+}
+
+/** Whether a creature has a safe-to-draw held-target path in the current action focus. */
+export function arenaTargetPathEligible(focus: ArenaFocus, creature: ArenaTargetPathCreature, selectedIndividualId: number | null = null): boolean {
+  if (focus === 'all' || !creature.alive || creature.home || creature.targetType === null) return false
+  if (selectedIndividualId !== null && creature.individualId === selectedIndividualId) return false
+  if ((creature.home ? 'safe' : creature.mode) !== focus) return false
+  return [creature.x, creature.y, creature.targetX, creature.targetY].every(Number.isFinite)
+}
+
+export function arenaLineageRingAlpha(): number {
+  return 1
+}
+
+export function formatArenaFocusDescription(focus: ArenaFocus, matchingCount?: number, livingCount?: number, selectedNonMatch=false): string {
+  const counted=Number.isFinite(matchingCount)&&Number.isFinite(livingCount)
+  if(focus==='all')return counted?`All living creatures are shown (${Math.max(0,Math.trunc(livingCount!))}).`:'All creatures are shown.'
+  const pathDescription=focus==='safe'?ARENA_SAFE_FOCUS_TARGET_PATH_KEY:ARENA_FOCUS_TARGET_PATH_KEY
+  if(!counted)return`Focus: ${ARENA_FOCUS_LABELS[focus]}; other creatures are dimmed. ${pathDescription}`
+  const total=Math.max(0,Math.trunc(livingCount!)),matching=Math.min(total,Math.max(0,Math.trunc(matchingCount!))),kept=selectedNonMatch&&matching<total?1:0,dimmed=total-matching-kept
+  const summary=`Focus: ${ARENA_FOCUS_LABELS[focus]}; ${matching} ${matching===1?'creature matches':'creatures match'} and ${dimmed} ${dimmed===1?'other is':'others are'} dimmed.`
+  return `${kept?`${summary} The selected creature stays highlighted.`:summary} ${pathDescription}`
+}
+
+export function formatArenaFocusOption(focus: ArenaFocus, count: number): string {
+  return `${ARENA_FOCUS_LABELS[focus]} (${Math.max(0, Math.trunc(count))})`
+}
+
+export function showArenaQuickStart(completedGenerations: number): boolean {
+  return completedGenerations === 0
+}
+
+export function arenaPlaybackStatus(input: ArenaPlaybackStatusInput): ArenaPlaybackStatus {
+  const populationCount = Number.isFinite(input.populationCount) ? Math.max(0, input.populationCount) : 0
+  const activeCount = Number.isFinite(input.activeCount) ? Math.max(0, input.activeCount) : 0
+  if (populationCount === 0) return 'Extinct'
+  if (activeCount === 0) return 'Awaiting settlement'
+  return input.playing ? 'Running' : 'Paused'
+}
+
+export function formatArenaPlaybackDetail(input: ArenaPlaybackDetailInput): string {
+  const populationCount = Number.isFinite(input.populationCount) ? Math.max(0, Math.trunc(input.populationCount)) : 0
+  const livingCount = Number.isFinite(input.livingCount) ? Math.max(0, Math.trunc(input.livingCount)) : 0
+  if (input.status === 'Extinct' || populationCount === 0) return 'Extinct. The last settlement produced no creatures. Use Founder migration to rescue this run or restart.'
+  if (input.status === 'Awaiting settlement') {
+    return livingCount > 0
+      ? 'Awaiting settlement. No active creature actions remain; all living creatures are home. Finish generation to settle this cohort.'
+      : 'Awaiting settlement. All creatures in this generation are dead, but the generation has not been recorded yet. Finish generation to record it, or use Founder migration to rescue the run.'
+  }
+  return input.status === 'Running'
+    ? 'Running. Active creature actions are being simulated.'
+    : 'Paused. Resume playback to continue active creature actions.'
+}
+
+export function formatArenaDayProgress(dayTime: number, dayLength: number, status: ArenaPlaybackStatus): string {
+  const current = Number.isFinite(dayTime) ? Math.max(0, dayTime) : 0
+  const duration = Number.isFinite(dayLength) ? Math.max(.1, dayLength) : .1
+  return `Day ${current.toFixed(1)} / ${duration.toFixed(1)} · ${status}`
+}
+
+export interface ArenaSelectedTargetInput {
+  targetType: TargetType | null
+  targetId: number | null
+  targetX?: number
+  targetY?: number
+}
+
+type ArenaTargetCreature = Pick<World['creatures'][number], 'id' | 'individualId' | 'alive'>
+type ArenaTargetFood = Pick<World['food'][number], 'id'>
+
+export function formatSelectedTarget(
+  target: ArenaSelectedTargetInput,
+  creatures: ReadonlyArray<ArenaTargetCreature>,
+  food: ReadonlyArray<ArenaTargetFood> = [],
+): string {
+  const heldLocationShown=Number.isFinite(target.targetX)&&Number.isFinite(target.targetY)
+  const unavailableEntity=(kind:string)=>heldLocationShown?`${kind} target gone · held location shown`:`${kind} target · current status unavailable`
+  if (target.targetType === null) return 'None'
+  if (target.targetType === 'home') return 'Home location'
+  if (target.targetType === 'memory') return 'Remembered location'
+  if (target.targetType === 'explore') return 'Exploration waypoint'
+  if (target.targetType === 'food') return target.targetId !== null && food.some(item => item.id === target.targetId) ? 'Food item' : unavailableEntity('Food')
+  if (target.targetType === 'threat') {
+    const targetCreature = target.targetId === null ? undefined : creatures.find(creature => creature.id === target.targetId && creature.alive)
+    return targetCreature
+      ? heldLocationShown ? `Threat · Individual ${targetCreature.individualId} · path ends at an escape waypoint` : `Threat · Individual ${targetCreature.individualId}`
+      : heldLocationShown ? 'Threat target gone · path ends at an escape waypoint' : 'Threat target · current status unavailable'
+  }
+  if (target.targetId === null) return unavailableEntity('Prey')
+  const targetCreature = creatures.find(creature => creature.id === target.targetId && creature.alive)
+  return targetCreature ? `Prey · Individual ${targetCreature.individualId}` : unavailableEntity('Prey')
+}
+
+function observedCount(value: number | undefined): number {
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value!)) : 0
+}
+
+function observedQuantity(value: number | undefined, singular: string, plural = `${singular}s`): string {
+  const count = observedCount(value)
+  return `${count} ${count === 1 ? singular : plural}`
+}
+
+function observedDecisionLabel(target: TargetType): string {
+  return target === 'food' ? 'food' : target === 'prey' ? 'prey' : target === 'threat' ? 'danger' : target === 'home' ? 'home' : target === 'memory' ? 'remembered food' : 'exploration'
+}
+
+export function formatObservedDecisionMetadata(decision:Pick<DecisionSummary,'selectionBasis'|'decidedAt'>):string{
+  const basis=decision.selectionBasis==='best-utility'
+    ? 'basis: highest relative utility'
+    : decision.selectionBasis==='commitment'
+      ? 'basis: target commitment'
+      : decision.selectionBasis==='urgent-override'
+        ? 'basis: urgent safety override'
+        : ''
+  const provenance=decision.decidedAt
+  const captured=provenance&&Number.isInteger(provenance.generation)&&provenance.generation>=1&&Number.isFinite(provenance.dayTime)&&provenance.dayTime>=0&&Number.isInteger(provenance.reactionWindow)&&provenance.reactionWindow>=0
+    ? `captured Generation ${provenance.generation} · day ${provenance.dayTime.toFixed(2)} · reaction window ${provenance.reactionWindow}`
+    : ''
+  return [basis,captured].filter(Boolean).join(' · ')
+}
+
+function observedActionLabel(creature: World['creatures'][number]): string {
+  return CREATURE_STATE_METADATA[creature.home ? 'safe' : creature.mode].label
+}
+
+function inspectedCreature(world: World, individualId: number | null): World['creatures'][number] | undefined {
+  return individualId === null
+    ? undefined
+    : world.creatures.find(creature => creature.individualId === individualId)
+}
+
+function formatObservedCreaturePath(world: World, context: NextActionContext): string {
+  const inspected = inspectedCreature(world, context.selectedIndividualId)
+  if (!inspected) return 'Inspect a creature, then choose Next action to observe its perception and decision path.'
+  if (!inspected.alive) return 'The inspected creature is no longer living; inspect an active creature to observe a decision path.'
+
+  const perception = inspected.perceptionDiagnostics
+  const decision = inspected.decisionSummary
+  if (inspected.home && !perception && !decision) return 'The inspected creature is home; no active decision path was recorded for this step.'
+  const perceptionText = perception
+    ? `perception recorded ${observedCount(perception.creatures.detected)}/${observedCount(perception.creatures.total)} creatures and ${observedCount(perception.food.detected)}/${observedCount(perception.food.total)} food`
+    : 'perception telemetry is unavailable'
+  const decisionText = decision
+    ? `decision recorded as ${observedDecisionLabel(decision.chosen)} (reason noted: ${typeof decision.reason==='string'&&decision.reason.trim()?decision.reason:'not provided'})${formatObservedDecisionMetadata(decision)?` · ${formatObservedDecisionMetadata(decision)}`:''}`
+    : 'decision telemetry is unavailable'
+  const target = formatSelectedTarget(inspected, world.creatures, world.food)
+  const arrival = inspected.home ? ' It reached home during this step.' : ''
+  return `Inspected ${inspected.home ? 'creature now home' : 'active creature'}: ${perceptionText} → ${decisionText} → current action: ${observedActionLabel(inspected)} · target: ${target}.${arrival}`
+}
+
+function formatObservedGenerationBoundary(world: World): string {
+  const ledger = world.ledger.at(-1)
+  if (!ledger) return `Generation boundary reached; no generation ledger is available. Generation ${world.generation} is ready.`
+  const survivors = observedCount(ledger.outcomes?.survived)
+  const births = observedCount(ledger.birthsAdmitted)
+  const nextPopulation = survivors + births
+  return `Generation ${ledger.generation} recorded ${observedQuantity(ledger.foodConsumed, 'food item')} consumed, ${observedQuantity(ledger.attackAttempts, 'attack attempt')}, ${observedQuantity(ledger.attackSuccesses, 'attack success', 'attack successes')}, ${observedQuantity(survivors, 'survivor')}, and ${observedQuantity(births, 'birth')} → exact next population: ${nextPopulation}.`
+}
+
+/**
+ * Summarize one manual action step using only telemetry and ledger facts present
+ * in the resulting world. The wording is intentionally observational: it
+ * describes recorded perception, decisions, and outcomes without claiming why
+ * the population changed.
+ */
+export function formatObservedPath(world: World, result: NextActionResult, context: NextActionContext): string {
+  if (result.stop === 'generation-boundary') return `Observed path: ${formatObservedGenerationBoundary(world)}`
+  const inspected = inspectedCreature(world, context.selectedIndividualId)
+  if (result.stop === 'selected-inactive') {
+    const outcome = !inspected
+      ? 'became unavailable'
+      : !inspected.alive
+        ? 'died'
+        : inspected.home
+          ? 'reached home'
+          : 'is no longer active'
+    return `Observed path: The selected creature ${outcome}; other active creatures remain. The manual step stopped for this selection.`
+  }
+  if (context.selectedIndividualId !== null && !context.selectedWasActive) {
+    return inspected?.home
+      ? 'Observed path: The inspected creature was already home at step start; no new decision path was observed.'
+      : 'Observed path: The selected creature was not active at step start; no new decision path was observed.'
+  }
+  if (result.stop === 'no-active') {
+    const living = world.creatures.filter(creature => creature.alive)
+    const status = arenaPlaybackStatus({ playing: false, populationCount: world.creatures.length, activeCount: 0 })
+    const aggregate = formatArenaPlaybackDetail({ status, populationCount: world.creatures.length, livingCount: living.length })
+    if (context.selectedWasActive) {
+      if (!inspected) return `Observed path: The selected creature became unavailable. ${aggregate}`
+      if (!inspected.alive) return `Observed path: The selected creature died. ${aggregate}`
+      if (inspected.home) {
+        const selectedOutcome = inspected.perceptionDiagnostics || inspected.decisionSummary
+          ? formatObservedCreaturePath(world, context)
+          : 'The selected creature reached home during this step.'
+        return `Observed path: ${selectedOutcome} ${aggregate}`
+      }
+    }
+    return `Observed path: ${aggregate}`
+  }
+  const prefix = result.stop === 'bounded'
+    ? `Observed path: Step stopped at the ${observedQuantity(result.ticks, 'tick')} reaction-window bound. `
+    : 'Observed path: '
+  return `${prefix}${formatObservedCreaturePath(world, context)}`
+}
+
+export interface ArenaAccessibleDescriptionInput {
+  generation: number
+  livingCreatures: number
+  stateSummary: string
+  foodCount: number
+  patchCount: number
+  foodBudget: number
+  obstacleCount: number
+  ecologyMode: World['config']['ecologyMode']
+  hasSelectedCreature: boolean
+  selectedIsHunting?: boolean
+  focus?: ArenaFocus
+  focusCount?: number
+  selectedOutsideFocus?: boolean
+  playbackStatus?: ArenaPlaybackStatus
+  playbackDetail?: string
+}
+
+export function formatArenaOverlayDescription(
+  ecologyMode: World['config']['ecologyMode'],
+  hasSelectedCreature: boolean,
+  selectedIsHunting = false,
+): string {
+  const descriptions: string[] = []
+  if (ecologyMode === 'energy-regrowth') descriptions.push(ARENA_PATCH_STOCK_KEY)
+  if (hasSelectedCreature) {
+    descriptions.push(ARENA_SELECTED_OVERLAY_KEY)
+    if (selectedIsHunting) descriptions.push(ARENA_HUNT_CONTACT_KEY)
+  }
+  return descriptions.join(' ')
+}
+
+export function formatArenaAccessibleDescription(input: ArenaAccessibleDescriptionInput): string {
+  const resourceLabel = input.ecologyMode === 'energy-regrowth'
+    ? `${input.foodCount} food items distributed across ${input.patchCount} resource patches`
+    : `${input.foodCount} food remaining from a ${Math.round(input.foodBudget)}-item generation pulse across ${input.patchCount} patches`
+  const overlayDescription = formatArenaOverlayDescription(input.ecologyMode, input.hasSelectedCreature, input.selectedIsHunting)
+  const focusDescription = formatArenaFocusDescription(input.focus ?? 'all',input.focusCount,input.livingCreatures,input.selectedOutsideFocus)
+  const allFocusPathDescription = input.focus === 'all' ? ' Choose an action focus to reveal dashed held destinations captured at the last decision for active matches; decisions can persist between reaction windows.' : ''
+  const selectionHint = input.hasSelectedCreature
+    ? ''
+    : 'Select a creature to reveal its focus, sight, target, memory, and same-lineage overlays.'
+  const playbackDescription = input.playbackDetail
+    || (input.playbackStatus ? `Playback status: ${input.playbackStatus}.` : '')
+  return `Simulation arena, generation ${input.generation}, ${input.livingCreatures} living creatures: ${input.stateSummary}. ${playbackDescription ? `${playbackDescription} ` : ''}${resourceLabel}. ${input.obstacleCount} obstacles. ${overlayDescription ? `${overlayDescription} ` : ''}${focusDescription}${allFocusPathDescription} ${selectionHint} Creature body color shows speed and the bright body outline shows its current action. Click a creature or use the Inspect creature selector to select it.`
+}
+
+export function formatArenaSelectionStatus(selectedIndividualId: number | null): string {
+  return selectedIndividualId === null
+    ? 'Creature inspection cleared. No creature selected.'
+    : `Individual ${selectedIndividualId} selected for inspection.`
+}
+
+export const CREATURE_STATE_METADATA = {
+  safe:{label:'Safe at home',color:'#f8fafc'},
+  exploring:{label:'Exploring',color:'#38bdf8'},
+  foraging:{label:'Finding food',color:'#fde047'},
+  hunting:{label:'Hunting prey',color:'#fb7185'},
+  fleeing:{label:'Fleeing danger',color:'#c084fc'},
+  returning:{label:'Going home',color:'#4ade80'}
+} as const satisfies Record<CreatureState,{label:string;color:string}>
+
+/** Map the normalized speed trait to the body gradient used by the arena and charts. */
+export function speedColor(speed: number) {
+  const t=Math.max(0,Math.min(1,(speed-.55)/1.15))
+  const hue=175+(54-175)*t
+  return `hsl(${hue} 58% ${42+t*14}%)`
+}

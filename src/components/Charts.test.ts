@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { BEHAVIOR_HISTORY_CONTEXT, BehaviorHistory, buildGenerationDelta, buildGenerationRuler, buildHistoryTimeline, buildObservedNonnegativeDomain, buildOutcomeFlowTimeline, buildRetainedShockNavigator, buildSpeedHistogram, completePendingGenerationJournalFocus, contrastRatio, formatGenerationDelta, formatOutcomeFlowSummary, formatRetainedShockNavigatorNotice, formatTimelineSummary, generationRulerOffset, GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE, GENERATION_JOURNAL_SCROLL_OPTIONS, HistoryChart, historyCoordinate, MAX_TIMELINE_ENTRIES, openGenerationJournalReview, OUTCOME_FLOW_CARD_SURFACES, OUTCOME_FLOW_LEGEND, OUTCOME_FLOW_MISSING_TEXT, RETAINED_SHOCK_ARIA_LABEL_LIMIT, RETAINED_SHOCK_CONTEXT, RETAINED_SHOCK_ORDER_NOTE, resolveOutcomeFlowGeneration, resolveTimelineGeneration, safeFiniteHistoryValue, safeNonnegativeHistoryValue, SPEED_HISTOGRAM_DOMAIN, traitColor, outcomeFlowScrollLeft, outcomeFlowSlotCenter } from './Charts'
-import { speedColor } from './ArenaCanvas'
+import { speedColor } from './ArenaCanvasModel'
 import type { EndCause, GenerationLedger, HistoryPoint, World, WorldEvent } from '../simulation/types'
 
 const ledger=(generation:number,birthsAdmitted=generation%3):GenerationLedger=>({generation,birthsAdmitted,outcomes:{survived:4,hunted:0,energy:0,unfed:0,late:0,aged:0}} as GenerationLedger)

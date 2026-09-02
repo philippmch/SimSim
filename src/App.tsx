@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { ARENA_FOCUS_OPTIONS, ARENA_HUNT_CONTACT_KEY, ARENA_PATCH_STOCK_KEY, ARENA_QUICK_START, ARENA_SELECTED_OVERLAY_KEY, ArenaCanvas, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress, formatArenaFocusDescription, formatArenaFocusOption, formatArenaPlaybackDetail, formatObservedPath, formatSelectedTarget, showArenaQuickStart } from './components/ArenaCanvas'
-import type { ArenaPlaybackStatus, CreatureState } from './components/ArenaCanvas'
+import { ARENA_FOCUS_OPTIONS, ARENA_HUNT_CONTACT_KEY, ARENA_PATCH_STOCK_KEY, ARENA_QUICK_START, ARENA_SELECTED_OVERLAY_KEY, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress, formatArenaFocusDescription, formatArenaFocusOption, formatArenaPlaybackDetail, formatObservedPath, formatSelectedTarget, showArenaQuickStart } from './components/ArenaCanvasModel'
+import type { ArenaPlaybackStatus, CreatureState } from './components/ArenaCanvasModel'
 import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
 import { MAX_FOOD,MAX_FOUNDER_MIGRATION_BATCH,MAX_POPULATION, sanitizeConfig } from './simulation/config'
 import { createController } from './simulation/controller'
@@ -12,6 +12,7 @@ import type {CreatureInspectorActionControls} from './components/CreatureInspect
 import DashboardNavigation, { DASHBOARD_SECTION_IDS, DASHBOARD_SECTION_SCROLL_STYLE, openDashboardSection } from './components/DashboardNavigation'
 
 const ExperimentPanel=lazy(()=>import('./components/ExperimentPanel').then(module=>({default:module.ExperimentPanel})))
+const ArenaCanvas=lazy(()=>import('./components/ArenaCanvasRenderer').then(module=>({default:module.ArenaCanvas})))
 const GenerationJournal=lazy(()=>import('./components/GenerationJournal'))
 const InsightsPanel=lazy(()=>import('./components/InsightsPanel'))
 const LivePulse=lazy(()=>import('./components/LivePulse'))
@@ -80,6 +81,11 @@ export function SelectedInspectorShell({selected,actionControls,onClose,children
 
 export function InterventionFeedFallback(){
   return <div className="interventions" role="group" aria-label="Recent shocks" aria-busy="true"><span><strong style={{fontSize:12}}>Recent shocks</strong><small style={{fontSize:10}}>Opening recorded shocks…</small></span></div>
+}
+
+/** Keep the above-fold arena footprint and explain the short renderer load. */
+export function ArenaCanvasFallback(){
+  return <div className="arena" data-arena-canvas-fallback="true" role="status" aria-label="Live simulation arena" aria-busy="true" style={{width:'100%',height:'100%',display:'grid',placeItems:'center',boxSizing:'border-box',padding:'24px',background:'linear-gradient(135deg,#234c3c,#183228)',color:'#d9e5dd',textAlign:'center'}}><span style={{display:'grid',gap:'5px',maxWidth:'260px'}}><strong>Opening live arena…</strong><small style={{color:'#a7bbb2'}}>Creature positions and action paths will appear shortly.</small></span></div>
 }
 
 export interface SimulationEventStoryProps {
@@ -471,7 +477,7 @@ function App(){
     <main aria-hidden={experimentOpen||undefined}>
       <section className="simulation-panel" aria-label="Simulation" aria-hidden={settingsOpen&&isNarrow||undefined}>
         <div className="arena-wrap">
-          <ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual} arenaFocus={arenaFocus} playbackStatus={arenaStatus} playbackDetail={arenaDetail}/>
+          <Suspense fallback={<ArenaCanvasFallback/>}><ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual} arenaFocus={arenaFocus} playbackStatus={arenaStatus} playbackDetail={arenaDetail}/></Suspense>
           <div className="arena-badge" style={{pointerEvents:'none'}}><strong>{arenaDayLabel}</strong><small>Generation {world.generation}</small><small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} current food across ${world.environment.patches.length} resource patches`:`${world.food.length} current food`}</small>{showArenaQuickStart(world.ledger.length)&&ARENA_QUICK_START.map(line=><small key={line}>{line}</small>)}</div>
           <PlaybackPhaseStatus status={arenaStatus} detail={arenaDetail} playing={playing} suppressed={suppressPlaybackAnnouncementRef.current}/>
           <details className="arena-keys" style={{border:0,paddingTop:0,marginTop:0}} open={arenaKeysOpen||!isNarrow} onToggle={event=>{if(isNarrow)setArenaKeysOpen(event.currentTarget.open)}}>

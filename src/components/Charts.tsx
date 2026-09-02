@@ -2,7 +2,7 @@ import { END_CAUSES } from '../simulation/types'
 import type { BiologicalTrait,EndCause,GenerationLedger,HistoryPoint,World,WorldEvent } from '../simulation/types'
 import { MAX_WORLD_EVENTS } from '../simulation/engine'
 import { useEffect,useRef } from 'react'
-import { speedColor } from './ArenaCanvas'
+import { speedColor } from './ArenaCanvasModel'
 
 export const SPEED_HISTOGRAM_DOMAIN = {min:.3,max:2.8} as const
 const traitDomains:Record<BiologicalTrait,{min:number;max:number}>={speed:{min:.3,max:2.8},size:{min:.3,max:2.8},sense:{min:.035,max:.6},aggression:{min:0,max:1},caution:{min:0,max:1},exploration:{min:0,max:1}}

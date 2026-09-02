@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react'
 import type { World } from '../simulation/types'
-import type { ArenaPlaybackStatus } from './ArenaCanvas'
+import type { ArenaPlaybackStatus } from './ArenaCanvasModel'
 import { GenerationForecast } from './GenerationForecast'
 import RecordedGenerationHandoff from './RecordedGenerationHandoff'
 

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import {
   ARENA_COLOR_SCHEME_QUERY,
   ARENA_DARK_PALETTE,
@@ -40,6 +42,27 @@ import { createWorld, defaultConfig } from '../simulation/engine'
 import { advanceToNextAction } from '../simulation/scheduler'
 import type { NextActionContext } from '../simulation/scheduler'
 import type { World } from '../simulation/types'
+
+describe('arena renderer boundary', () => {
+  it('resolves the split renderer with both the canvas and creature picker', async () => {
+    const { ArenaCanvas } = await import('./ArenaCanvasRenderer')
+    const world = createWorld({...defaultConfig,initialPopulation:2})
+    const markup = renderToStaticMarkup(createElement(ArenaCanvas,{
+      world,
+      revision:0,
+      selectedIndividualId:null,
+      onSelect:()=>{},
+      arenaFocus:'all',
+      playbackStatus:'Paused',
+      playbackDetail:'Paused. Resume playback to continue active creature actions.',
+    }))
+
+    expect(markup).toContain('<canvas class="arena" role="img"')
+    expect(markup).toContain('id="arena-creature-picker"')
+    expect(markup).toContain('Individual 1')
+    expect(markup).toContain('Individual 2')
+  })
+})
 
 const descriptionInput = (overrides: Partial<ArenaAccessibleDescriptionInput> = {}): ArenaAccessibleDescriptionInput => ({
   generation: 3,
@@ -232,6 +255,8 @@ describe('arena clarity helpers', () => {
     expect(ARENA_FOCUS_TARGET_PATH_KEY).toContain('dashed held destinations captured at last decision')
     expect(ARENA_FOCUS_TARGET_PATH_KEY).toContain('target still present (not current position)')
     expect(ARENA_FOCUS_TARGET_PATH_KEY).toContain('decisions can persist between reaction windows')
+    expect(ARENA_FOCUS_TARGET_PATH_KEY).not.toContain('memory')
+    expect(ARENA_FOCUS_TARGET_PATH_KEY).not.toContain('kin')
   })
 
   it('classifies held destinations from current entities without mistaking threats for endpoints', () => {
