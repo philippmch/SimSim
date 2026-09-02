@@ -26,8 +26,10 @@ without overwhelming the configured starting means. Clonal, low-diversity, and
 high-diversity controls are available; zero variation produces exactly equal
 founders. Version-2 experiments migrate to zero founder variation so their prior
 deterministic starting populations remain reproducible. Version-3 setups migrate
-to classic lifecycle, perfect-perception, and threshold-predation modes. Fresh
-version-4 setups use ecological modes, while all mechanisms remain switchable.
+to classic lifecycle, perfect-perception, and threshold-predation modes. Version-4
+experiments migrate with reproductive maturity age **0** so their prior
+generation outcomes remain reproducible. Fresh version-5 setups use ecological
+modes and start with maturity age **1**; all mechanisms remain switchable.
 
 Biological individual and lineage identifiers are separate from transient render
 objects. A surviving adult keeps its individual identifier across generations;
@@ -100,10 +102,17 @@ Do not use its outcomes to infer the behavior of real species or populations.
 
 Locomotion pressure is proportional to `size³ × actual velocity²`; sensing adds
 a separate linear energy cost. In ecological mode, positive-energy creatures
-must return home before the generation ends, retain part of their reserve, and
-reproduce only when they can pay the configured cost. In classic mode, one food
-brought home survives and two also produce one offspring. These equations are
-calibrated for legible dynamics rather than fitted to empirical data.
+must return home before the generation ends and retain part of their reserve.
+Their retained energy must be **strictly greater than** the configured
+reproduction cost, and their age must be at least `maturityAge`, before they can
+reproduce. Founders and newborns start at age 0; every survivor gains one age
+unit at each settlement. Fresh v5 runs therefore keep age-0 founders and
+newborns out of the next reproduction pool, while v4 imports use maturity age 0
+for replay compatibility.
+In classic mode, the original rule is unchanged: one food brought home survives
+and two also produce one offspring; classic mode does not apply the ecological
+maturity gate. These equations are calibrated for legible dynamics rather than
+fitted to empirical data.
 
 ## Reproducibility and privacy
 

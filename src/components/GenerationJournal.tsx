@@ -78,6 +78,8 @@ export interface GenerationReview {
   resource:{start:number;produced:number;removed:number;consumed:number;remaining:number;expected:number;reconciled:boolean}
   attacks:{attempts:number;attemptBasis:AttackAttemptBasis|null;wins:number;failures:number;contested:number|null;preyConsumed:number}
   births:{eligible:number;admitted:number;capped:number}
+  /** Optional retained maturity partition; null means legacy/inactive or inconsistent telemetry. */
+  maturity:{energyReadyImmature:number;belowThreshold:number}|null
   takeaway:string
 }
 
@@ -235,6 +237,31 @@ const survivorLossField=(source:unknown,field:string):unknown=>{
   try{return source[field]}catch{return undefined}
 }
 const safeNonnegativeInteger=(value:unknown):value is number=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0
+
+export interface JournalMaturityBreakdown {
+  energyReadyImmature:number
+  belowThreshold:number
+}
+
+/**
+ * Reconstruct the survivor-side reproduction funnel only when every retained
+ * count needed for it is safe and reconciled.  Missing birthsImmature is
+ * intentionally unavailable rather than inferred as zero for old ledgers.
+ */
+export function deriveJournalMaturity(ledger:GenerationLedger|undefined):JournalMaturityBreakdown|null{
+  if(!ledger)return null
+  const source=ledger as unknown
+  const survivors=survivorLossField(survivorLossField(source,'outcomes'),'survived')
+  const eligible=survivorLossField(source,'birthsEligible')
+  const admitted=survivorLossField(source,'birthsAdmitted')
+  const capped=survivorLossField(source,'birthsCapped')
+  const immature=survivorLossField(source,'birthsImmature')
+  if(!safeNonnegativeInteger(survivors)||!safeNonnegativeInteger(eligible)||!safeNonnegativeInteger(admitted)||!safeNonnegativeInteger(capped)||!safeNonnegativeInteger(immature))return null
+  if(admitted>eligible||eligible>survivors||eligible!==admitted+capped)return null
+  const below=survivors-eligible-immature
+  if(!safeNonnegativeInteger(below))return null
+  return{energyReadyImmature:immature,belowThreshold:below}
+}
 const survivorLossMean=(profile:unknown,trait:BiologicalTrait):number|null=>{
   const moment=survivorLossField(profile,trait),mean=survivorLossField(moment,'mean')
   return finiteNumber(mean)?mean:null
@@ -403,6 +430,7 @@ export function deriveGenerationReview(ledger:GenerationLedger|undefined):Genera
     resource:{...resource,reconciled:resource.expected===resource.remaining},
     attacks:{attempts:ledger.attackAttempts,attemptBasis:ledger.attackAttemptBasis??null,wins:ledger.attackSuccesses,failures:ledger.attackFailures,contested:ledger.attackContested??null,preyConsumed:ledger.preyConsumed},
     births:{eligible:ledger.birthsEligible,admitted:ledger.birthsAdmitted,capped:ledger.birthsCapped},
+    maturity:deriveJournalMaturity(ledger),
     takeaway:getSelectionTakeaway(ledger),
   }
 }
@@ -416,9 +444,12 @@ export function deriveGenerationInterpretation(review:GenerationReview):string{
   const largest=losses.filter(outcome=>outcome.count===largestCount)
   const lossText=largest.length===1?`${largest[0].label} was the largest recorded loss (${largestCount})`:`${largest.map(outcome=>outcome.label).join(' and ')} were tied as the largest recorded losses (${largestCount} each)`
   const flow=`survivors: ${review.survivors}; admitted births: ${review.births.admitted}; next population: ${review.nextPopulation}`
-  if(review.nextPopulation===0)return`Descriptive only: no next population remained; ${flow}. ${largest.length?`${lossText}.`:'No loss outcome was recorded.'}`
-  if(!largest.length&&review.survivors===review.evaluatedPopulation)return`Descriptive only: all ${review.evaluatedPopulation} creatures survived; ${flow}.`
-  return`Descriptive only: ${largest.length?lossText:'No recorded loss stood out'}; ${flow}.`
+  const maturityNote=review.maturity&&review.maturity.energyReadyImmature>0
+    ?` Recorded maturity category: ${review.maturity.energyReadyImmature} energy-ready but immature ${review.maturity.energyReadyImmature===1?'survivor was':'survivors were'} recorded; observational only, not a causal explanation.`
+    :''
+  if(review.nextPopulation===0)return`Descriptive only: no next population remained; ${flow}. ${largest.length?`${lossText}.`:'No loss outcome was recorded.'}${maturityNote}`
+  if(!largest.length&&review.survivors===review.evaluatedPopulation)return`Descriptive only: all ${review.evaluatedPopulation} creatures survived; ${flow}.${maturityNote}`
+  return`Descriptive only: ${largest.length?lossText:'No recorded loss stood out'}; ${flow}.${maturityNote}`
 }
 
 const emptyInheritanceTraits=():Record<BiologicalTrait,InheritanceTraitSummary>=>Object.fromEntries(JOURNAL_TRAITS.map(trait=>[trait,{parentMean:null,offspringMean:null,changedCount:0}])) as Record<BiologicalTrait,InheritanceTraitSummary>
@@ -616,7 +647,7 @@ export function GenerationJournal({ledgers,events,requestedGeneration,onRequeste
       <div className="story-grid journal-grid">
         <div><h3>Population outcomes</h3><p className="journal-kicker">Evaluated cohort: <strong>{review.evaluatedPopulation}</strong> creatures at settlement · each has one result</p><p className="journal-equation"><strong>{review.evaluatedPopulation}</strong> evaluated → <strong>{review.survivors}</strong> survived + <strong>{review.births.admitted}</strong> newborns = <strong>{review.nextPopulation}</strong> next population ({review.populationChange===0?'no net change':`${review.populationChange>0?'+':''}${review.populationChange}`})</p><div className="utility-breakdown"><table><tbody>{review.outcomes.map(outcome=><tr key={outcome.cause}><th scope="row">{outcome.label}</th><td>{outcome.count}</td></tr>)}</tbody></table></div></div>
         <div><h3>Resource balance</h3><p className="journal-equation"><strong>{formatNumber(review.resource.start)}</strong> start + <strong>{formatNumber(review.resource.produced)}</strong> produced − <strong>{formatNumber(review.resource.removed)}</strong> drought removed − <strong>{formatNumber(review.resource.consumed)}</strong> consumed = <strong>{formatNumber(review.resource.remaining)}</strong> remaining</p><p className={review.resource.reconciled?'journal-check':'journal-warning'} role="status">{review.resource.reconciled?'✓ Resource count reconciles.':`Check resource count: expected ${formatNumber(review.resource.expected)}.`}</p><p className="journal-kicker">Survivors: <strong>{review.survivors}</strong></p></div>
-        <div><h3>Attacks &amp; births</h3><p className="journal-kicker">{formatAttackBasisNote(review.attacks.attemptBasis)}</p><div className="utility-breakdown"><table><tbody><tr><th scope="row">{formatAttackAttemptLabel(review.attacks.attemptBasis)}</th><td>{review.attacks.attempts}</td></tr><tr><th scope="row">Wins / failures</th><td>{review.attacks.wins} / {review.attacks.failures}</td></tr><tr><th scope="row">Contested same-prey claims</th><td>{review.attacks.contested===null?'Unavailable':review.attacks.contested}</td></tr><tr><th scope="row">Prey consumed</th><td>{review.attacks.preyConsumed}</td></tr><tr><th scope="row">Eligible parents → admitted births</th><td>{review.births.eligible} → {review.births.admitted}</td></tr><tr><th scope="row">Births capped</th><td>{review.births.capped}</td></tr><tr><th scope="row">Parents of newborns</th><td>{review.births.admitted}</td></tr></tbody></table></div></div>
+        <div><h3>Attacks &amp; births</h3><p className="journal-kicker">{formatAttackBasisNote(review.attacks.attemptBasis)}</p><div className="utility-breakdown"><table><tbody><tr><th scope="row">{formatAttackAttemptLabel(review.attacks.attemptBasis)}</th><td>{review.attacks.attempts}</td></tr><tr><th scope="row">Wins / failures</th><td>{review.attacks.wins} / {review.attacks.failures}</td></tr><tr><th scope="row">Contested same-prey claims</th><td>{review.attacks.contested===null?'Unavailable':review.attacks.contested}</td></tr><tr><th scope="row">Prey consumed</th><td>{review.attacks.preyConsumed}</td></tr>{review.maturity===null?<tr><th scope="row">Eligible parents → admitted births</th><td>{review.births.eligible} → {review.births.admitted}</td></tr>:<><tr><th scope="row">Mature + energy-eligible parents → admitted births</th><td>{review.births.eligible} → {review.births.admitted}</td></tr><tr><th scope="row">Maturity blocked (energy-ready but immature)</th><td>{review.maturity.energyReadyImmature}</td></tr><tr><th scope="row">Below reproduction threshold</th><td>{review.maturity.belowThreshold}</td></tr></>}<tr><th scope="row">Births capped</th><td>{review.births.capped}</td></tr><tr><th scope="row">Parents of newborns</th><td>{review.births.admitted}</td></tr></tbody></table></div>{review.maturity!==null&&<p className="journal-kicker">Funnel: mature + energy-eligible parents can be admitted; immature and below-threshold survivors remain outside the parent pool.</p>}</div>
       </div>
       <div className="journal-takeaway"><strong>Recorded outcome summary</strong><span>{deriveGenerationInterpretation(review)}</span></div>
       <div className="journal-takeaway"><strong>Selection takeaway</strong><span>{review.takeaway}</span></div>

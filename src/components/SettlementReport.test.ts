@@ -2,7 +2,8 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { GenerationLedger } from '../simulation/types'
-import { formatSettlementAnnouncement, formatSettlementBirthCap, formatSettlementEquation, formatSettlementLosses, formatSettlementReportAriaLabel, getSettlementGeneration, isFiniteNonnegativeInteger, isValidSettlementNextGeneration, SETTLEMENT_REPORT_UNAVAILABLE, SettlementReport, summarizeLatestSettlement, summarizeSettlementReport } from './SettlementReport'
+import { deriveJournalMaturity } from './GenerationJournal'
+import { formatSettlementAnnouncement, formatSettlementBirthCap, formatSettlementEquation, formatSettlementLosses, formatSettlementMaturityBreakdown, formatSettlementReportAriaLabel, getSettlementGeneration, isFiniteNonnegativeInteger, isValidSettlementNextGeneration, SETTLEMENT_MATURITY_UNAVAILABLE, SETTLEMENT_REPORT_UNAVAILABLE, SettlementReport, summarizeLatestSettlement, summarizeSettlementReport } from './SettlementReport'
 
 const makeLedger = (overrides: Record<string, unknown> = {}): GenerationLedger => ({
   generation: 4,
@@ -54,6 +55,56 @@ describe('settlement report helpers', () => {
     expect(summary.cappedBirths).toBe(3)
     expect(formatSettlementBirthCap(summary)).toBe('3 births capped by population limit')
     expect(formatSettlementAnnouncement(summary)).toContain('3 births capped by population limit')
+  })
+
+  it('reconciles an available maturity funnel with truthful singular and plural labels', () => {
+    const ledger = makeLedger({ birthsEligible: 3, birthsAdmitted: 2, birthsCapped: 1, birthsImmature: 1 })
+    const plural = summarizeSettlementReport(ledger)!
+    expect(plural.maturity).toEqual({ matureEligible: 3, energyReadyImmature: 1, belowThreshold: 1 })
+    expect(plural.maturity && { energyReadyImmature: plural.maturity.energyReadyImmature, belowThreshold: plural.maturity.belowThreshold }).toEqual(deriveJournalMaturity(ledger))
+    expect(formatSettlementMaturityBreakdown(plural)).toBe('Reproduction: 3 mature + energy-eligible parents · 1 energy-ready but immature survivor · 1 survivor below reproduction threshold · 2 admitted births · 1 capacity-capped birth')
+    expect(formatSettlementAnnouncement(plural)).toContain('1 energy-ready but immature survivor')
+
+    const singular = summarizeSettlementReport(makeLedger({ startPopulation: 1, outcomes: { survived: 1, hunted: 0, energy: 0, unfed: 0, late: 0, aged: 0 }, birthsEligible: 1, birthsAdmitted: 1, birthsCapped: 0, birthsImmature: 0 }))!
+    expect(singular.maturity).toEqual({ matureEligible: 1, energyReadyImmature: 0, belowThreshold: 0 })
+    expect(formatSettlementMaturityBreakdown(singular)).toBe('Reproduction: 1 mature + energy-eligible parent · 0 energy-ready but immature survivors · 0 survivors below reproduction threshold · 1 admitted birth · 0 capacity-capped births')
+    expect(formatSettlementAnnouncement(singular)).not.toContain('Maturity breakdown')
+  })
+
+  it('keeps missing, malformed, and inconsistent maturity telemetry unavailable', () => {
+    const legacy = summarizeSettlementReport(makeLedger())!
+    expect(legacy.maturity).toBeNull()
+    expect(formatSettlementMaturityBreakdown(legacy)).toBe(SETTLEMENT_MATURITY_UNAVAILABLE)
+    expect(formatSettlementAnnouncement(legacy)).not.toContain(SETTLEMENT_MATURITY_UNAVAILABLE)
+
+    for (const birthsImmature of [null, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, '1']) {
+      const malformed = summarizeSettlementReport(makeLedger({ birthsImmature }))!
+      expect(malformed.maturity).toBeNull()
+      expect(formatSettlementMaturityBreakdown(malformed)).toBe(SETTLEMENT_MATURITY_UNAVAILABLE)
+    }
+    for (const overrides of [
+      { birthsEligible: 5, birthsAdmitted: 2, birthsCapped: 3, birthsImmature: 1 },
+      { birthsEligible: 3, birthsAdmitted: 2, birthsCapped: 1, birthsImmature: 3 },
+      { birthsEligible: 3, birthsAdmitted: 2, birthsCapped: 0, birthsImmature: 1 },
+    ]) {
+      const inconsistent = summarizeSettlementReport(makeLedger(overrides))!
+      expect(inconsistent.maturity).toBeNull()
+      expect(formatSettlementMaturityBreakdown(inconsistent)).toBe(SETTLEMENT_MATURITY_UNAVAILABLE)
+    }
+  })
+
+  it('shows the maturity funnel in the compact result only once and announces nonzero detail', () => {
+    const ledger = makeLedger({ birthsEligible: 3, birthsAdmitted: 2, birthsCapped: 1, birthsImmature: 1 })
+    const markup = renderToStaticMarkup(createElement(SettlementReport, { ledgers: [ledger], onReviewGeneration: () => {} }))
+    expect(markup).toContain('Reproduction: 3 mature + energy-eligible parents')
+    expect(markup).not.toContain('Admitted births <b>2</b>')
+    expect(markup).not.toContain('Capped births <b>1</b>')
+    expect(markup).toContain('1 energy-ready but immature survivor')
+
+    const legacyMarkup = renderToStaticMarkup(createElement(SettlementReport, { ledgers: [makeLedger()], onReviewGeneration: () => {} }))
+    expect(legacyMarkup).not.toContain('Reproduction:')
+    expect(legacyMarkup).toContain('Admitted births <b>2</b>')
+    expect(legacyMarkup).toContain('Capped births <b>1</b>')
   })
 
   it('marks malformed required core fields unavailable without unsafe output', () => {

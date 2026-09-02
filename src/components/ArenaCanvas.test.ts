@@ -449,6 +449,46 @@ describe('arena clarity helpers', () => {
     expect(path).toContain('exact next population: 5')
   })
 
+  it('adds a maturity observation only for a positive, reconciled telemetry count', () => {
+    const makeBoundaryLedger = (birthsImmature: unknown): World['ledger'][number] => ({
+      generation: 4,
+      startPopulation: 3,
+      outcomes: { survived: 3, hunted: 0, energy: 0, unfed: 0, late: 0, aged: 0 },
+      foodAtStart: 0,
+      foodProduced: 0,
+      foodRemoved: 0,
+      foodConsumed: 0,
+      foodRemaining: 0,
+      preyConsumed: 0,
+      attackAttempts: 0,
+      attackSuccesses: 0,
+      attackFailures: 0,
+      birthsEligible: 1,
+      birthsAdmitted: 1,
+      birthsCapped: 0,
+      birthsImmature: birthsImmature as never,
+      selection: {} as never,
+      selectionByOutcome: {} as never,
+    })
+    const world = observedWorld()
+    world.ledger = [makeBoundaryLedger(1)]
+    const singular = formatObservedPath(world, { ticks: 1, stop: 'generation-boundary' }, observedContext(world))
+    expect(singular).toContain('1 energy-ready survivor waited for maturity')
+
+    world.ledger = [makeBoundaryLedger(2)]
+    const plural = formatObservedPath(world, { ticks: 1, stop: 'generation-boundary' }, observedContext(world))
+    expect(plural).toContain('2 energy-ready survivors waited for maturity')
+
+    for (const value of [0, undefined, null, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, '1']) {
+      world.ledger = [makeBoundaryLedger(value)]
+      const path = formatObservedPath(world, { ticks: 1, stop: 'generation-boundary' }, observedContext(world))
+      expect(path).not.toContain('energy-ready')
+      expect(path).not.toMatch(/NaN|Infinity|undefined/)
+    }
+    world.ledger = [{ ...makeBoundaryLedger(1), birthsEligible: 3 }]
+    expect(formatObservedPath(world, { ticks: 1, stop: 'generation-boundary' }, observedContext(world))).not.toContain('energy-ready')
+  })
+
   it('handles no-active and bounded results without claiming an unobserved decision', () => {
     const noActive = observedWorld()
     noActive.inspectedIndividualId = null

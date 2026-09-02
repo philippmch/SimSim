@@ -12,6 +12,7 @@ export const SETTLEMENT_LOSS_LABELS: Record<SettlementLossCause, string> = {
 }
 
 export const SETTLEMENT_REPORT_UNAVAILABLE = 'Recorded settlement details unavailable for this retained record.'
+export const SETTLEMENT_MATURITY_UNAVAILABLE = 'Maturity breakdown unavailable or inactive for this record'
 
 /** Counts in a ledger are discrete population outcomes, so unsafe values stay unavailable. */
 export function isFiniteNonnegativeInteger(value: unknown): value is number {
@@ -29,6 +30,17 @@ export function isValidSettlementNextGeneration(value: unknown): value is number
 
 type SettlementLosses = Record<SettlementLossCause, number | null>
 
+/**
+ * The optional maturity telemetry partitions the survivors before the
+ * existing eligible → admitted/capped funnel.  A null breakdown means the
+ * retained ledger is legacy/inactive or does not reconcile safely.
+ */
+export interface SettlementMaturityBreakdown {
+  matureEligible: number
+  energyReadyImmature: number
+  belowThreshold: number
+}
+
 export interface SettlementReportSummary {
   generation: number
   nextGeneration: number
@@ -40,6 +52,7 @@ export interface SettlementReportSummary {
   losses: SettlementLosses
   totalLosses: number | null
   cappedBirths: number | null
+  maturity: SettlementMaturityBreakdown | null
 }
 
 interface RecordLike {
@@ -71,6 +84,44 @@ interface SettlementCore {
   survivors: number
   admittedBirths: number
   exactNextPopulation: number
+}
+
+interface SettlementBirthCounts {
+  eligible: number
+  admitted: number
+  capped: number
+}
+
+function readSettlementBirthCounts(ledger: unknown, core: SettlementCore): { eligible: number | null; counts: SettlementBirthCounts | null } {
+  const eligible = read(ledger, 'birthsEligible')
+  const admitted = read(ledger, 'birthsAdmitted')
+  const capped = read(ledger, 'birthsCapped')
+  const validEligible = isFiniteNonnegativeInteger(eligible)
+    && eligible >= core.admittedBirths
+    && eligible <= core.survivors
+  if (!validEligible) return { eligible: null, counts: null }
+  const counts = isFiniteNonnegativeInteger(capped) && eligible === core.admittedBirths + capped
+    ? { eligible, admitted: core.admittedBirths, capped }
+    : null
+  return { eligible, counts }
+}
+
+/**
+ * Validate and derive the optional survivor maturity partition.  In
+ * particular, do not turn a missing birthsImmature field into zero: old
+ * ledgers did not record this distinction.
+ */
+function deriveSettlementMaturity(ledger: unknown, core: SettlementCore, births: SettlementBirthCounts | null): SettlementMaturityBreakdown | null {
+  if (!births) return null
+  const immature = read(ledger, 'birthsImmature')
+  if (!isFiniteNonnegativeInteger(immature)) return null
+  const remaining = core.survivors - births.eligible - immature
+  if (!isFiniteNonnegativeInteger(remaining)) return null
+  return {
+    matureEligible: births.eligible,
+    energyReadyImmature: immature,
+    belowThreshold: remaining,
+  }
 }
 
 function deriveSettlementCore(ledger: unknown): SettlementCore | null {
@@ -130,20 +181,14 @@ export function summarizeSettlementReport(ledger: GenerationLedger | unknown): S
     && isFiniteNonnegativeInteger(core.survivors + totalLosses)
     && core.survivors + totalLosses === core.evaluatedCohort
 
-  const rawEligibleParents = read(ledger, 'birthsEligible')
-  const rawCappedBirths = read(ledger, 'birthsCapped')
-  const validEligibleParents = isFiniteNonnegativeInteger(rawEligibleParents)
-    && rawEligibleParents >= core.admittedBirths
-    && rawEligibleParents <= core.survivors
-  const validCap = validEligibleParents
-    && isFiniteNonnegativeInteger(rawCappedBirths)
-    && rawEligibleParents === core.admittedBirths + rawCappedBirths
+  const birthCounts = readSettlementBirthCounts(ledger, core)
   return {
     ...core,
-    eligibleParents: validEligibleParents ? rawEligibleParents : null,
+    eligibleParents: birthCounts.eligible,
     losses,
     totalLosses: reconciles ? totalLosses : null,
-    cappedBirths: validCap ? rawCappedBirths : null,
+    cappedBirths: birthCounts.counts?.capped ?? null,
+    maturity: deriveSettlementMaturity(ledger, core, birthCounts.counts),
   }
 }
 
@@ -212,6 +257,46 @@ export function formatSettlementBirthCap(summary: SettlementReportSummary): stri
   return `${cappedBirths} ${cappedBirths === 1 ? 'birth' : 'births'} capped by population limit`
 }
 
+function formatSettlementCount(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`
+}
+
+function readSettlementMaturity(summary: unknown): SettlementMaturityBreakdown | null {
+  const maturity = read(summary, 'maturity')
+  const matureEligible = read(maturity, 'matureEligible')
+  const energyReadyImmature = read(maturity, 'energyReadyImmature')
+  const belowThreshold = read(maturity, 'belowThreshold')
+  if (!isFiniteNonnegativeInteger(matureEligible)
+    || !isFiniteNonnegativeInteger(energyReadyImmature)
+    || !isFiniteNonnegativeInteger(belowThreshold)) return null
+  const survivors = read(summary, 'survivors')
+  const eligibleParents = read(summary, 'eligibleParents')
+  const admittedBirths = read(summary, 'admittedBirths')
+  const cappedBirths = read(summary, 'cappedBirths')
+  if (!isFiniteNonnegativeInteger(survivors)
+    || !isFiniteNonnegativeInteger(eligibleParents)
+    || !isFiniteNonnegativeInteger(admittedBirths)
+    || !isFiniteNonnegativeInteger(cappedBirths)
+    || matureEligible !== eligibleParents
+    || admittedBirths > matureEligible
+    || !isFiniteNonnegativeInteger(admittedBirths + cappedBirths)
+    || matureEligible !== admittedBirths + cappedBirths
+    || !isFiniteNonnegativeInteger(matureEligible + energyReadyImmature)
+    || matureEligible + energyReadyImmature > survivors
+    || !isFiniteNonnegativeInteger(matureEligible + energyReadyImmature + belowThreshold)
+    || matureEligible + energyReadyImmature + belowThreshold !== survivors) return null
+  return { matureEligible, energyReadyImmature, belowThreshold }
+}
+
+/** Format the complete, reconciled reproduction funnel for a recorded result. */
+export function formatSettlementMaturityBreakdown(summary: SettlementReportSummary): string {
+  const maturity = readSettlementMaturity(summary)
+  if (!maturity) return SETTLEMENT_MATURITY_UNAVAILABLE
+  const admittedBirths = read(summary, 'admittedBirths') as number
+  const cappedBirths = read(summary, 'cappedBirths') as number
+  return `Reproduction: ${formatSettlementCount(maturity.matureEligible, 'mature + energy-eligible parent', 'mature + energy-eligible parents')} · ${formatSettlementCount(maturity.energyReadyImmature, 'energy-ready but immature survivor', 'energy-ready but immature survivors')} · ${formatSettlementCount(maturity.belowThreshold, 'survivor below reproduction threshold', 'survivors below reproduction threshold')} · ${formatSettlementCount(admittedBirths, 'admitted birth', 'admitted births')} · ${formatSettlementCount(cappedBirths, 'capacity-capped birth', 'capacity-capped births')}`
+}
+
 export function formatSettlementReportAriaLabel(summary: SettlementReportSummary): string {
   const generation = getSettlementGeneration(summary)
   if (generation === null || formatSettlementEquation(summary) === 'Settlement equation unavailable') return 'Last recorded settlement details unavailable for this retained record.'
@@ -231,7 +316,11 @@ export function formatSettlementAnnouncement(summary: SettlementReportSummary): 
   if (!isFiniteNonnegativeInteger(exactNextPopulation)) return SETTLEMENT_REPORT_UNAVAILABLE
   const capDescription = formatSettlementBirthCap(summary)
   const cap = capDescription === 'No births capped' ? '' : ` ${capDescription}.`
-  return `Recorded settlement, Generation ${generation} → ${nextGeneration} (actual result, not a counterfactual forecast): ${equation}. ${formatSettlementLosses(summary)}.${cap}`
+  const maturity = readSettlementMaturity(summary)
+  const maturityNote = maturity && maturity.energyReadyImmature > 0
+    ? ` ${formatSettlementMaturityBreakdown(summary)}.`
+    : ''
+  return `Recorded settlement, Generation ${generation} → ${nextGeneration} (actual result, not a counterfactual forecast): ${equation}. ${formatSettlementLosses(summary)}.${cap}${maturityNote}`
 }
 
 export interface SettlementReportProps {
@@ -256,19 +345,21 @@ export function SettlementReport({ ledgers, onReviewGeneration }: SettlementRepo
 
   const nonzeroLosses = SETTLEMENT_LOSS_CAUSES.filter(cause => summary.losses[cause] !== null && summary.losses[cause] > 0)
   const reviewLabel = `Review generation ${summary.generation}`
+  const maturityDescription = formatSettlementMaturityBreakdown(summary)
   return <>
     <div className="interventions" role="group" aria-label={formatSettlementReportAriaLabel(summary)}>
       <span><strong>Last recorded settlement</strong><small>Actual recorded result · Generation {summary.generation} → {summary.nextGeneration}</small></span>
       <div style={{ display: 'flex', flex: '1 1 100%', flexWrap: 'wrap', alignItems: 'center', gap: '5px 10px', minWidth: 0 }}>
         <span style={{ flexDirection: 'row', whiteSpace: 'nowrap' }}>Evaluated <b>{summary.evaluatedCohort}</b></span>
         <span style={{ flexDirection: 'row', whiteSpace: 'nowrap' }}>Survivors <b>{summary.survivors}</b></span>
-        <span style={{ flexDirection: 'row', whiteSpace: 'nowrap' }}>Admitted births <b>{summary.admittedBirths}</b></span>
+        {maturityDescription === SETTLEMENT_MATURITY_UNAVAILABLE && <span style={{ flexDirection: 'row', whiteSpace: 'nowrap' }}>Admitted births <b>{summary.admittedBirths}</b></span>}
         <span style={{ flexDirection: 'row', whiteSpace: 'nowrap' }}>Exact next population <b>{summary.exactNextPopulation}</b></span>
         {summary.totalLosses === null ? <span style={{ flexDirection: 'row', whiteSpace: 'normal' }}>{formatSettlementLosses(summary)}</span> : <>
           <span style={{ flexDirection: 'row', whiteSpace: 'nowrap' }}>Total losses <b>{summary.totalLosses}</b></span>
           {nonzeroLosses.length ? nonzeroLosses.map(cause => <span key={cause} style={{ flexDirection: 'row', whiteSpace: 'nowrap' }}>{SETTLEMENT_LOSS_LABELS[cause]} <b>{summary.losses[cause]}</b></span>) : <span style={{ flexDirection: 'row', whiteSpace: 'nowrap' }}>No recorded losses</span>}
         </>}
-        {summary.cappedBirths === null ? <span style={{ flexDirection: 'row', whiteSpace: 'normal' }}>{formatSettlementBirthCap(summary)}</span> : <span style={{ flexDirection: 'row', whiteSpace: 'nowrap' }}>Capped births <b>{summary.cappedBirths}</b></span>}
+        {maturityDescription === SETTLEMENT_MATURITY_UNAVAILABLE && (summary.cappedBirths === null ? <span style={{ flexDirection: 'row', whiteSpace: 'normal' }}>{formatSettlementBirthCap(summary)}</span> : <span style={{ flexDirection: 'row', whiteSpace: 'nowrap' }}>Capped births <b>{summary.cappedBirths}</b></span>)}
+        {maturityDescription !== SETTLEMENT_MATURITY_UNAVAILABLE && <span style={{ flexDirection: 'row', whiteSpace: 'normal' }}>{maturityDescription}</span>}
       </div>
       <button type="button" className="settings-toggle" onClick={() => onReviewGeneration(summary.generation)} aria-label={reviewLabel}>{reviewLabel}</button>
     </div>

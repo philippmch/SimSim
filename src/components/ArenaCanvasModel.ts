@@ -183,6 +183,25 @@ function observedQuantity(value: number | undefined, singular: string, plural = 
   return `${count} ${count === 1 ? singular : plural}`
 }
 
+/**
+ * Keep maturity commentary tied to a complete, safe survivor partition. A
+ * missing or contradictory optional field must not be presented as zero.
+ */
+function observedMaturityClause(ledger: World['ledger'][number], survivors: number): string {
+  const eligible = ledger.birthsEligible
+  const immature = (ledger as World['ledger'][number] & { birthsImmature?: unknown }).birthsImmature
+  const admitted = ledger.birthsAdmitted
+  const capped = ledger.birthsCapped
+  if (typeof eligible !== 'number' || !Number.isSafeInteger(eligible) || eligible < 0
+    || typeof immature !== 'number' || !Number.isSafeInteger(immature) || immature <= 0
+    || typeof admitted !== 'number' || !Number.isSafeInteger(admitted) || admitted < 0
+    || typeof capped !== 'number' || !Number.isSafeInteger(capped) || capped < 0
+    || eligible < admitted || eligible > survivors || eligible !== admitted + capped) return ''
+  const belowThreshold = survivors - eligible - immature
+  if (!Number.isSafeInteger(belowThreshold) || belowThreshold < 0) return ''
+  return `${immature} energy-ready ${immature === 1 ? 'survivor waited' : 'survivors waited'} for maturity`
+}
+
 function observedDecisionLabel(target: TargetType): string {
   return target === 'food' ? 'food' : target === 'prey' ? 'prey' : target === 'threat' ? 'danger' : target === 'home' ? 'home' : target === 'memory' ? 'remembered food' : 'exploration'
 }
@@ -237,7 +256,8 @@ function formatObservedGenerationBoundary(world: World): string {
   const survivors = observedCount(ledger.outcomes?.survived)
   const births = observedCount(ledger.birthsAdmitted)
   const nextPopulation = survivors + births
-  return `Generation ${ledger.generation} recorded ${observedQuantity(ledger.foodConsumed, 'food item')} consumed, ${observedQuantity(ledger.attackAttempts, 'attack attempt')}, ${observedQuantity(ledger.attackSuccesses, 'attack success', 'attack successes')}, ${observedQuantity(survivors, 'survivor')}, and ${observedQuantity(births, 'birth')} → exact next population: ${nextPopulation}.`
+  const maturity = observedMaturityClause(ledger, survivors)
+  return `Generation ${ledger.generation} recorded ${observedQuantity(ledger.foodConsumed, 'food item')} consumed, ${observedQuantity(ledger.attackAttempts, 'attack attempt')}, ${observedQuantity(ledger.attackSuccesses, 'attack success', 'attack successes')}, ${observedQuantity(survivors, 'survivor')}, and ${observedQuantity(births, 'birth')}${maturity ? `; ${maturity}` : ''} → exact next population: ${nextPopulation}.`
 }
 
 /**

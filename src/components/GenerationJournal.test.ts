@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { meetsStandardizedEffectThreshold, SELECTION_PATTERN_THRESHOLD } from '../simulation/engine'
 import type { BiologicalTrait, GenerationLedger, InheritanceTraitSummary, SelectionSummary, TraitMoments, WorldEvent } from '../simulation/types'
-import GenerationJournal, { clampJournalGeneration, deriveGenerationInterpretation, deriveGenerationReview, deriveInheritanceAudit, deriveJournalEvents, derivePressureFingerprints, deriveSurvivorLossComparison, filterJournalEvents, formatAdaptivePair, formatAttackAttemptLabel, formatAttackBasisNote, formatInheritanceEvidenceSummary, formatJournalEventDay, formatJournalEventSummary, formatJournalEventsEvidenceSummary, formatPressureEvidenceSummary, formatSurvivorLossEvidenceSummary, getJournalEventStatus, getRecentGenerationLedgers, isValidJournalEventDay, isValidJournalEventGeneration, isValidJournalEventKind, JOURNAL_EVENT_DAY_UNAVAILABLE, JOURNAL_EVENT_SUMMARY_UNAVAILABLE, MAX_JOURNAL_ENTRIES, pinCurrentGeneration, resolveJournalSelection } from './GenerationJournal'
+import GenerationJournal, { clampJournalGeneration, deriveGenerationInterpretation, deriveGenerationReview, deriveInheritanceAudit, deriveJournalEvents, deriveJournalMaturity, derivePressureFingerprints, deriveSurvivorLossComparison, filterJournalEvents, formatAdaptivePair, formatAttackAttemptLabel, formatAttackBasisNote, formatInheritanceEvidenceSummary, formatJournalEventDay, formatJournalEventSummary, formatJournalEventsEvidenceSummary, formatPressureEvidenceSummary, formatSurvivorLossEvidenceSummary, getJournalEventStatus, getRecentGenerationLedgers, isValidJournalEventDay, isValidJournalEventGeneration, isValidJournalEventKind, JOURNAL_EVENT_DAY_UNAVAILABLE, JOURNAL_EVENT_SUMMARY_UNAVAILABLE, MAX_JOURNAL_ENTRIES, pinCurrentGeneration, resolveJournalSelection } from './GenerationJournal'
 
 const moments=(mean:number|null)=>({mean,variance:mean===null?null:0,sd:mean===null?null:0})
 const selection=(mean:number|null)=>({speed:moments(mean),size:moments(mean),sense:moments(mean),aggression:moments(mean),caution:moments(mean),exploration:moments(mean)})
@@ -171,6 +171,23 @@ describe('generation journal helpers',()=>{
     expect(review.takeaway).toContain('Generation 7')
   })
 
+  it('derives maturity counts only from a complete reconciled telemetry partition',()=>{
+    const available=makeLedger(29,{birthsImmature:1})
+    expect(deriveJournalMaturity(available)).toEqual({energyReadyImmature:1,belowThreshold:0})
+    expect(deriveGenerationReview(available)?.maturity).toEqual({energyReadyImmature:1,belowThreshold:0})
+
+    const zero=makeLedger(30,{birthsImmature:0})
+    expect(deriveJournalMaturity(zero)).toEqual({energyReadyImmature:0,belowThreshold:1})
+
+    const legacy=makeLedger(31)
+    expect(deriveJournalMaturity(legacy)).toBeNull()
+    for(const birthsImmature of [null,-1,1.5,Number.NaN,Number.POSITIVE_INFINITY,'1']) {
+      expect(deriveJournalMaturity(makeLedger(32,{birthsImmature:birthsImmature as never}))).toBeNull()
+    }
+    expect(deriveJournalMaturity(makeLedger(33,{birthsImmature:2}))).toBeNull()
+    expect(deriveJournalMaturity(makeLedger(34,{birthsEligible:2,birthsAdmitted:1,birthsCapped:0,birthsImmature:1}))).toBeNull()
+  })
+
   it('carries exact contested same-prey claims from a new ledger',()=>{
     const review=deriveGenerationReview(makeLedger(26,{attackAttempts:4,attackContested:3}))!
     expect(review.attacks).toMatchObject({attempts:4,attemptBasis:'claims',wins:1,failures:0,contested:3})
@@ -215,6 +232,14 @@ describe('generation journal helpers',()=>{
     expect(text).toContain('survivors: 3')
     expect(text).toContain('admitted births: 1')
     expect(text).toContain('Descriptive only')
+    expect(text).not.toMatch(/caused|because|led to/)
+  })
+
+  it('mentions nonzero energy-ready immature survivors as an observational category',()=>{
+    const review=deriveGenerationReview(makeLedger(35,{birthsImmature:1}))!
+    const text=deriveGenerationInterpretation(review)
+    expect(text).toContain('1 energy-ready but immature survivor was recorded')
+    expect(text).toContain('observational only')
     expect(text).not.toMatch(/caused|because|led to/)
   })
 
@@ -548,6 +573,21 @@ describe('generation journal helpers',()=>{
       expect(markup.indexOf('Recorded outcome summary')).toBeLessThan(firstDetail)
       expect(markup.indexOf('Selection takeaway')).toBeLessThan(firstDetail)
       expect(markup).not.toMatch(/NaN|Infinity|undefined/)
+    })
+
+    it('keeps the reproduction funnel explicit and truthful for new and old ledgers',()=>{
+      const available=renderToStaticMarkup(createElement(GenerationJournal,{ledgers:[makeLedger(66,{birthsImmature:1})],events:[],requestedGeneration:null,onRequestedGenerationChange:()=>{}}))
+      expect(available).toContain('Mature + energy-eligible parents → admitted births')
+      expect(available).toContain('Maturity blocked (energy-ready but immature)')
+      expect(available).toContain('<td>1</td>')
+      expect(available).toContain('Below reproduction threshold')
+      expect(available).toContain('Funnel: mature + energy-eligible parents can be admitted')
+      expect(available).not.toMatch(/NaN|Infinity|undefined/)
+
+      const unavailable=renderToStaticMarkup(createElement(GenerationJournal,{ledgers:[makeLedger(67)],events:[],requestedGeneration:null,onRequestedGenerationChange:()=>{}}))
+      expect(unavailable).toContain('Eligible parents → admitted births')
+      expect(unavailable).not.toContain('Reproduction maturity')
+      expect(unavailable).not.toContain('Maturity blocked (energy-ready but immature)')
     })
 
     it('does not render evidence details before the first completed generation or for absent outcome fingerprints',()=>{
