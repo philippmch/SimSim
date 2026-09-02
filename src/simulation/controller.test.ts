@@ -101,6 +101,28 @@ describe('controller failover and ordering',()=>{
     snapshots[0].creatures[0].home=true
     controller.send({type:'step',stepId:43})
     expect(metas.at(-1)).toMatchObject({stepId:43,stepContext:{selectedIndividualId:selected.individualId,selectedWasActive:true}})
+    expect((metas.at(-1) as {stepResult?:{activity?:unknown}}).stepResult?.activity).toEqual({startSequence:0,endSequence:0,recordedCount:0,sequenceReset:false})
+    controller.dispose()
+  })
+  it('keeps fallback step activity metadata primitive and detached',()=>{
+    const source=createWorld({...defaultConfig,seed:311,initialPopulation:2,foodPerDay:0}),selected=source.creatures[0]
+    setInspectedIndividual(source,selected.individualId)
+    Object.assign(selected,{x:selected.homeX,y:selected.homeY,returning:true,mode:'returning'})
+    const metas:unknown[]=[]
+    const controller=fallbackController(source,(_world,meta)=>metas.push(meta))
+
+    controller.send({type:'step',stepId:1})
+    const first=metas.at(-1) as {stepResult:{activity:{startSequence:number;endSequence:number;recordedCount:number;sequenceReset:boolean}}}
+    expect(first.stepResult.activity).toEqual({startSequence:0,endSequence:1,recordedCount:1,sequenceReset:false})
+    first.stepResult.activity.startSequence=999
+    first.stepResult.activity.endSequence=999
+    first.stepResult.activity.recordedCount=999
+    first.stepResult.activity.sequenceReset=true
+
+    controller.send({type:'step',stepId:2})
+    const second=metas.at(-1) as {stepResult:{activity:{startSequence:number;endSequence:number;recordedCount:number;sequenceReset:boolean}}}
+    expect(second.stepResult.activity.startSequence).toBe(1)
+    expect(second.stepResult.activity.sequenceReset).toBe(false)
     controller.dispose()
   })
   it('detaches every fallback snapshot while preserving action metadata and prior state',()=>{
@@ -183,15 +205,17 @@ describe('controller failover and ordering',()=>{
   })
   it('forwards next action to the worker and keeps failover paused',()=>{
     vi.useFakeTimers();vi.stubGlobal('Worker',FakeWorker as unknown as typeof Worker)
-    let observed=createWorld({...defaultConfig,seed:305,initialPopulation:1,foodPerDay:0}),receivedStepId:number|undefined
-    const controller=createController(observed.config,(world,meta)=>{observed=world;receivedStepId=meta?.stepId},()=>{}),worker=FakeWorker.instances[0]
+    let observed=createWorld({...defaultConfig,seed:305,initialPopulation:1,foodPerDay:0}),receivedStepId:number|undefined,receivedActivity:unknown
+    const controller=createController(observed.config,(world,meta)=>{observed=world;receivedStepId=meta?.stepId;receivedActivity=meta?.stepResult?.activity},()=>{}),worker=FakeWorker.instances[0]
     const latest=createWorld({...defaultConfig,seed:305,initialPopulation:1,foodPerDay:0})
     worker.emit({type:'snapshot',world:latest,epoch:1,lastCommandId:0})
     controller.send({type:'play'})
     controller.send({type:'step',stepId:1})
     expect(worker.sent.at(-1)).toEqual({type:'step',stepId:1})
-    worker.emit({type:'snapshot',world:latest,epoch:1,lastCommandId:0,stepId:1,stepResult:{ticks:1,stop:'beat'}})
+    const activity={startSequence:4,endSequence:6,recordedCount:2,sequenceReset:false}
+    worker.emit({type:'snapshot',world:latest,epoch:1,lastCommandId:0,stepId:1,stepResult:{ticks:1,stop:'beat',activity}})
     expect(receivedStepId).toBe(1)
+    expect(receivedActivity).toEqual(activity)
     worker.fail()
     expect(controller.mode).toBe('fallback')
     const before=observed.dayTime

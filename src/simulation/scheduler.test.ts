@@ -1,6 +1,6 @@
 import {describe,expect,it} from 'vitest'
 import {applyIntervention,createWorld,defaultConfig,setInspectedIndividual,SIMULATION_TIMESTEP} from './engine'
-import {MAX_TICKS_PER_PULSE,advanceToNextAction,captureNextActionContext,nextActionMaxTicks,scheduledTicks} from './scheduler'
+import {MAX_TICKS_PER_PULSE,advanceToNextAction,advanceToNextActionWithContext,captureNextActionContext,nextActionMaxTicks,scheduledTicks} from './scheduler'
 
 describe('bounded scheduler',()=>{
   it('preserves fixed-step remainder and caps a stalled pulse',()=>{
@@ -184,5 +184,73 @@ describe('bounded scheduler',()=>{
     const result=advanceToNextAction(world)
 
     expect(result).toEqual({ticks:nextActionMaxTicks(world.config.reactionTime),stop:'bounded'})
+  })
+
+  it('reports an empty activity window for a step with no retained events',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0})
+
+    const{stepResult}=advanceToNextActionWithContext(world)
+
+    expect(stepResult.activity).toEqual({startSequence:0,endSequence:0,recordedCount:0,sequenceReset:false})
+  })
+
+  it('reports only events created by the selected-inactive step',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:2,foodPerDay:0}),selected=world.creatures[0]
+    setInspectedIndividual(world,selected.individualId)
+    Object.assign(selected,{x:selected.homeX,y:selected.homeY,returning:true,mode:'returning'})
+
+    const{stepResult}=advanceToNextActionWithContext(world)
+
+    expect(stepResult.stop).toBe('selected-inactive')
+    expect(stepResult.activity).toEqual({startSequence:0,endSequence:1,recordedCount:1,sequenceReset:false})
+    expect(world.activity).toHaveLength(1)
+    expect(world.activity[0].sequence).toBe(1)
+  })
+
+  it('starts after retained intervention history and includes a boundary settlement',()=>{
+    const intervened=createWorld({...defaultConfig,initialPopulation:2,foodPerDay:0})
+    applyIntervention(intervened,'drought')
+    const selected=intervened.creatures[0]
+    setInspectedIndividual(intervened,selected.individualId)
+    Object.assign(selected,{x:selected.homeX,y:selected.homeY,returning:true,mode:'returning'})
+    const intervenedStep=advanceToNextActionWithContext(intervened)
+    expect(intervenedStep.stepResult.activity).toEqual({startSequence:1,endSequence:2,recordedCount:1,sequenceReset:false})
+    expect(intervened.activity[0].sequence).toBe(1)
+    expect(intervened.activity[1].sequence).toBe(2)
+
+    const boundary=createWorld({...defaultConfig,perceptionMode:'realistic',reactionTime:.15,initialPopulation:1,foodPerDay:0,dayLength:5})
+    boundary.creatures[0].reactionWindow=0
+    boundary.dayTime=boundary.config.dayLength-SIMULATION_TIMESTEP
+    const boundaryStep=advanceToNextActionWithContext(boundary)
+    expect(boundaryStep.stepResult.stop).toBe('generation-boundary')
+    expect(boundaryStep.stepResult.activity).toMatchObject({startSequence:0,recordedCount:boundaryStep.stepResult.activity?.endSequence,sequenceReset:false})
+    expect(boundary.activity).toContainEqual(expect.objectContaining({kind:'generation-settlement'}))
+  })
+
+  it('uses the maximum valid retained sequence as the step cursor',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0})
+    applyIntervention(world,'drought')
+    world.activitySequence=0
+    world.activity[0].sequence=9
+
+    const{stepResult}=advanceToNextActionWithContext(world)
+
+    expect(stepResult.activity).toEqual({startSequence:9,endSequence:9,recordedCount:0,sequenceReset:false})
+  })
+
+  it('marks a MAX_SAFE activity rebase instead of claiming a monotonic range',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:2,foodPerDay:0}),selected=world.creatures[0]
+    for(let index=0;index<24;index++)applyIntervention(world,'drought')
+    setInspectedIndividual(world,selected.individualId)
+    Object.assign(selected,{x:selected.homeX,y:selected.homeY,returning:true,mode:'returning'})
+    world.activitySequence=Number.MAX_SAFE_INTEGER
+
+    const{stepResult}=advanceToNextActionWithContext(world)
+
+    expect(stepResult.stop).toBe('selected-inactive')
+    expect(stepResult.activity?.startSequence).toBe(Number.MAX_SAFE_INTEGER)
+    expect(stepResult.activity?.sequenceReset).toBe(true)
+    expect(stepResult.activity?.recordedCount).toBe(0)
+    expect(stepResult.activity?.endSequence).toBeLessThan(Number.MAX_SAFE_INTEGER)
   })
 })

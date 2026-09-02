@@ -1,5 +1,5 @@
 import {applyIntervention,createWorld,runGeneration,setInspectedIndividual} from './engine'
-import {advanceToNextAction,captureNextActionContext,runScheduled,scheduledTicks} from './scheduler'
+import {advanceToNextActionWithContext,runScheduled,scheduledTicks} from './scheduler'
 import type {NextActionContext,NextActionResult} from './scheduler'
 import type {WorkerCommand,WorkerEvent} from './protocol'
 import type {Config,World} from './types'
@@ -13,7 +13,7 @@ export function fallbackController(initial:Config|World,onSnapshot:SnapshotHandl
   const emitSnapshot=(meta?:SimulationSnapshotMeta)=>onSnapshot(structuredClone(world),meta)
   const timer=setInterval(()=>{if(!playing)return;const now=performance.now(),s=scheduledTicks(Math.min(.1,(now-last)/1000),speed,remainder);last=now;remainder=s.remainder;runScheduled(world,s.count);if(!world.creatures.length)playing=false;emitSnapshot()},50)
   emitSnapshot()
-  return{mode:'fallback',send(command){if(command.type==='init'||command.type==='reset'){world=createWorld(command.config);playing=false;remainder=0;emitSnapshot()}else if(command.type==='play'){playing=true;last=performance.now()}else if(command.type==='pause')playing=false;else if(command.type==='step'){playing=false;last=performance.now();remainder=0;const stepContext=captureNextActionContext(world),stepResult=advanceToNextAction(world);emitSnapshot({stepId:command.stepId,stepResult,stepContext})}else if(command.type==='speed')speed=Math.max(.5,Math.min(4,command.speed));else if(command.type==='inspect'){setInspectedIndividual(world,command.individualId);emitSnapshot()}else if(command.type==='intervene'){applyIntervention(world,command.kind);emitSnapshot()}else if(command.type==='finish'){playing=false;runGeneration(world);emitSnapshot({finishId:command.finishId})}},dispose(){clearInterval(timer)}}
+  return{mode:'fallback',send(command){if(command.type==='init'||command.type==='reset'){world=createWorld(command.config);playing=false;remainder=0;emitSnapshot()}else if(command.type==='play'){playing=true;last=performance.now()}else if(command.type==='pause')playing=false;else if(command.type==='step'){playing=false;last=performance.now();remainder=0;const{stepContext,stepResult}=advanceToNextActionWithContext(world);emitSnapshot({stepId:command.stepId,stepResult,stepContext})}else if(command.type==='speed')speed=Math.max(.5,Math.min(4,command.speed));else if(command.type==='inspect'){setInspectedIndividual(world,command.individualId);emitSnapshot()}else if(command.type==='intervene'){applyIntervention(world,command.kind);emitSnapshot()}else if(command.type==='finish'){playing=false;runGeneration(world);emitSnapshot({finishId:command.finishId})}},dispose(){clearInterval(timer)}}
 }
 
 export function createController(config:Config,onSnapshot:SnapshotHandler,onFallback:()=>void):SimulationController{

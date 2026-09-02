@@ -14,8 +14,31 @@ export function nextActionMaxTicks(reactionTime:number){
 }
 
 export type NextActionStop='beat'|'generation-boundary'|'no-active'|'selected-inactive'|'bounded'
-export interface NextActionResult{ticks:number;stop:NextActionStop}
+/** Numeric cursor metadata for the activity records produced by one manual step. */
+export interface NextActionActivityWindow{
+  startSequence:number
+  endSequence:number
+  recordedCount:number
+  sequenceReset:boolean
+}
+export interface NextActionResult{ticks:number;stop:NextActionStop;activity?:NextActionActivityWindow}
 export interface NextActionContext{selectedIndividualId:number|null;selectedWasActive:boolean}
+export interface NextActionStep{stepContext:NextActionContext;stepResult:NextActionResult}
+
+/**
+ * Return the strongest valid retained activity cursor.  The engine repairs
+ * legacy worlds by reconciling activitySequence with retained entry
+ * sequences, so a raw field read here could make an event window start too
+ * early and include an intervention from before the manual step.
+ */
+function activitySequenceCursor(world:World){
+  let cursor=Number.isSafeInteger(world.activitySequence)&&world.activitySequence>=0?world.activitySequence:0
+  if(Array.isArray(world.activity))for(const entry of world.activity){
+    const sequence=(entry as {sequence?:unknown}|null)?.sequence
+    if(typeof sequence==='number'&&Number.isSafeInteger(sequence)&&sequence>cursor)cursor=sequence
+  }
+  return cursor
+}
 
 /** Capture the inspected creature state at the exact start of a manual step. */
 export function captureNextActionContext(world:World):NextActionContext{
@@ -80,4 +103,28 @@ export function advanceToNextAction(world:World):NextActionResult{
     }else if(remaining.every(creature=>creature.reactionWindow>=targetWindow))return{ticks,stop:'beat'}
   }
   return{ticks,stop:'bounded'}
+}
+
+/**
+ * Execute one explicit manual step and attach a primitive activity window.
+ * Keep this separate from advanceToNextAction so existing simulation callers
+ * retain its exact, compact result shape.
+ *
+ * A sequence reset can happen when the engine rebases a MAX_SAFE_INTEGER
+ * activity cursor.  In that case a numeric range would be misleading, so
+ * recordedCount is deliberately zero and consumers must honor sequenceReset.
+ */
+export function advanceToNextActionWithContext(world:World):NextActionStep{
+  const stepContext=captureNextActionContext(world)
+  const startSequence=activitySequenceCursor(world)
+  const stepResult=advanceToNextAction(world)
+  const endSequence=activitySequenceCursor(world)
+  const sequenceReset=endSequence<startSequence
+  const activity:NextActionActivityWindow={
+    startSequence,
+    endSequence,
+    recordedCount:sequenceReset?0:endSequence-startSequence,
+    sequenceReset,
+  }
+  return{stepContext,stepResult:{...stepResult,activity}}
 }

@@ -23,6 +23,8 @@ describe('simulation worker transport',()=>{
     expect(messages).toHaveLength(1)
     const initial=snapshot(messages[0])
     expect(initial).toMatchObject({type:'snapshot',epoch:7,lastCommandId:0})
+    expect(initial.stepResult).toBeUndefined()
+    expect(initial.stepContext).toBeUndefined()
     const initialTick=initial.world.tickIndex
     const selectedIndividualId=initial.world.creatures[0].individualId
     send({type:'inspect',individualId:selectedIndividualId})
@@ -37,6 +39,8 @@ describe('simulation worker transport',()=>{
     send({type:'step',stepId:1})
     const stepped=snapshot(messages.at(-1))
     expect(stepped).toMatchObject({type:'snapshot',epoch:7,lastCommandId:0,stepId:1,stepResult:{stop:'beat'},stepContext:{selectedIndividualId,selectedWasActive:true}})
+    expect(stepped.stepResult?.activity).toEqual(expect.objectContaining({startSequence:expect.any(Number),endSequence:expect.any(Number),recordedCount:expect.any(Number),sequenceReset:expect.any(Boolean)}))
+    expect(stepped.stepResult?.activity?.recordedCount).toBeGreaterThanOrEqual(0)
     expect(stepped.world.tickIndex).toBeGreaterThan(initialTick)
     const messageCount=messages.length,steppedTick=stepped.world.tickIndex
     vi.advanceTimersByTime(250)
@@ -54,10 +58,15 @@ describe('simulation worker transport',()=>{
     expect(boundaryBeat).toMatchObject({type:'snapshot',epoch:8,lastCommandId:0,stepId:2,stepResult:{stop:'beat'},stepContext:{selectedIndividualId:null,selectedWasActive:false}})
     expect(boundary).toMatchObject({type:'snapshot',epoch:8,lastCommandId:0,stepId:3,stepResult:{stop:'generation-boundary'},stepContext:{selectedIndividualId:null,selectedWasActive:false}})
     expect(boundary.world.generation).toBe(2)
+    expect(boundary.stepResult?.activity?.sequenceReset).toBe(false)
+    expect(boundary.stepResult?.activity?.recordedCount).toBeGreaterThan(0)
+    expect(boundary.world.activity).toContainEqual(expect.objectContaining({kind:'generation-settlement'}))
 
     send({type:'finish',finishId:75})
     const finished=snapshot(messages.at(-1))
     expect(finished).toMatchObject({type:'snapshot',epoch:8,lastCommandId:0,finishId:75})
+    expect(finished.stepResult).toBeUndefined()
+    expect(finished.stepContext).toBeUndefined()
     expect(finished.world.ledger.at(-1)?.generation).toBe(2)
     expect(finished.world.generation).toBe(3)
   })
