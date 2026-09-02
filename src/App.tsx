@@ -9,7 +9,7 @@ import type { SimulationController,SimulationSnapshotMeta } from './simulation/c
 import { experimentUrl,loadInitialConfig,persistExperiment } from './simulation/share'
 import type { Config,InterventionKind,LastInspectedOutcome, World } from './simulation/types'
 import InterventionFeed from './components/InterventionFeed'
-import DashboardNavigation, { DASHBOARD_SECTION_IDS, DASHBOARD_SECTION_SCROLL_STYLE } from './components/DashboardNavigation'
+import DashboardNavigation, { DASHBOARD_SECTION_IDS, DASHBOARD_SECTION_SCROLL_STYLE, openDashboardSection } from './components/DashboardNavigation'
 
 const ExperimentPanel=lazy(()=>import('./components/ExperimentPanel').then(module=>({default:module.ExperimentPanel})))
 const GenerationJournal=lazy(()=>import('./components/GenerationJournal'))
@@ -18,6 +18,7 @@ const LivePulse=lazy(()=>import('./components/LivePulse'))
 const TerminalOutcome=lazy(()=>import('./components/TerminalOutcome'))
 const CreatureInspector=lazy(()=>import('./components/CreatureInspector'))
 const PopulationStory=lazy(()=>import('./components/PopulationStory'))
+const SettlementReport=lazy(()=>import('./components/SettlementReport'))
 const GenerationAccounting=lazy(()=>import('./components/GenerationAccounting'))
 const ParametersPanel=lazy(()=>import('./components/ParametersPanel'))
 const creatureStates=Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]
@@ -56,6 +57,32 @@ export function formatPlaybackPhaseAnnouncement(status:ArenaPlaybackStatus,detai
   if(status==='Extinct')return''
   if(status==='Awaiting settlement')return`${detail} ${playing?'Playback continues toward automatic settlement.':'Playback is paused before settlement.'}`
   return detail
+}
+
+export interface SettlementReviewNavigationOptions {
+  onSelectGeneration:(generation:number)=>void
+  loadReviewHelper?:()=>Promise<()=>boolean|Promise<boolean>>
+  fallbackNavigate?:()=>boolean|Promise<boolean>
+}
+
+/**
+ * Select a settlement before loading the journal's exact review focus helper.
+ * The dynamic import keeps Charts out of startup; the stable section jump is
+ * a safe fallback if that lazy helper cannot load or complete.
+ */
+export async function reviewSettlementAndNavigate(generation:unknown,options:SettlementReviewNavigationOptions):Promise<boolean>{
+  if(typeof generation!=='number'||!Number.isSafeInteger(generation)||generation<1||generation>=Number.MAX_SAFE_INTEGER)return false
+  options.onSelectGeneration(generation)
+  const loadReviewHelper=options.loadReviewHelper??(async()=>{
+    const module=await import('./components/Charts')
+    return module.openGenerationJournalReview
+  })
+  try{
+    const openReview=await loadReviewHelper()
+    if(typeof openReview==='function'&&await openReview())return true
+  }catch{/* Fall back to the stable section target. */}
+  const fallbackNavigate=options.fallbackNavigate??(()=>openDashboardSection(DASHBOARD_SECTION_IDS.generationJournal))
+  try{return Boolean(await fallbackNavigate())}catch{return false}
 }
 
 export function PlaybackPhaseStatus({status,detail,playing,suppressed=false}:{status:ArenaPlaybackStatus;detail:string;playing:boolean;suppressed?:boolean}){
@@ -242,6 +269,7 @@ function App(){
   const nextAction=()=>{const controller=controllerRef.current;if(!controller||stepPending||pendingStepRef.current!==null)return;suppressPlaybackAnnouncementRef.current=false;const stepId=++nextStepIdRef.current;pendingStepRef.current=stepId;setStepPending(true);setObservedPath('Next action pending…');setPlaying(false);controller.send({type:'step',stepId})}
   const selectIndividual=(individualId:number|null)=>{setTerminalOutcome(null);setSelectedIndividualId(individualId);controllerRef.current?.send({type:'inspect',individualId})}
   const intervene=(kind:InterventionKind)=>{suppressPlaybackAnnouncementRef.current=false;controllerRef.current?.send({type:'intervene',kind});setActionStatus(kind==='resource-bloom'?'Resource bloom released.':kind==='drought'?'Drought applied.':'Founder migration released.')}
+  const reviewSettlement=useCallback((generation:number)=>{void reviewSettlementAndNavigate(generation,{onSelectGeneration:setRequestedGeneration})},[])
 
   const handleSnapshot=useCallback((nextWorld:World,meta?:SimulationSnapshotMeta)=>{setWorld(nextWorld);setRevision(n=>n+1);if(pendingPulseResetRef.current){pendingPulseResetRef.current=false;setLivePulseRun(n=>n+1)}if(pendingStepRef.current!==null&&meta?.stepResult&&meta.stepId===pendingStepRef.current){pendingStepRef.current=null;setStepPending(false);const stoppedWithoutActive=meta.stepResult.stop==='no-active';suppressPlaybackAnnouncementRef.current=stoppedWithoutActive;if(meta.stepContext)setObservedPath(formatObservedPath(nextWorld,meta.stepResult,meta.stepContext));else setObservedPath('Observed path unavailable; retry Next action.');setActionStatus(stoppedWithoutActive?'':formatStepCompletion(nextWorld,meta))}},[])
   const handleFallback=useCallback(()=>{suppressPlaybackAnnouncementRef.current=false;const interrupted=pendingStepRef.current!==null;pendingStepRef.current=null;setStepPending(false);if(interrupted){setObservedPath('Manual step interrupted; choose Next action to retry.');setActionStatus('Step interrupted; retry Next action.')}setRuntimeMode('fallback')},[])
@@ -347,6 +375,7 @@ function App(){
           <div className="mode-line activity-line" aria-label={`What creatures are doing now. ${living} living creatures total.`}><strong>What creatures are doing now</strong>{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/><b>{stateCounts[state]}</b> {metadata.label.toLowerCase()}</span>)}</div>
           <Suspense fallback={<div className="ecology-line activity-line" role="group" aria-label="Live simulation pulse. Waiting for the next simulation update."><strong>Live pulse</strong><span>Waiting for the next simulation update.</span></div>}><LivePulse key={livePulseRun} world={world}/></Suspense>
           <div className="ecology-line" aria-label="Current model and energy statistics"><strong>{world.config.ecologyMode==='energy-regrowth'?'Ecological model':'Classic model'}</strong><span>{world.config.perceptionMode} perception</span><span>{world.config.predationMode} predation</span><span>mean energy <b>{stats.avgEnergy.toFixed(1)}</b></span><span>mean age <b>{stats.avgAge.toFixed(1)}</b></span></div>
+          {world.ledger.length > 0 && <Suspense fallback={null}><SettlementReport ledgers={world.ledger} onReviewGeneration={reviewSettlement}/></Suspense>}
           <GenerationForecast world={world} playbackStatus={arenaStatus}/>
           <Suspense fallback={<GenerationAccountingFallback/>}><GenerationAccounting world={world} globalFoodCap={MAX_FOOD}/></Suspense>
           </section>

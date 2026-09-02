@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveTerminalOutcome, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
+import { formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveTerminalOutcome, reviewSettlementAndNavigate, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
 import { formatPerceptionTelemetry } from './components/CreatureInspector'
 import { createWorld, defaultConfig } from './simulation/engine'
 import { MAX_FOUNDER_MIGRATION_BATCH, MAX_POPULATION } from './simulation/config'
@@ -124,6 +124,63 @@ describe('next action control copy', () => {
 
     expect(copy.buttonLabel).not.toContain('17')
     expect(copy.ariaLabel).not.toContain('Individual 17')
+  })
+})
+
+describe('settlement review orchestration', () => {
+  it('selects the generation before opening the exact journal review helper', async () => {
+    const calls: string[] = []
+    const result = await reviewSettlementAndNavigate(7, {
+      onSelectGeneration: generation => calls.push(`select:${generation}`),
+      loadReviewHelper: async () => () => {
+        calls.push('exact-review')
+        return true
+      },
+      fallbackNavigate: () => {
+        calls.push('fallback')
+        return true
+      },
+    })
+
+    expect(result).toBe(true)
+    expect(calls).toEqual(['select:7', 'exact-review'])
+  })
+
+  it('falls back to the stable journal section when the exact helper returns false or rejects', async () => {
+    for (const loadReviewHelper of [
+      async () => () => false,
+      async () => { throw new Error('lazy chunk unavailable') },
+    ]) {
+      const calls: string[] = []
+      const result = await reviewSettlementAndNavigate(8, {
+        onSelectGeneration: generation => calls.push(`select:${generation}`),
+        loadReviewHelper,
+        fallbackNavigate: () => {
+          calls.push('fallback')
+          return true
+        },
+      })
+      expect(result).toBe(true)
+      expect(calls).toEqual(['select:8', 'fallback'])
+    }
+  })
+
+  it('does nothing for an invalid generation', async () => {
+    const calls: string[] = []
+    const result = await reviewSettlementAndNavigate(Number.NaN, {
+      onSelectGeneration: () => calls.push('select'),
+      loadReviewHelper: async () => {
+        calls.push('load')
+        return () => true
+      },
+      fallbackNavigate: () => {
+        calls.push('fallback')
+        return true
+      },
+    })
+
+    expect(result).toBe(false)
+    expect(calls).toEqual([])
   })
 })
 
