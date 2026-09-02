@@ -1,5 +1,5 @@
 import type { BiologicalTrait, Config, Creature, DecisionCandidateSummary, DecisionProvenance, DecisionSelectionBasis, DecisionSummary, PerceptionDiagnostics, TargetType } from '../simulation/types'
-import { FORECAST_LOSS_LABELS, type SelectedSettlementPreview } from './GenerationForecast'
+import { FORECAST_LOSS_LABELS, type SelectedSettlementPreview } from './SettlementPreview'
 
 export interface PerceptionTelemetryCopy {
   creatures: string

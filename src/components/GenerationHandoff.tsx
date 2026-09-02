@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react'
 import type { World } from '../simulation/types'
 import type { ArenaPlaybackStatus } from './ArenaCanvas'
+import { GenerationForecast } from './GenerationForecast'
 import RecordedGenerationHandoff from './RecordedGenerationHandoff'
 
 interface RecordLike {
@@ -84,10 +85,51 @@ function countCreatures(world: unknown): { living: number | null; total: number 
   return { living: livingKnown ? safeCount(living) : null, total: safeCount(creatures.length), active: activeKnown ? safeCount(active) : null }
 }
 
+function finiteNonnegative(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
+function safePositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1
+}
+
+function safeNonnegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function isForecastWorld(world: unknown): world is World {
+  const source = record(world)
+  const config = read(world, 'config')
+  const creatures = read(world, 'creatures')
+  const generation = read(world, 'generation')
+  const seed = read(config, 'seed')
+  const mode = read(config, 'ecologyMode')
+  const startingEnergy = read(config, 'startingEnergy')
+  const energyRetention = read(config, 'energyRetention')
+  const reproductionEnergyCost = read(config, 'reproductionEnergyCost')
+  const offspringEnergy = read(config, 'offspringEnergy')
+  const maxAge = read(config, 'maxAge')
+  if (!source || Array.isArray(world) || !record(config) || Array.isArray(config) || !Array.isArray(creatures) ||
+      safeGeneration(generation) === null || !safePositiveInteger(seed) ||
+      (mode !== 'classic' && mode !== 'energy-regrowth') || !finiteNonnegative(startingEnergy) ||
+      !finiteNonnegative(energyRetention) || energyRetention > 1 || !finiteNonnegative(reproductionEnergyCost) ||
+      !finiteNonnegative(offspringEnergy) || !safePositiveInteger(maxAge)) return false
+  return creatures.every(creature => {
+    const item = record(creature)
+    if (!item || Array.isArray(creature) || !safePositiveInteger(read(item, 'id')) || !safePositiveInteger(read(item, 'individualId')) ||
+        typeof read(item, 'alive') !== 'boolean' || typeof read(item, 'home') !== 'boolean' ||
+        !finiteNonnegative(read(item, 'food')) || typeof read(item, 'energy') !== 'number' || !Number.isFinite(read(item, 'energy')) ||
+        !safeNonnegativeInteger(read(item, 'age'))) return false
+    const deathCause = read(item, 'deathCause')
+    return deathCause === null || deathCause === 'hunted' || deathCause === 'energy'
+  })
+}
+
 export interface GenerationHandoffProps {
   world: World | unknown
   playbackStatus: ArenaPlaybackStatus
   playing?: boolean
+  /** Pass null when a malformed legacy snapshot cannot support a forecast. */
   forecast?: ReactNode
   onReviewGeneration: (generation: number) => void
   /** Set only for an explicit Finish generation request; autoplay leaves this null. */
@@ -172,13 +214,16 @@ export function GenerationHandoff({
   const { living, total, active } = countCreatures(world)
   const ledgers = read(world, 'ledger')
   const hasRecords = Array.isArray(ledgers) && ledgers.length > 0
+  const forecastNode = forecast === undefined
+    ? isForecastWorld(world) ? <GenerationForecast world={world} playbackStatus={playbackStatus}/> : null
+    : forecast
   const currentContext = playbackStatus === 'Extinct' ? 'No current cohort' : 'Current cohort'
-  const forecastContext = forecast ? playbackStatus === 'Extinct' ? 'no settlement preview' : 'if settled now' : null
+  const forecastContext = forecastNode ? playbackStatus === 'Extinct' ? 'no settlement preview' : 'if settled now' : null
   const comparisonContext = [currentContext, forecastContext, hasRecords ? 'previous recorded result' : 'no recorded result yet'].filter(Boolean).join(' · ')
   return <div className="interventions" role="group" aria-label="Generation handoff" style={{ alignItems: 'stretch', flexWrap: 'wrap', gap: '8px 14px' }}>
     <span style={{ flex: '1 1 100%', minWidth: 0, marginRight: 0, whiteSpace: 'normal' }}><strong style={{ fontSize: 12 }}>Generation handoff</strong><small>{comparisonContext}</small></span>
     <CurrentStateLane world={world} playbackStatus={playbackStatus} playing={playing} living={living} total={total} active={active}/>
-    {forecast}
+    {forecastNode}
     {hasRecords && <RecordedGenerationHandoff ledgers={ledgers} onReviewGeneration={onReviewGeneration} revealGeneration={revealGeneration} onRevealComplete={onRevealComplete}/>}
   </div>
 }

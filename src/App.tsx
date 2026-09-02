@@ -1,13 +1,14 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { ARENA_FOCUS_OPTIONS, ARENA_HUNT_CONTACT_KEY, ARENA_PATCH_STOCK_KEY, ARENA_QUICK_START, ARENA_SELECTED_OVERLAY_KEY, ArenaCanvas, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress, formatArenaFocusDescription, formatArenaFocusOption, formatArenaPlaybackDetail, formatObservedPath, formatSelectedTarget, showArenaQuickStart } from './components/ArenaCanvas'
 import type { ArenaPlaybackStatus, CreatureState } from './components/ArenaCanvas'
-import { GenerationForecast, summarizeSelectedSettlementPreview } from './components/GenerationForecast'
+import { summarizeSelectedSettlementPreview } from './components/SettlementPreview'
 import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
 import { MAX_FOOD,MAX_FOUNDER_MIGRATION_BATCH,MAX_POPULATION, sanitizeConfig } from './simulation/config'
 import { createController } from './simulation/controller'
 import type { SimulationController,SimulationSnapshotMeta } from './simulation/controller'
 import { experimentUrl,loadInitialConfig,persistExperiment } from './simulation/share'
 import type { Config,InterventionKind,LastInspectedOutcome, World } from './simulation/types'
+import type {StepActivityEvidence} from './components/ObservedStepStory'
 import DashboardNavigation, { DASHBOARD_SECTION_IDS, DASHBOARD_SECTION_SCROLL_STYLE, openDashboardSection } from './components/DashboardNavigation'
 
 const ExperimentPanel=lazy(()=>import('./components/ExperimentPanel').then(module=>({default:module.ExperimentPanel})))
@@ -20,6 +21,7 @@ const PopulationStory=lazy(()=>import('./components/PopulationStory'))
 const GenerationHandoff=lazy(()=>import('./components/GenerationHandoff'))
 const GenerationAccounting=lazy(()=>import('./components/GenerationAccounting'))
 const SimulationActivity=lazy(()=>import('./components/SimulationActivity'))
+const ObservedStepStory=lazy(()=>import('./components/ObservedStepStory'))
 const InterventionFeed=lazy(()=>import('./components/InterventionFeed'))
 const ParametersPanel=lazy(()=>import('./components/ParametersPanel'))
 const creatureStates=Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]
@@ -49,7 +51,11 @@ export function ParametersPanelFallback(){
 }
 
 export function SimulationActivityFallback(){
-  return <div className="interventions" role="group" aria-label="What happened" aria-busy="true"><span><strong style={{fontSize:12}}>What happened</strong><small style={{fontSize:10}}>Opening retained moments…</small></span></div>
+  return <div className="interventions" role="group" aria-label="What happened" aria-busy="true"><span><strong>What happened</strong><small>Opening retained run moments…</small></span></div>
+}
+
+export function ObservedStepStoryFallback({observedPath}:{observedPath:string}){
+  return <div className="interventions" role="group" aria-label="Latest manual action" aria-busy="true"><span><strong>Observed path</strong><small>Opening step details…</small></span><output role="status" aria-live="polite" aria-atomic="true">{observedPath}</output></div>
 }
 
 export function InterventionFeedFallback(){
@@ -60,11 +66,12 @@ export interface SimulationEventStoryProps {
   world: World
   selectedIndividualId?: number | null
   onShowIndividual?: (individualId:number)=>void
+  suppressAnnouncementSequence?:number|null
 }
 
-export function SimulationEventStory({world,selectedIndividualId,onShowIndividual}:SimulationEventStoryProps){
+export function SimulationEventStory({world,selectedIndividualId,onShowIndividual,suppressAnnouncementSequence}:SimulationEventStoryProps){
   return hasOwnActivityField(world)
-    ? <Suspense fallback={<SimulationActivityFallback/>}><SimulationActivity world={world} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual}/></Suspense>
+    ? <Suspense fallback={<SimulationActivityFallback/>}><SimulationActivity world={world} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual} suppressAnnouncementSequence={suppressAnnouncementSequence}/></Suspense>
     : <Suspense fallback={<InterventionFeedFallback/>}><InterventionFeed events={world.events}/></Suspense>
 }
 
@@ -80,6 +87,11 @@ export function formatStepCompletion(world:World,meta:SimulationSnapshotMeta){
   }
   if(result.stop==='bounded')return'Reaction window bound reached.'
   return'Next action beat reached.'
+}
+
+export function stepActivityAnnouncementSequence(evidence:StepActivityEvidence|null):number|null{
+  const window=evidence?.window
+  return window&&!window.sequenceReset&&window.recordedCount>0&&window.recordedCount===window.endSequence-window.startSequence&&evidence.activity.some(entry=>entry.sequence===window.endSequence)?window.endSequence:null
 }
 
 export function formatPlaybackControlLabel(status:ArenaPlaybackStatus,playing:boolean):string{
@@ -290,6 +302,7 @@ function App(){
   const [actionStatus,setActionStatus]=useState('')
   const suppressPlaybackAnnouncementRef=useRef(false)
   const [observedPath,setObservedPath]=useState('Inspect a creature, then choose Next action to observe its perception and decision path.')
+  const [stepActivityEvidence,setStepActivityEvidence]=useState<StepActivityEvidence|null>(null)
   const [stepPending,setStepPending]=useState(false)
   const pendingStepRef=useRef<number|null>(null)
   const pendingFinishRef=useRef<number|null>(null)
@@ -326,6 +339,7 @@ function App(){
   const arenaStatus=arenaPlaybackStatus({playing,populationCount:world.creatures.length,activeCount:activeCreatures})
   const arenaDetail=formatArenaPlaybackDetail({status:arenaStatus,populationCount:world.creatures.length,livingCount:living})
   const nextActionInput:NextActionCopyInput={extinct,hasActiveCreatures,pending:stepPending,selectedIndividualId,selectedIsActive:Boolean(selected&&!selected.home),livingCreatures:living},nextActionCopy=formatNextActionCopy(nextActionInput)
+  const stepAnnouncementSequence=stepActivityAnnouncementSequence(stepActivityEvidence)
   const arenaDayLabel=formatArenaDayProgress(world.dayTime,world.config.dayLength,arenaStatus)
   const dayProgress=Math.max(0,Math.min(100,Math.round(world.dayTime/world.config.dayLength*100)))
   const founderMigrationCopy=formatFounderMigrationCopy({livingCreatures:living,liveConfig:world.config})
@@ -333,18 +347,18 @@ function App(){
   const closeExperiment=useCallback(()=>{setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
   const replayExperiment=useCallback((config:Config)=>{setDraft(sanitizeConfig(config));setActionStatus('Control seed staged. Choose Apply & restart to replay it live.');setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
   const [terminalOutcome,setTerminalOutcome]=useState<LastInspectedOutcome|null>(null)
-  const reset=useCallback(()=>{suppressPlaybackAnnouncementRef.current=false;pendingStepRef.current=null;pendingFinishRef.current=null;selectedInspectorFocusRequestRef.current=null;activityFocusRequestRef.current++;setStepPending(false);const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);setTerminalOutcome(null);setRequestedGeneration(null);setGenerationRevealRequest(null);setObservedPath('Inspect a creature, then choose Next action to observe its perception and decision path.');persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}const controller=controllerRef.current;if(controller){pendingPulseResetRef.current=true;controller.send({type:'reset',config:clean})}setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
+  const reset=useCallback(()=>{suppressPlaybackAnnouncementRef.current=false;pendingStepRef.current=null;pendingFinishRef.current=null;selectedInspectorFocusRequestRef.current=null;activityFocusRequestRef.current++;setStepPending(false);const clean=sanitizeConfig(draft);setDraft(clean);setSelectedIndividualId(null);setTerminalOutcome(null);setRequestedGeneration(null);setGenerationRevealRequest(null);setObservedPath('Inspect a creature, then choose Next action to observe its perception and decision path.');setStepActivityEvidence(null);persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}const controller=controllerRef.current;if(controller){pendingPulseResetRef.current=true;controller.send({type:'reset',config:clean})}setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
   const applyParameters=useCallback(()=>{reset();closeSettings()},[reset,closeSettings])
-  const finishGeneration=()=>{const controller=controllerRef.current;if(!controller||pendingFinishRef.current!==null)return;suppressPlaybackAnnouncementRef.current=false;const interrupted=pendingStepRef.current!==null;pendingStepRef.current=null;setStepPending(false);const finishId=++nextFinishIdRef.current;pendingFinishRef.current=finishId;if(interrupted)setObservedPath('Manual step interrupted; choose Next action to retry.');setPlaying(false);controller.send({type:'finish',finishId})}
-  const nextAction=()=>{const controller=controllerRef.current;if(!controller||stepPending||pendingStepRef.current!==null)return;suppressPlaybackAnnouncementRef.current=false;const stepId=++nextStepIdRef.current;pendingStepRef.current=stepId;setStepPending(true);setObservedPath('Next action pending…');setPlaying(false);controller.send({type:'step',stepId})}
+  const finishGeneration=()=>{const controller=controllerRef.current;if(!controller||pendingFinishRef.current!==null)return;suppressPlaybackAnnouncementRef.current=false;const interrupted=pendingStepRef.current!==null;pendingStepRef.current=null;setStepPending(false);const finishId=++nextFinishIdRef.current;pendingFinishRef.current=finishId;if(interrupted){setObservedPath('Manual step interrupted; choose Next action to retry.');setStepActivityEvidence(null)}setPlaying(false);controller.send({type:'finish',finishId})}
+  const nextAction=()=>{const controller=controllerRef.current;if(!controller||stepPending||pendingStepRef.current!==null)return;suppressPlaybackAnnouncementRef.current=false;const stepId=++nextStepIdRef.current;pendingStepRef.current=stepId;setStepPending(true);setObservedPath('Next action pending…');setStepActivityEvidence(null);setPlaying(false);controller.send({type:'step',stepId})}
   const selectIndividual=(individualId:number|null)=>{activityFocusRequestRef.current++;selectedInspectorFocusRequestRef.current=individualId;setTerminalOutcome(null);setSelectedIndividualId(individualId);controllerRef.current?.send({type:'inspect',individualId})}
   const showActivityIndividual=(individualId:number)=>{if(!Number.isSafeInteger(individualId)||individualId<1||!world.creatures.some(creature=>creature.alive&&creature.individualId===individualId))return;selectedInspectorFocusRequestRef.current=null;activityFocusRequestRef.current++;const request=activityFocusRequestRef.current;setTerminalOutcome(null);setSelectedIndividualId(individualId);setArenaFocus('all');controllerRef.current?.send({type:'inspect',individualId});const focusArena=()=>{if(activityFocusRequestRef.current!==request)return;const target=document.getElementById('arena-creature-picker') as HTMLSelectElement|null;if(!target)return;try{target.closest('.arena-wrap')?.scrollIntoView({block:'center',inline:'nearest'})}catch{/* A legacy browser may not support options. */}try{target.focus({preventScroll:true})}catch{target.focus()}};if(typeof window.requestAnimationFrame==='function')window.requestAnimationFrame(focusArena);else focusArena()}
   const intervene=(kind:InterventionKind)=>{suppressPlaybackAnnouncementRef.current=false;controllerRef.current?.send({type:'intervene',kind});setActionStatus(kind==='resource-bloom'?'Resource bloom released.':kind==='drought'?'Drought applied.':'Founder migration released.')}
   const reviewSettlement=useCallback((generation:number)=>{void reviewSettlementAndNavigate(generation,{onSelectGeneration:setRequestedGeneration})},[])
   const clearGenerationReveal=useCallback((generation:number)=>setGenerationRevealRequest(current=>current===generation?null:current),[])
 
-  const handleSnapshot=useCallback((nextWorld:World,meta?:SimulationSnapshotMeta)=>{setWorld(nextWorld);setRevision(n=>n+1);const pendingFinishId=pendingFinishRef.current;if(pendingFinishId!==null&&meta?.finishId===pendingFinishId){pendingFinishRef.current=null;setGenerationRevealRequest(resolveAcknowledgedFinishGeneration(pendingFinishId,meta,nextWorld.ledger))}if(pendingPulseResetRef.current){pendingPulseResetRef.current=false;setLivePulseRun(n=>n+1)}if(pendingStepRef.current!==null&&meta?.stepResult&&meta.stepId===pendingStepRef.current){pendingStepRef.current=null;setStepPending(false);const stoppedWithoutActive=meta.stepResult.stop==='no-active';suppressPlaybackAnnouncementRef.current=stoppedWithoutActive;if(meta.stepContext)setObservedPath(formatObservedPath(nextWorld,meta.stepResult,meta.stepContext));else setObservedPath('Observed path unavailable; retry Next action.');setActionStatus(stoppedWithoutActive?'':formatStepCompletion(nextWorld,meta))}},[])
-  const handleFallback=useCallback(()=>{suppressPlaybackAnnouncementRef.current=false;const interrupted=pendingStepRef.current!==null;pendingStepRef.current=null;pendingFinishRef.current=null;setStepPending(false);if(interrupted){setObservedPath('Manual step interrupted; choose Next action to retry.');setActionStatus('Step interrupted; retry Next action.')}setRuntimeMode('fallback')},[])
+  const handleSnapshot=useCallback((nextWorld:World,meta?:SimulationSnapshotMeta)=>{setWorld(nextWorld);setRevision(n=>n+1);const pendingFinishId=pendingFinishRef.current;if(pendingFinishId!==null&&meta?.finishId===pendingFinishId){pendingFinishRef.current=null;setGenerationRevealRequest(resolveAcknowledgedFinishGeneration(pendingFinishId,meta,nextWorld.ledger))}if(pendingPulseResetRef.current){pendingPulseResetRef.current=false;setLivePulseRun(n=>n+1)}if(pendingStepRef.current!==null&&meta?.stepResult&&meta.stepId===pendingStepRef.current){pendingStepRef.current=null;setStepPending(false);const stoppedWithoutActive=meta.stepResult.stop==='no-active';suppressPlaybackAnnouncementRef.current=stoppedWithoutActive;if(meta.stepContext)setObservedPath(formatObservedPath(nextWorld,meta.stepResult,meta.stepContext));else setObservedPath('Observed path unavailable; retry Next action.');setStepActivityEvidence({activity:nextWorld.activity,window:meta.stepResult.activity});setActionStatus(stoppedWithoutActive?'':formatStepCompletion(nextWorld,meta))}},[])
+  const handleFallback=useCallback(()=>{suppressPlaybackAnnouncementRef.current=false;const interrupted=pendingStepRef.current!==null;pendingStepRef.current=null;pendingFinishRef.current=null;setStepPending(false);if(interrupted){setObservedPath('Manual step interrupted; choose Next action to retry.');setStepActivityEvidence(null);setActionStatus('Step interrupted; retry Next action.')}setRuntimeMode('fallback')},[])
 
   useEffect(()=>{const controller=createController(initialRef.current,handleSnapshot,handleFallback);controllerRef.current=controller;setRuntimeMode(controller.mode);return()=>{controller.dispose();controllerRef.current=null}},[handleSnapshot,handleFallback])
 
@@ -420,14 +434,11 @@ function App(){
           <label className="speed-select">Playback speed <select value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value={.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option><option value={4}>4×</option></select></label>
           <button className="reset" onClick={reset}>{dirty?'Apply & restart':'Restart run'}</button>
         </div>
-        <SimulationEventStory world={world} selectedIndividualId={selectedIndividualId} onShowIndividual={showActivityIndividual}/>
-        <div className="interventions" role="status" aria-live="polite" aria-label="Observed action path">
-          <span><strong>Observed path</strong><small>Latest manual step</small></span>
-          <output>{observedPath}</output>
-        </div>
+        <Suspense fallback={<ObservedStepStoryFallback observedPath={observedPath}/>}><ObservedStepStory observedPath={observedPath} evidence={stepActivityEvidence}/></Suspense>
+        <SimulationEventStory world={world} selectedIndividualId={selectedIndividualId} onShowIndividual={showActivityIndividual} suppressAnnouncementSequence={stepAnnouncementSequence}/>
         {selected&&<div ref={selectedInspectorRef} className="inspector-focus-target" tabIndex={-1} aria-label={`Selected individual ${selected.individualId} details`} style={{scrollMarginTop:'84px'}}><Suspense fallback={<section className="inspector" aria-busy="true" aria-label={`Selected individual ${selected.individualId}`}><div className="inspector-head"><div><h2>Individual {selected.individualId}</h2><p>Opening individual details…</p></div><button type="button" onClick={()=>selectIndividual(null)} aria-label="Close individual inspector">×</button></div></section>}><CreatureInspector selected={selected} ecologyMode={world.config.ecologyMode} dayTime={world.dayTime} stateLabel={CREATURE_STATE_METADATA[selected.home?'safe':selected.mode].label} targetLabel={formatSelectedTarget(selected,world.creatures,world.food)} decisionTargetLabel={decisionTargetLabel} huntContactRule={ARENA_HUNT_CONTACT_KEY} settlementPreview={settlementPreview} onClose={()=>selectIndividual(null)}/></Suspense></div>}
         {terminalOutcome&&!selected&&<Suspense fallback={null}><TerminalOutcome outcome={terminalOutcome} onDismiss={()=>selectIndividual(null)}/></Suspense>}
-        <Suspense fallback={<GenerationHandoffFallback/>}><GenerationHandoff world={world} playbackStatus={arenaStatus} playing={playing} forecast={<GenerationForecast world={world} playbackStatus={arenaStatus}/>} onReviewGeneration={reviewSettlement} revealGeneration={generationRevealRequest} onRevealComplete={clearGenerationReveal}/></Suspense>
+        <Suspense fallback={<GenerationHandoffFallback/>}><GenerationHandoff world={world} playbackStatus={arenaStatus} playing={playing} onReviewGeneration={reviewSettlement} revealGeneration={generationRevealRequest} onRevealComplete={clearGenerationReveal}/></Suspense>
         {arenaStatus==='Awaiting settlement'&&<div className="pending" aria-label="Settlement status">{arenaDetail}</div>}
         <div className="interventions" role="group" aria-label="Live ecological interventions">
           <span><strong>Live shocks</strong><small>No restart needed</small></span>

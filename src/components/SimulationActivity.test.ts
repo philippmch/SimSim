@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { defaultConfig } from '../simulation/config'
 import type { Config, WorldActivityEntry, WorldActivityKind } from '../simulation/types'
-import SimulationActivity, { MAX_VISIBLE_ACTIVITY_ENTRIES, NO_ACTIVITY_MOMENTS, deriveActivityActorTargets, deriveActivityFeed, deriveSimulationActivity, formatActivityActorRelation, formatActivityAnnouncement, formatActivityContext, formatActivityMoment, formatActivityRetentionContext, hasWorldActivityTelemetry, normalizeActivityMoment } from './SimulationActivity'
+import SimulationActivity, { MAX_VISIBLE_ACTIVITY_ENTRIES, NO_ACTIVITY_MOMENTS, deriveActivityActorTargets, deriveActivityFeed, deriveSimulationActivity, formatActivityActorRelation, formatActivityAnnouncement, formatActivityContext, formatActivityMoment, formatActivityRetentionContext, hasWorldActivityTelemetry, normalizeActivityMoment, suppressesActivityAnnouncement } from './SimulationActivity'
 
 const moment = (overrides: Partial<WorldActivityEntry> = {}): WorldActivityEntry => ({
   sequence: 1,
@@ -82,6 +82,13 @@ describe('simulation activity helpers', () => {
     expect(formatActivityAnnouncement(normalizeActivityMoment(entry, 0))).toContain('New key moment 1: Attack success · Generation 3 · day 1.38')
     expect(formatActivityAnnouncement(normalizeActivityMoment(entry, 0))).not.toBe(formatActivityAnnouncement(normalizeActivityMoment({ ...entry, sequence: 2 }, 1)))
     expect(formatActivityAnnouncement(null)).toBe('')
+  })
+
+  it('suppresses only the exact moment already announced by a manual-step story', () => {
+    const latest=normalizeActivityMoment(moment({sequence:9}),0)
+    expect(suppressesActivityAnnouncement(latest,9)).toBe(true)
+    expect(suppressesActivityAnnouncement(latest,8)).toBe(false)
+    expect(suppressesActivityAnnouncement(latest,null)).toBe(false)
   })
 
   it.each([
@@ -218,7 +225,8 @@ describe('SimulationActivity SSR markup', () => {
     }))
 
     expect(markup).toContain('What happened')
-    expect(markup).toContain('Recent key moments')
+    expect(markup).toContain('Retained moments across the run')
+    expect(markup).toContain('not limited to the latest step')
     expect(markup).toContain('Generation 2 · day 1.50')
     expect(markup).toContain('Generation 1 settled: 3 survivors + 2 admitted births')
     expect(markup).toContain('<details>')

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { formatCompactNextActionLabel, formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, hasOwnActivityField, InterventionFeedFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveAcknowledgedFinishGeneration, resolveTerminalOutcome, reviewSettlementAndNavigate, shouldFocusSelectedInspector, SimulationActivityFallback, SimulationEventStory, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
+import { formatCompactNextActionLabel, formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, hasOwnActivityField, InterventionFeedFallback, ObservedStepStoryFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveAcknowledgedFinishGeneration, resolveTerminalOutcome, reviewSettlementAndNavigate, shouldFocusSelectedInspector, SimulationActivityFallback, SimulationEventStory, stepActivityAnnouncementSequence, type NextActionCopyInput, type TerminalOutcomeCreature } from './App'
 import { formatPerceptionTelemetry } from './components/CreatureInspector'
 import { createWorld, defaultConfig, finishGeneration as settleGeneration } from './simulation/engine'
 import { MAX_FOUNDER_MIGRATION_BATCH, MAX_POPULATION } from './simulation/config'
@@ -367,7 +367,7 @@ describe('live event story selection', () => {
     const modern = renderToStaticMarkup(createElement(SimulationActivityFallback))
     const legacy = renderToStaticMarkup(createElement(InterventionFeedFallback))
     expect(modern).toContain('What happened')
-    expect(modern).toContain('Opening retained moments…')
+    expect(modern).toContain('Opening retained run moments…')
     expect(legacy).toContain('Recent shocks')
     expect(legacy).toContain('Opening recorded shocks…')
     expect(modern).toContain('aria-busy="true"')
@@ -381,5 +381,25 @@ describe('live event story selection', () => {
     expect(modern).not.toContain('Recent shocks')
     expect(legacy).toContain('Recent shocks')
     expect(legacy).not.toContain('What happened')
+  })
+})
+
+describe('manual-step announcement coordination', () => {
+  it('keeps the current observed path visible and live while step details load',()=>{
+    const markup=renderToStaticMarkup(createElement(ObservedStepStoryFallback,{observedPath:'Next action pending…'}))
+    expect(markup).toContain('Observed path')
+    expect(markup).toContain('Opening step details…')
+    expect(markup).toContain('Next action pending…')
+    expect(markup).toContain('aria-busy="true"')
+    expect(markup).toContain('role="status"')
+    expect(markup).toContain('aria-live="polite"')
+  })
+
+  it('suppresses the global announcement only for a represented monotonic step event',()=>{
+    const activity=[{sequence:2,generation:1,day:0,tick:1,kind:'food-collected' as const,summary:'Food collected.',count:1}]
+    expect(stepActivityAnnouncementSequence({activity,window:{startSequence:1,endSequence:2,recordedCount:1,sequenceReset:false}})).toBe(2)
+    expect(stepActivityAnnouncementSequence({activity,window:{startSequence:Number.MAX_SAFE_INTEGER,endSequence:2,recordedCount:0,sequenceReset:true}})).toBeNull()
+    expect(stepActivityAnnouncementSequence({activity:[],window:{startSequence:1,endSequence:2,recordedCount:1,sequenceReset:false}})).toBeNull()
+    expect(stepActivityAnnouncementSequence({activity,window:{startSequence:2,endSequence:2,recordedCount:0,sequenceReset:false}})).toBeNull()
   })
 })

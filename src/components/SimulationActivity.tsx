@@ -413,6 +413,10 @@ function activityKey(moment: SimulationActivityMoment | null): string | null {
   return moment ? `${moment.sequence}:${moment.sourceIndex}:${moment.kind}:${moment.summary}` : null
 }
 
+export function suppressesActivityAnnouncement(moment:SimulationActivityMoment|null,sequence:unknown):boolean{
+  return typeof sequence==='number'&&Number.isSafeInteger(sequence)&&sequence>=0&&moment?.sequence===sequence
+}
+
 type ActivityActorCallback = (individualId: number) => void
 
 interface ActivityActorAffordancesProps {
@@ -468,9 +472,11 @@ export interface SimulationActivityProps {
   selectedIndividualId?: number | null
   /** Activity navigation is separate from direct arena selection. */
   onShowIndividual?: ActivityActorCallback
+  /** The adjacent manual-step story already announces this exact record. */
+  suppressAnnouncementSequence?:number|null
 }
 
-export function SimulationActivity({ world, selectedIndividualId, onShowIndividual }: SimulationActivityProps) {
+export function SimulationActivity({ world, selectedIndividualId, onShowIndividual, suppressAnnouncementSequence }: SimulationActivityProps) {
   const activityPresent = hasWorldActivityTelemetry(world)
   const activity = field(world, 'activity')
   const activityDropped = field(world, 'activityDropped')
@@ -487,19 +493,23 @@ export function SimulationActivity({ world, selectedIndividualId, onShowIndividu
     // Existing retained records are context, not newly recorded moments. A
     // fresh event after an empty/reset state is announced once.
     if (previous === undefined) return
+    if (suppressesActivityAnnouncement(feed.latest, suppressAnnouncementSequence)) {
+      setAnnouncement(current => current ? '' : current)
+      return
+    }
     if (latestKey === null || latestKey === previous) {
       setAnnouncement(current => current ? '' : current)
       return
     }
     setAnnouncement(formatActivityAnnouncement(feed.latest))
-  }, [latestKey])
+  }, [latestKey, suppressAnnouncementSequence])
 
   if (!activityPresent) return null
 
   const latest = feed.latest
   const earlier = latest ? feed.entries.slice(1) : []
   return <div className="interventions" role="group" aria-labelledby="simulation-activity-title">
-    <span><strong id="simulation-activity-title" style={{ fontSize: 12 }}>What happened</strong><small style={{ fontSize: 10 }}>Recent key moments · bounded discrete events</small></span>
+    <span><strong id="simulation-activity-title" style={{ fontSize: 12 }}>What happened</strong><small style={{ fontSize: 10 }}>Retained moments across the run · not limited to the latest step</small></span>
     {latest ? <div style={{ flex: '1 1 100%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <span className="journal-kicker" style={{ margin: 0, fontSize: 10, overflowWrap: 'anywhere' }}>{latest.kindLabel} · {formatActivityProvenance(latest)}</span>

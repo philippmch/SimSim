@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from 'vitest'
 import type { GenerationLedger, World } from '../simulation/types'
 import { defaultConfig, createWorld } from '../simulation/engine'
 import { GenerationHandoff, formatGenerationHandoffDay, formatGenerationHandoffPhase, formatGenerationHandoffPopulation } from './GenerationHandoff'
-import { GenerationForecast } from './GenerationForecast'
 import { GENERATION_HANDOFF_REVEAL_SCROLL_OPTIONS, RecordedGenerationHandoff, resolveGenerationHandoffRevealTarget } from './RecordedGenerationHandoff'
 
 const makeLedger = (overrides: Record<string, unknown> = {}): GenerationLedger => ({
@@ -17,18 +16,13 @@ const makeLedger = (overrides: Record<string, unknown> = {}): GenerationLedger =
   ...overrides,
 } as unknown as GenerationLedger)
 
-const makeWorld = (overrides: Record<string, unknown> = {}): World => ({
-  ...createWorld({ ...defaultConfig, initialPopulation: 3 }),
-  generation: 4,
-  dayTime: 7.25,
-  creatures: [
-    { alive: true, home: false },
-    { alive: true, home: true },
-    { alive: false, home: true },
-  ],
-  ledger: [],
-  ...overrides,
-} as unknown as World)
+const makeWorld = (overrides: Record<string, unknown> = {}): World => {
+  const world = createWorld({ ...defaultConfig, initialPopulation: 3 })
+  Object.assign(world, { generation: 4, dayTime: 7.25, ledger: [] })
+  Object.assign(world.creatures[1], { home: true })
+  Object.assign(world.creatures[2], { alive: false, home: true })
+  return { ...world, ...overrides } as unknown as World
+}
 
 const markup = (world: unknown, playbackStatus: 'Running' | 'Paused' | 'Awaiting settlement' | 'Extinct', playing = false) => renderToStaticMarkup(createElement(GenerationHandoff, {
   world,
@@ -76,7 +70,6 @@ describe('generation handoff states', () => {
     const output = renderToStaticMarkup(createElement(GenerationHandoff, {
       world,
       playbackStatus: 'Paused',
-      forecast: createElement(GenerationForecast, { world, playbackStatus: 'Paused' }),
       onReviewGeneration: vi.fn(),
     }))
 
@@ -88,12 +81,23 @@ describe('generation handoff states', () => {
     expect(output).not.toContain('aria-live')
   })
 
+  it('allows an explicit null forecast override when the preview is unavailable', () => {
+    const output = renderToStaticMarkup(createElement(GenerationHandoff, {
+      world: makeWorld({ generation: 4 }),
+      playbackStatus: 'Paused',
+      forecast: null,
+      onReviewGeneration: vi.fn(),
+    }))
+
+    expect(output).toContain('Current cohort · no recorded result yet')
+    expect(output).not.toContain('data-handoff-kind="forecast"')
+  })
+
   it('includes the recorded-result step in its visible sequence once a ledger exists', () => {
     const world = makeWorld({ generation: 4, ledger: [makeLedger({ generation: 3 })] })
     const output = renderToStaticMarkup(createElement(GenerationHandoff, {
       world,
       playbackStatus: 'Paused',
-      forecast: createElement(GenerationForecast, { world, playbackStatus: 'Paused' }),
       onReviewGeneration: vi.fn(),
     }))
     const currentIndex = output.indexOf('data-handoff-kind="current"')
@@ -172,7 +176,6 @@ describe('generation handoff states', () => {
     const output = renderToStaticMarkup(createElement(GenerationHandoff, {
       world,
       playbackStatus: 'Extinct',
-      forecast: createElement(GenerationForecast, { world, playbackStatus: 'Extinct' }),
       onReviewGeneration: vi.fn(),
     }))
     const actual = recordedMarkup(world.ledger)
@@ -188,15 +191,28 @@ describe('generation handoff states', () => {
 
   it('renders a useful unavailable state when world telemetry is malformed', () => {
     const world = { generation: Number.NaN, dayTime: Number.POSITIVE_INFINITY, config: { dayLength: -1 }, creatures: null, ledger: [{ generation: Number.NaN }] }
-    const output = markup(world, 'Running')
+    const output = renderToStaticMarkup(createElement(GenerationHandoff, { world, playbackStatus: 'Running', onReviewGeneration: vi.fn() }))
     const actual = recordedMarkup(world.ledger)
     expect(output).toContain('Generation unavailable')
     expect(output).toContain('Day progress unavailable')
     expect(output).toContain('Living population unavailable')
+    expect(output).toContain('Current cohort · previous recorded result')
+    expect(output).not.toContain('data-handoff-kind="forecast"')
     expect(output).toContain('Actual recorded result')
     expect(actual).toContain('incomplete or invalid')
     expect(`${actual}${output}`).not.toMatch(/NaN|Infinity|undefined/)
     expect(output.match(/aria-live="polite"/g)).toHaveLength(1)
     expect(actual.match(/aria-live="polite"/g)).toHaveLength(1)
+  })
+
+  it('omits the built-in forecast for a partial legacy world when no override is supplied', () => {
+    const world = { generation: 1, config: { seed: 1, ecologyMode: 'classic' }, creatures: [{ alive: true, home: true }] }
+    const output = renderToStaticMarkup(createElement(GenerationHandoff, { world, playbackStatus: 'Paused', onReviewGeneration: vi.fn() }))
+
+    expect(output).toContain('Generation 1 · Paused')
+    expect(output).toContain('1 living · 1 in cohort')
+    expect(output).toContain('Current cohort · no recorded result yet')
+    expect(output).not.toContain('data-handoff-kind="forecast"')
+    expect(output).not.toMatch(/NaN|Infinity|undefined/)
   })
 })
