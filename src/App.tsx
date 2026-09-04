@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { ARENA_FOCUS_OPTIONS, ARENA_HUNT_CONTACT_KEY, ARENA_PATCH_QUALITY_KEY, ARENA_PATCH_STOCK_KEY, ARENA_QUICK_START, ARENA_SELECTED_OVERLAY_KEY, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress, formatArenaFocusDescription, formatArenaFocusOption, formatArenaPlaybackDetail, formatObservedPath, formatSelectedTarget, showArenaQuickStart } from './components/ArenaCanvasModel'
+import { ARENA_FOCUS_OPTIONS, ARENA_HUNT_CONTACT_KEY, ARENA_PATCH_QUALITY_KEY, ARENA_PATCH_STOCK_KEY, ARENA_SELECTED_OVERLAY_KEY, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress, formatArenaFocusDescription, formatArenaFocusOption, formatArenaPlaybackDetail, formatObservedPath, formatSelectedTarget, showArenaQuickStart } from './components/ArenaCanvasModel'
 import type { ArenaPlaybackStatus, CreatureState } from './components/ArenaCanvasModel'
 import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
 import { MAX_FOOD,MAX_FOUNDER_MIGRATION_BATCH,MAX_POPULATION, sanitizeConfig } from './simulation/config'
@@ -23,6 +23,7 @@ const GenerationHandoff=lazy(()=>import('./components/GenerationHandoff'))
 const GenerationAccounting=lazy(()=>import('./components/GenerationAccounting'))
 const SimulationActivity=lazy(()=>import('./components/SimulationActivity'))
 const ObservedStepStory=lazy(()=>import('./components/ObservedStepStory'))
+const FirstGenerationGuide=lazy(()=>import('./components/ObservedStepStory').then(module=>({default:module.FirstGenerationGuide})))
 const InterventionFeed=lazy(()=>import('./components/InterventionFeed'))
 const ParametersPanel=lazy(()=>import('./components/ParametersPanel'))
 const ResourcePatchInspector=lazy(()=>import('./components/ResourcePatchInspector'))
@@ -57,7 +58,7 @@ export type ManualStepStoryTransition=
   | {type:'reset'}
 
 export function initialManualStepStoryState():ManualStepStoryState{
-  return{visible:true,observedPath:INITIAL_OBSERVED_PATH,evidence:null}
+  return{visible:false,observedPath:INITIAL_OBSERVED_PATH,evidence:null}
 }
 
 /** A delivered generation transition invalidates narration captured in the old cohort. */
@@ -531,12 +532,13 @@ function App(){
   const selectIndividual=(individualId:number|null)=>{const transition=resolveArenaInspectionTransition({request:{kind:'creature',individualId},validPatchIds:world.environment.patches.map(patch=>patch.id),currentSelectedIndividualId:selectedIndividualId,workerInspectedIndividualId:world.inspectedIndividualId});activityFocusRequestRef.current++;selectedInspectorFocusRequestRef.current=transition.selectedIndividualId;selectedPatchInspectorFocusRequestRef.current=null;terminalOutcomeFocusRequestRef.current=null;setTerminalOutcome(null);setSelectedPatchId(transition.selectedPatchId);setSelectedIndividualId(transition.selectedIndividualId);if(transition.workerCommand)controllerRef.current?.send(transition.workerCommand)}
   const selectPatch=(patchId:number|null)=>{const transition=resolveArenaInspectionTransition({request:{kind:'patch',patchId},validPatchIds:world.environment.patches.map(patch=>patch.id),currentSelectedIndividualId:selectedIndividualId,workerInspectedIndividualId:world.inspectedIndividualId});activityFocusRequestRef.current++;selectedInspectorFocusRequestRef.current=null;selectedPatchInspectorFocusRequestRef.current=transition.selectedPatchId;terminalOutcomeFocusRequestRef.current=null;setTerminalOutcome(null);setSelectedIndividualId(transition.selectedIndividualId);setSelectedPatchId(transition.selectedPatchId);if(transition.workerCommand)controllerRef.current?.send(transition.workerCommand)}
   const focusArenaInspectionControl=()=>{const target=document.getElementById('arena-creature-picker') as HTMLSelectElement|null;if(!target)return;try{target.closest('.arena-wrap')?.scrollIntoView({block:'center',inline:'nearest'})}catch{/* A legacy browser may not support options. */}try{target.focus({preventScroll:true})}catch{target.focus()}}
-  const closeSelectedPatch=()=>{selectPatch(null);if(typeof window.requestAnimationFrame==='function')window.requestAnimationFrame(focusArenaInspectionControl);else focusArenaInspectionControl()}
+  const restoreArenaInspectionFocus=()=>typeof window.requestAnimationFrame==='function'?window.requestAnimationFrame(focusArenaInspectionControl):focusArenaInspectionControl()
+  const closeSelectedPatch=()=>{selectPatch(null);restoreArenaInspectionFocus()}
   const showActivityIndividual=(individualId:number)=>{if(!Number.isSafeInteger(individualId)||individualId<1||!world.creatures.some(creature=>creature.alive&&creature.individualId===individualId))return;selectedInspectorFocusRequestRef.current=null;selectedPatchInspectorFocusRequestRef.current=null;activityFocusRequestRef.current++;const request=activityFocusRequestRef.current;setTerminalOutcome(null);setSelectedPatchId(null);setSelectedIndividualId(individualId);setArenaFocus('all');controllerRef.current?.send({type:'inspect',individualId});const focusArena=()=>{if(activityFocusRequestRef.current!==request)return;focusArenaInspectionControl()};if(typeof window.requestAnimationFrame==='function')window.requestAnimationFrame(focusArena);else focusArena()}
   const intervene=(kind:InterventionKind)=>{suppressPlaybackAnnouncementRef.current=false;controllerRef.current?.send({type:'intervene',kind});setActionStatus(kind==='resource-bloom'?'Resource bloom released.':kind==='drought'?'Drought applied.':'Founder migration released.')}
   const reviewSettlement=useCallback((generation:number)=>{void reviewSettlementAndNavigate(generation,{onSelectGeneration:setRequestedGeneration})},[])
   const clearGenerationReveal=useCallback((generation:number)=>setGenerationRevealRequest(current=>current===generation?null:current),[])
-  const closeSelected=()=>selectIndividual(null)
+  const closeSelected=()=>{selectIndividual(null);restoreArenaInspectionFocus()}
   const cancelTerminalFocusTransfer=(target:EventTarget)=>{if(terminalOutcomeFocusRequestRef.current!==null&&(!(target instanceof Node)||!selectedInspectorRef.current?.contains(target)))terminalOutcomeFocusRequestRef.current=null}
   const finishPending=pendingCommand?.kind==='finish'
   const finishGenerationAriaLabel=finishPending?'Finishing generation; wait for the current cohort to settle':'Pause and finish the current generation'
@@ -653,7 +655,7 @@ function App(){
       <section className="simulation-panel" aria-label="Simulation" aria-hidden={settingsOpen&&isNarrow||undefined}>
         <ArenaViewport compact={compactTransport}>
           <Suspense fallback={<ArenaCanvasFallback/>}><ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual} selectedPatchId={selectedPatchId} onSelectPatch={selectPatch} arenaFocus={arenaFocus} playbackStatus={arenaStatus} playbackDetail={arenaDetail}/></Suspense>
-          <div className="arena-badge" style={{pointerEvents:'none'}}><strong>{arenaDayLabel}</strong><small>Generation {world.generation}</small><small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} current food across ${world.environment.patches.length} resource patches`:`${world.food.length} current food`}</small>{showArenaQuickStart(world.ledger.length)&&ARENA_QUICK_START.map(line=><small key={line}>{line}</small>)}</div>
+          <div className="arena-badge" style={{pointerEvents:'none'}}><strong>{arenaDayLabel}</strong><small>Generation {world.generation}</small><small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} current food across ${world.environment.patches.length} resource patches`:`${world.food.length} current food`}</small>{showArenaQuickStart(world.ledger.length)&&<Suspense fallback={null}><FirstGenerationGuide playbackStatus={arenaStatus} selection={selectedPatchId!==null?'patch':selectedIndividualId!==null?'creature':'none'} stepState={pendingCommand?.kind==='finish'?'finishing':pendingCommand?.kind==='step'?'pending':stepActivityEvidence?'observed':'ready'}/></Suspense>}</div>
           <PlaybackPhaseStatus status={arenaStatus} detail={arenaDetail} playing={playing} suppressed={suppressPlaybackAnnouncementRef.current}/>
           <details className="arena-keys" style={{border:0,paddingTop:0,marginTop:0}} open={arenaKeysOpen||!isNarrow} onToggle={event=>{if(isNarrow)setArenaKeysOpen(event.currentTarget.open)}}>
             <summary className="state-key" aria-label={arenaKeysOpen?'Hide arena key':'Show arena key'} style={{display:isNarrow?'flex':'none',pointerEvents:'auto',touchAction:'manipulation',cursor:'pointer',listStyle:'none'}}>{arenaKeysOpen?'Hide key':'Show key'}</summary>

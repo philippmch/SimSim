@@ -25,10 +25,6 @@ export const ARENA_SELECTED_OVERLAY_KEY = 'Selected: gold ring = focus · gold a
 export const ARENA_HUNT_CONTACT_KEY = 'Hunts resolve against the nearest eligible prey at contact, which may differ from the dashed held destination.'
 export const ARENA_FOCUS_TARGET_PATH_KEY = 'Active matches show dashed held destinations captured at last decision: solid dot = target still present (not current position), × = target gone at its last-known held location, diamond = waypoint. Held decisions can persist between reaction windows.'
 export const ARENA_SAFE_FOCUS_TARGET_PATH_KEY = 'Safe-at-home creatures have no active target paths.'
-export const ARENA_QUICK_START = [
-  'Try this: pause → inspect a creature → finish generation.',
-  'Then change one parameter and restart to compare.',
-] as const
 
 export const ARENA_FOCUS_LABELS = {
   all:'All creatures',

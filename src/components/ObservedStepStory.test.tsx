@@ -2,7 +2,7 @@ import {createElement} from 'react'
 import {renderToStaticMarkup} from 'react-dom/server'
 import {describe,expect,it} from 'vitest'
 import type {WorldActivityEntry} from '../simulation/types'
-import {ObservedStepStory,formatStepActivitySummary,type StepActivityEvidence} from './ObservedStepStory'
+import {FirstGenerationGuide,ObservedStepStory,formatFirstGenerationGuide,formatStepActivitySummary,type StepActivityEvidence} from './ObservedStepStory'
 
 const moment=(sequence:number,kind:WorldActivityEntry['kind']='food-collected'):WorldActivityEntry=>({sequence,generation:1,day:sequence/100,tick:sequence,kind,summary:`record ${sequence}`,count:1})
 const evidence=(activity:WorldActivityEntry[],startSequence:number,endSequence:number):StepActivityEvidence=>({activity,window:{startSequence,endSequence,recordedCount:endSequence-startSequence,sequenceReset:false}})
@@ -38,5 +38,31 @@ describe('manual-step event story',()=>{
     expect(complete).toContain('During this step: 1 key moment')
     expect(complete.match(/aria-live="polite"/g)).toHaveLength(1)
     expect(complete).toContain('aria-atomic="true"')
+  })
+})
+
+describe('first-generation guide',()=>{
+  const guide=(overrides:Partial<Parameters<typeof formatFirstGenerationGuide>[0]>={})=>formatFirstGenerationGuide({playbackStatus:'Paused',selection:'none',stepState:'ready',...overrides}).join(' ')
+
+  it('walks through pause, inspection, one decision, evidence, and settlement',()=>{
+    expect(guide({playbackStatus:'Running'})).toContain('pause the run')
+    expect(guide()).toContain('choose a creature in Inspect')
+    expect(guide({selection:'creature'})).toContain('Next action')
+    expect(guide({playbackStatus:'Running',selection:'creature'})).not.toContain('inspect a creature')
+    expect(guide({selection:'creature',stepState:'pending'})).toContain('perception → decision → outcome')
+    expect(guide({selection:'creature',stepState:'observed'})).toContain('read Observed path')
+    expect(guide({playbackStatus:'Awaiting settlement'})).toContain('change one parameter')
+    expect(guide({stepState:'finishing'})).toContain('recording the cohort')
+  })
+
+  it('explains a selected patch before returning to creature decisions',()=>{
+    expect(guide({selection:'patch',stepState:'observed'})).toContain('live food, energy, and regrowth')
+  })
+
+  it('renders as a discoverable note without another live announcement',()=>{
+    const markup=renderToStaticMarkup(createElement(FirstGenerationGuide,{playbackStatus:'Paused',selection:'creature',stepState:'ready'}))
+    expect(markup).toContain('role="note"')
+    expect(markup).toContain('aria-label="First generation guide"')
+    expect(markup).not.toContain('aria-live')
   })
 })

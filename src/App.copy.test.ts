@@ -541,9 +541,9 @@ describe('manual-step announcement coordination', () => {
 describe('manual-step story visibility lifecycle',()=>{
   const acknowledged=()=>transitionManualStepStoryState(initialManualStepStoryState(),{type:'step-acknowledged',observedPath:'Individual 1 foraged.',evidence:{activity:[],window:undefined}})
 
-  it('shows the instructional card initially and restores it on reset',()=>{
+  it('leaves initial guidance to the arena and restores a clean hidden story on reset',()=>{
     const initial=initialManualStepStoryState(),afterReset=transitionManualStepStoryState(acknowledged(),{type:'reset'})
-    expect(initial).toMatchObject({visible:true,observedPath:INITIAL_OBSERVED_PATH,evidence:null})
+    expect(initial).toMatchObject({visible:false,observedPath:INITIAL_OBSERVED_PATH,evidence:null})
     expect(afterReset).toEqual(initial)
   })
 
