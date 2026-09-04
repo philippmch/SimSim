@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ArenaCanvasFallback, canStartSimulationCommand, formatCompactNextActionLabel, formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, hasOwnActivityField, initialManualStepStoryState, INITIAL_OBSERVED_PATH, InterventionFeedFallback, isManualStepStoryGenerationBoundary, ObservedStepStoryFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveAcknowledgedFinishGeneration, resolveManualStepStoryTransition, resolveTerminalOutcome, reviewSettlementAndNavigate, SelectedInspectorShell, shouldFocusSelectedInspector, SimulationActivityFallback, SimulationEventStory, simulationCommandAcknowledged, stepActivityAnnouncementSequence, transitionManualStepStoryState, type ManualStepStoryState, type NextActionCopyInput, type PendingSimulationCommand, type TerminalOutcomeCreature } from './App'
+import { ArenaCanvasFallback, canStartSimulationCommand, formatCompactNextActionLabel, formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, hasOwnActivityField, initialManualStepStoryState, INITIAL_OBSERVED_PATH, InterventionFeedFallback, isManualStepStoryGenerationBoundary, ObservedStepStoryFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveAcknowledgedFinishGeneration, resolveArenaInspectionTransition, resolveManualStepStoryTransition, resolveTerminalOutcome, reviewSettlementAndNavigate, SelectedInspectorShell, shouldFocusResourcePatchInspector, shouldFocusSelectedInspector, SimulationActivityFallback, SimulationEventStory, simulationCommandAcknowledged, stepActivityAnnouncementSequence, transitionManualStepStoryState, type ManualStepStoryState, type NextActionCopyInput, type PendingSimulationCommand, type TerminalOutcomeCreature } from './App'
 import { formatPerceptionTelemetry } from './components/CreatureInspector'
 import { createWorld, defaultConfig, finishGeneration as settleGeneration } from './simulation/engine'
 import { MAX_FOUNDER_MIGRATION_BATCH, MAX_POPULATION } from './simulation/config'
@@ -46,6 +46,35 @@ describe('next action control copy', () => {
     expect(shouldFocusSelectedInspector({ requestedIndividualId: null, selectedIndividualId: 17, inspectorRendered: true })).toBe(false)
     expect(shouldFocusSelectedInspector({ requestedIndividualId: 17, selectedIndividualId: 18, inspectorRendered: true })).toBe(false)
     expect(shouldFocusSelectedInspector({ requestedIndividualId: 17, selectedIndividualId: 17, inspectorRendered: false })).toBe(false)
+    expect(shouldFocusResourcePatchInspector({ requestedPatchId: 23, selectedPatchId: 23, inspectorRendered: true })).toBe(true)
+    expect(shouldFocusResourcePatchInspector({ requestedPatchId: null, selectedPatchId: 23, inspectorRendered: true })).toBe(false)
+    expect(shouldFocusResourcePatchInspector({ requestedPatchId: 23, selectedPatchId: 24, inspectorRendered: true })).toBe(false)
+    expect(shouldFocusResourcePatchInspector({ requestedPatchId: 23, selectedPatchId: 23, inspectorRendered: false })).toBe(false)
+  })
+
+  it('keeps creature, patch, and worker inspection transitions mutually exclusive', () => {
+    const common = { validPatchIds: [11, 23], currentSelectedIndividualId: null, workerInspectedIndividualId: null }
+    expect(resolveArenaInspectionTransition({ ...common, request: { kind: 'creature', individualId: 7 } })).toEqual({
+      selectedIndividualId: 7,
+      selectedPatchId: null,
+      workerCommand: { type: 'inspect', individualId: 7 },
+    })
+    expect(resolveArenaInspectionTransition({ ...common, request: { kind: 'patch', patchId: 23 } })).toEqual({
+      selectedIndividualId: null,
+      selectedPatchId: 23,
+      workerCommand: { type: 'inspect', individualId: null },
+    })
+    expect(resolveArenaInspectionTransition({ ...common, request: { kind: 'patch', patchId: null } })).toEqual({
+      selectedIndividualId: null,
+      selectedPatchId: null,
+      workerCommand: null,
+    })
+    expect(resolveArenaInspectionTransition({ ...common, currentSelectedIndividualId: 7, workerInspectedIndividualId: 7, request: { kind: 'patch', patchId: null } })).toEqual({
+      selectedIndividualId: null,
+      selectedPatchId: null,
+      workerCommand: { type: 'inspect', individualId: null },
+    })
+    expect(resolveArenaInspectionTransition({ ...common, request: { kind: 'patch', patchId: 999 } }).workerCommand).toBeNull()
   })
 
   it('names an active inspected individual without claiming other creatures stop moving', () => {

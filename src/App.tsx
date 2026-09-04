@@ -25,6 +25,7 @@ const SimulationActivity=lazy(()=>import('./components/SimulationActivity'))
 const ObservedStepStory=lazy(()=>import('./components/ObservedStepStory'))
 const InterventionFeed=lazy(()=>import('./components/InterventionFeed'))
 const ParametersPanel=lazy(()=>import('./components/ParametersPanel'))
+const ResourcePatchInspector=lazy(()=>import('./components/ResourcePatchInspector'))
 const creatureStates=Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]
 
 const copyConfig=(c:Config):Config=>({...c})
@@ -104,6 +105,10 @@ export function ParametersPanelFallback(){
 
 export function SimulationActivityFallback(){
   return <div className="interventions" role="group" aria-label="What happened" aria-busy="true"><span><strong>What happened</strong><small>Opening retained run moments…</small></span></div>
+}
+
+export function ResourcePatchInspectorFallback(){
+  return <section className="inspector" aria-label="Selected resource patch" aria-busy="true"><div className="inspector-head"><div><h2>Resource patch</h2><p>Opening live patch details…</p></div></div></section>
 }
 
 export function ObservedStepStoryFallback({observedPath}:{observedPath:string}){
@@ -306,6 +311,61 @@ export function shouldFocusSelectedInspector(input: SelectedInspectorFocusInput)
     && input.requestedIndividualId === input.selectedIndividualId
 }
 
+export interface ResourcePatchInspectorFocusInput {
+  requestedPatchId: number | null
+  selectedPatchId: number | null
+  inspectorRendered: boolean
+}
+
+/** Focus patch details once, only after an intentional matching selection. */
+export function shouldFocusResourcePatchInspector(input: ResourcePatchInspectorFocusInput): boolean {
+  return input.inspectorRendered
+    && input.requestedPatchId !== null
+    && input.requestedPatchId === input.selectedPatchId
+}
+
+export type ArenaInspectionRequest =
+  | { kind: 'creature'; individualId: number | null }
+  | { kind: 'patch'; patchId: number | null }
+
+export interface ArenaInspectionTransitionInput {
+  request: ArenaInspectionRequest
+  validPatchIds: ReadonlyArray<number>
+  currentSelectedIndividualId: number | null
+  workerInspectedIndividualId: number | null
+}
+
+export interface ArenaInspectionTransition {
+  selectedIndividualId: number | null
+  selectedPatchId: number | null
+  workerCommand: { type: 'inspect'; individualId: number | null } | null
+}
+
+/** Keep local inspection state exclusive and emit at most one worker command. */
+export function resolveArenaInspectionTransition(input: ArenaInspectionTransitionInput): ArenaInspectionTransition {
+  if (input.request.kind === 'creature') {
+    return {
+      selectedIndividualId: input.request.individualId,
+      selectedPatchId: null,
+      workerCommand: { type: 'inspect', individualId: input.request.individualId },
+    }
+  }
+  const requestedPatchId = input.request.patchId
+  const selectedPatchId = requestedPatchId !== null
+    && Number.isSafeInteger(requestedPatchId)
+    && input.validPatchIds.includes(requestedPatchId)
+    ? requestedPatchId
+    : null
+  const shouldClearWorker = selectedPatchId !== null
+    || input.currentSelectedIndividualId !== null
+    || input.workerInspectedIndividualId !== null
+  return {
+    selectedIndividualId: null,
+    selectedPatchId,
+    workerCommand: shouldClearWorker ? { type: 'inspect', individualId: null } : null,
+  }
+}
+
 export interface FounderMigrationCopyInput {
   livingCreatures: number
   liveConfig: Pick<Config, 'founderPhysicalVariation' | 'founderBehaviorVariation'>
@@ -393,8 +453,10 @@ function App(){
   const settingsRef=useRef<HTMLElement>(null)
   const settingsCloseRef=useRef<HTMLButtonElement>(null)
   const selectedInspectorRef=useRef<HTMLDivElement>(null)
+  const selectedPatchInspectorRef=useRef<HTMLDivElement>(null)
   const terminalOutcomeRef=useRef<HTMLDivElement>(null)
   const selectedInspectorFocusRequestRef=useRef<number|null>(null)
+  const selectedPatchInspectorFocusRequestRef=useRef<number|null>(null)
   const terminalOutcomeFocusRequestRef=useRef<number|null>(null)
   const selectedIndividualIdRef=useRef<number|null>(null)
   const activityFocusRequestRef=useRef(0)
@@ -409,6 +471,7 @@ function App(){
   const nextFinishIdRef=useRef(0)
   const [runtimeMode,setRuntimeMode]=useState<'worker'|'fallback'>('worker')
   const [selectedIndividualId,setSelectedIndividualId]=useState<number|null>(null)
+  const [selectedPatchId,setSelectedPatchId]=useState<number|null>(null)
   selectedIndividualIdRef.current=selectedIndividualId
   const [arenaFocus,setArenaFocus]=useState<'all'|CreatureState>('all')
   const [requestedGeneration,setRequestedGeneration]=useState<number|null>(null)
@@ -430,6 +493,7 @@ function App(){
   const arenaFocusCount=arenaFocus==='all'?living:stateCounts[arenaFocus]
   const lineage=getLineageAnalytics(world)
   const selected=world.creatures.find(c=>c.individualId===selectedIndividualId&&c.alive)
+  const selectedPatch=world.environment.patches.find(patch=>patch.id===selectedPatchId)
   const decisionTargetLabel=selected?.decisionSummary
     ? formatSelectedTarget({targetType:selected.decisionSummary.chosen,targetId:selected.decisionSummary.chosenTargetId??(selected.decisionSummary.chosen===selected.targetType?selected.targetId:null)},world.creatures,world.food)
     : undefined
@@ -447,13 +511,16 @@ function App(){
   const closeExperiment=useCallback(()=>{setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
   const replayExperiment=useCallback((config:Config)=>{setDraft(sanitizeConfig(config));setActionStatus('Control seed staged. Choose Apply & restart to replay it live.');setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
   const [terminalOutcome,setTerminalOutcome]=useState<LastInspectedOutcome|null>(null)
-  const reset=useCallback(()=>{suppressPlaybackAnnouncementRef.current=false;pendingCommandRef.current=null;setPendingCommand(null);selectedInspectorFocusRequestRef.current=null;terminalOutcomeFocusRequestRef.current=null;activityFocusRequestRef.current++;const clean=sanitizeConfig(draft);deliveredGenerationRef.current=1;setDraft(clean);setSelectedIndividualId(null);setTerminalOutcome(null);setRequestedGeneration(null);setGenerationRevealRequest(null);setManualStepStory(()=>initialManualStepStoryState());persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}const controller=controllerRef.current;if(controller){pendingPulseResetRef.current=true;controller.send({type:'reset',config:clean})}setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
+  const reset=useCallback(()=>{suppressPlaybackAnnouncementRef.current=false;pendingCommandRef.current=null;setPendingCommand(null);selectedInspectorFocusRequestRef.current=null;selectedPatchInspectorFocusRequestRef.current=null;terminalOutcomeFocusRequestRef.current=null;activityFocusRequestRef.current++;const clean=sanitizeConfig(draft);deliveredGenerationRef.current=1;setDraft(clean);setSelectedIndividualId(null);setSelectedPatchId(null);setTerminalOutcome(null);setRequestedGeneration(null);setGenerationRevealRequest(null);setManualStepStory(()=>initialManualStepStoryState());persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}const controller=controllerRef.current;if(controller){pendingPulseResetRef.current=true;controller.send({type:'reset',config:clean})}setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
   const applyParameters=useCallback(()=>{reset();closeSettings()},[reset,closeSettings])
   const rememberSelectedInspectorFocus=()=>{const individualId=selectedIndividualIdRef.current;terminalOutcomeFocusRequestRef.current=individualId!==null&&Boolean(selectedInspectorRef.current?.contains(document.activeElement))?individualId:null}
   const finishGeneration=()=>{const controller=controllerRef.current;if(!controller||extinct||!canStartSimulationCommand(pendingCommandRef.current))return;rememberSelectedInspectorFocus();suppressPlaybackAnnouncementRef.current=false;const finishId=++nextFinishIdRef.current;const pending:{kind:'finish';id:number}={kind:'finish',id:finishId};pendingCommandRef.current=pending;setPendingCommand(pending);setPlaying(false);controller.send({type:'finish',finishId})}
   const nextAction=()=>{const controller=controllerRef.current;if(!controller||extinct||nextActionUnavailable||!canStartSimulationCommand(pendingCommandRef.current))return;rememberSelectedInspectorFocus();suppressPlaybackAnnouncementRef.current=false;const stepId=++nextStepIdRef.current;const pending:{kind:'step';id:number}={kind:'step',id:stepId};pendingCommandRef.current=pending;setPendingCommand(pending);setManualStepStory(state=>transitionManualStepStoryState(state,{type:'next-action'}));setPlaying(false);controller.send({type:'step',stepId})}
-  const selectIndividual=(individualId:number|null)=>{activityFocusRequestRef.current++;selectedInspectorFocusRequestRef.current=individualId;terminalOutcomeFocusRequestRef.current=null;setTerminalOutcome(null);setSelectedIndividualId(individualId);controllerRef.current?.send({type:'inspect',individualId})}
-  const showActivityIndividual=(individualId:number)=>{if(!Number.isSafeInteger(individualId)||individualId<1||!world.creatures.some(creature=>creature.alive&&creature.individualId===individualId))return;selectedInspectorFocusRequestRef.current=null;activityFocusRequestRef.current++;const request=activityFocusRequestRef.current;setTerminalOutcome(null);setSelectedIndividualId(individualId);setArenaFocus('all');controllerRef.current?.send({type:'inspect',individualId});const focusArena=()=>{if(activityFocusRequestRef.current!==request)return;const target=document.getElementById('arena-creature-picker') as HTMLSelectElement|null;if(!target)return;try{target.closest('.arena-wrap')?.scrollIntoView({block:'center',inline:'nearest'})}catch{/* A legacy browser may not support options. */}try{target.focus({preventScroll:true})}catch{target.focus()}};if(typeof window.requestAnimationFrame==='function')window.requestAnimationFrame(focusArena);else focusArena()}
+  const selectIndividual=(individualId:number|null)=>{const transition=resolveArenaInspectionTransition({request:{kind:'creature',individualId},validPatchIds:world.environment.patches.map(patch=>patch.id),currentSelectedIndividualId:selectedIndividualId,workerInspectedIndividualId:world.inspectedIndividualId});activityFocusRequestRef.current++;selectedInspectorFocusRequestRef.current=transition.selectedIndividualId;selectedPatchInspectorFocusRequestRef.current=null;terminalOutcomeFocusRequestRef.current=null;setTerminalOutcome(null);setSelectedPatchId(transition.selectedPatchId);setSelectedIndividualId(transition.selectedIndividualId);if(transition.workerCommand)controllerRef.current?.send(transition.workerCommand)}
+  const selectPatch=(patchId:number|null)=>{const transition=resolveArenaInspectionTransition({request:{kind:'patch',patchId},validPatchIds:world.environment.patches.map(patch=>patch.id),currentSelectedIndividualId:selectedIndividualId,workerInspectedIndividualId:world.inspectedIndividualId});activityFocusRequestRef.current++;selectedInspectorFocusRequestRef.current=null;selectedPatchInspectorFocusRequestRef.current=transition.selectedPatchId;terminalOutcomeFocusRequestRef.current=null;setTerminalOutcome(null);setSelectedIndividualId(transition.selectedIndividualId);setSelectedPatchId(transition.selectedPatchId);if(transition.workerCommand)controllerRef.current?.send(transition.workerCommand)}
+  const focusArenaInspectionControl=()=>{const target=document.getElementById('arena-creature-picker') as HTMLSelectElement|null;if(!target)return;try{target.closest('.arena-wrap')?.scrollIntoView({block:'center',inline:'nearest'})}catch{/* A legacy browser may not support options. */}try{target.focus({preventScroll:true})}catch{target.focus()}}
+  const closeSelectedPatch=()=>{selectPatch(null);if(typeof window.requestAnimationFrame==='function')window.requestAnimationFrame(focusArenaInspectionControl);else focusArenaInspectionControl()}
+  const showActivityIndividual=(individualId:number)=>{if(!Number.isSafeInteger(individualId)||individualId<1||!world.creatures.some(creature=>creature.alive&&creature.individualId===individualId))return;selectedInspectorFocusRequestRef.current=null;selectedPatchInspectorFocusRequestRef.current=null;activityFocusRequestRef.current++;const request=activityFocusRequestRef.current;setTerminalOutcome(null);setSelectedPatchId(null);setSelectedIndividualId(individualId);setArenaFocus('all');controllerRef.current?.send({type:'inspect',individualId});const focusArena=()=>{if(activityFocusRequestRef.current!==request)return;focusArenaInspectionControl()};if(typeof window.requestAnimationFrame==='function')window.requestAnimationFrame(focusArena);else focusArena()}
   const intervene=(kind:InterventionKind)=>{suppressPlaybackAnnouncementRef.current=false;controllerRef.current?.send({type:'intervene',kind});setActionStatus(kind==='resource-bloom'?'Resource bloom released.':kind==='drought'?'Drought applied.':'Founder migration released.')}
   const reviewSettlement=useCallback((generation:number)=>{void reviewSettlementAndNavigate(generation,{onSelectGeneration:setRequestedGeneration})},[])
   const clearGenerationReveal=useCallback((generation:number)=>setGenerationRevealRequest(current=>current===generation?null:current),[])
@@ -535,6 +602,11 @@ function App(){
     selectedInspectorRef.current?.focus()
   },[selected,selectedIndividualId])
   useEffect(()=>{
+    if(!shouldFocusResourcePatchInspector({requestedPatchId:selectedPatchInspectorFocusRequestRef.current,selectedPatchId,inspectorRendered:Boolean(selectedPatch)}))return
+    selectedPatchInspectorFocusRequestRef.current=null
+    selectedPatchInspectorRef.current?.focus()
+  },[selectedPatch,selectedPatchId])
+  useEffect(()=>{
     if(selectedIndividualId===null||world.creatures.some(creature=>creature.alive&&creature.individualId===selectedIndividualId))return
     activityFocusRequestRef.current++
     selectedInspectorFocusRequestRef.current=null
@@ -544,6 +616,11 @@ function App(){
     setSelectedIndividualId(null)
     if(world.inspectedIndividualId!==null)controllerRef.current?.send({type:'inspect',individualId:null})
   },[world,selectedIndividualId])
+  useEffect(()=>{
+    if(selectedPatchId===null||world.environment.patches.some(patch=>patch.id===selectedPatchId))return
+    selectedPatchInspectorFocusRequestRef.current=null
+    setSelectedPatchId(null)
+  },[world,selectedPatchId])
   useEffect(()=>{
     if(!terminalOutcome||terminalOutcomeFocusRequestRef.current!==terminalOutcome.individualId)return
     terminalOutcomeFocusRequestRef.current=null
@@ -560,7 +637,7 @@ function App(){
     <main aria-hidden={experimentOpen||undefined}>
       <section className="simulation-panel" aria-label="Simulation" aria-hidden={settingsOpen&&isNarrow||undefined}>
         <div className="arena-wrap">
-          <Suspense fallback={<ArenaCanvasFallback/>}><ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual} arenaFocus={arenaFocus} playbackStatus={arenaStatus} playbackDetail={arenaDetail}/></Suspense>
+          <Suspense fallback={<ArenaCanvasFallback/>}><ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual} selectedPatchId={selectedPatchId} onSelectPatch={selectPatch} arenaFocus={arenaFocus} playbackStatus={arenaStatus} playbackDetail={arenaDetail}/></Suspense>
           <div className="arena-badge" style={{pointerEvents:'none'}}><strong>{arenaDayLabel}</strong><small>Generation {world.generation}</small><small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} current food across ${world.environment.patches.length} resource patches`:`${world.food.length} current food`}</small>{showArenaQuickStart(world.ledger.length)&&ARENA_QUICK_START.map(line=><small key={line}>{line}</small>)}</div>
           <PlaybackPhaseStatus status={arenaStatus} detail={arenaDetail} playing={playing} suppressed={suppressPlaybackAnnouncementRef.current}/>
           <details className="arena-keys" style={{border:0,paddingTop:0,marginTop:0}} open={arenaKeysOpen||!isNarrow} onToggle={event=>{if(isNarrow)setArenaKeysOpen(event.currentTarget.open)}}>
@@ -578,6 +655,7 @@ function App(){
           <label className="speed-select">Playback speed <select value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value={.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option><option value={4}>4×</option></select></label>
           <button className="reset" onClick={reset}>{dirty?'Apply & restart':'Restart run'}</button>
         </div>
+        {selectedPatch&&<div ref={selectedPatchInspectorRef} className="inspector-focus-target" tabIndex={-1} aria-label="Selected resource patch details" style={{scrollMarginTop:'84px'}}><Suspense fallback={<ResourcePatchInspectorFallback/>}><ResourcePatchInspector world={world} selectedPatchId={selectedPatchId} onClose={closeSelectedPatch}/></Suspense></div>}
         {manualStepStory.visible&&<Suspense fallback={<ObservedStepStoryFallback observedPath={observedPath}/>}><ObservedStepStory observedPath={observedPath} evidence={stepActivityEvidence}/></Suspense>}
         <SimulationEventStory world={world} selectedIndividualId={selectedIndividualId} onShowIndividual={showActivityIndividual} suppressAnnouncementSequence={stepAnnouncementSequence}/>
         {selected&&<div ref={selectedInspectorRef} className="inspector-focus-target" tabIndex={-1} aria-label={`Selected individual ${selected.individualId} details`} style={{scrollMarginTop:'84px'}}><SelectedInspectorShell selected={selected} actionControls={actionControls} onClose={closeSelected}><CreatureInspector embedded selected={selected} world={world} ecologyMode={world.config.ecologyMode} dayTime={world.dayTime} stateLabel={CREATURE_STATE_METADATA[selected.home?'safe':selected.mode].label} targetLabel={formatSelectedTarget(selected,world.creatures,world.food)} decisionTargetLabel={decisionTargetLabel} huntContactRule={ARENA_HUNT_CONTACT_KEY} onClose={closeSelected}/></SelectedInspectorShell></div>}
