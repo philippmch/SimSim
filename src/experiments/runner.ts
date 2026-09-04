@@ -18,6 +18,7 @@ import {
   type ReplicateResult,
   type RunExperimentOptions,
   type Scenario,
+  type SettlementEvidence,
 } from './types'
 
 export const MAX_GENERATION_RUNS = 2_000
@@ -144,6 +145,36 @@ function metricValues(world: World, metrics: readonly ExperimentMetric[]): Metri
   return values
 }
 
+/**
+ * Copy the authoritative ledger entry produced by the just-completed
+ * generation.  Experiment results must not retain references into a mutable
+ * World, and the optional maturity field must remain distinguishable from a
+ * legacy ledger that never had that field.
+ */
+function snapshotSettlementEvidence(world: World, generation: number): SettlementEvidence {
+  const ledger = world.ledger.at(-1)
+  if (!ledger || ledger.generation !== generation) {
+    throw new Error(`Generation ${generation} did not produce an authoritative settlement ledger`)
+  }
+  const evidence: SettlementEvidence = {
+    generation: ledger.generation,
+    startPopulation: ledger.startPopulation,
+    outcomes: {
+      survived: ledger.outcomes.survived,
+      hunted: ledger.outcomes.hunted,
+      energy: ledger.outcomes.energy,
+      unfed: ledger.outcomes.unfed,
+      late: ledger.outcomes.late,
+      aged: ledger.outcomes.aged,
+    },
+    birthsEligible: ledger.birthsEligible,
+    birthsAdmitted: ledger.birthsAdmitted,
+    birthsCapped: ledger.birthsCapped,
+  }
+  if (Object.hasOwn(ledger, 'birthsImmature')) evidence.birthsImmature = ledger.birthsImmature
+  return evidence
+}
+
 function createScenarioConfig(baseConfig: Config, scenario: Scenario, seed: number): Config {
   return sanitizeConfig({ ...baseConfig, ...(scenario.config ?? {}), seed })
 }
@@ -205,7 +236,8 @@ async function runArm(
     // the optional next configuration only for generation-boundary targets and
     // the classic next-generation food pulse.
     runGeneration(world, nextApplication.config)
-    generations.push({ generation, metrics: metricValues(world, plan.metrics), appliedInterventionIds: [...appliedNow] })
+    const settlementEvidence = snapshotSettlementEvidence(world, generation)
+    generations.push({ generation, metrics: metricValues(world, plan.metrics), appliedInterventionIds: [...appliedNow], settlementEvidence })
     world.config = nextApplication.config
     nextApplication.appliedIds.forEach(id => applied.add(id))
     appliedNow = nextApplication.appliedIds

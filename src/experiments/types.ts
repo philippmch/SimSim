@@ -77,10 +77,34 @@ export interface ExperimentPlan {
   stopOnExtinction?: boolean
 }
 
+/** Stable v1 outcome keys exported with every new runner settlement record. */
+export const SETTLEMENT_OUTCOME_KEYS = ['survived', 'hunted', 'energy', 'unfed', 'late', 'aged'] as const
+export type SettlementOutcomeKey = (typeof SETTLEMENT_OUTCOME_KEYS)[number]
+export type SettlementOutcomeCounts = Record<SettlementOutcomeKey, number>
+
+/**
+ * The authoritative population accounting captured at a generation boundary.
+ *
+ * This deliberately contains only the settlement fields needed to explain the
+ * cohort transition.  `birthsImmature` remains optional because older ledgers
+ * were recorded before reproductive-maturity telemetry existed.
+ */
+export interface SettlementEvidence {
+  generation: number
+  startPopulation: number
+  outcomes: SettlementOutcomeCounts
+  birthsEligible: number
+  birthsAdmitted: number
+  birthsCapped: number
+  birthsImmature?: number
+}
+
 export interface GenerationResult {
   generation: number
   metrics: MetricValues
   appliedInterventionIds: readonly string[]
+  /** Optional for legacy/manual records; every generation emitted by the runner includes it. */
+  settlementEvidence?: SettlementEvidence
 }
 
 export interface ArmResult {

@@ -1,10 +1,13 @@
-import { defaultConfig, LEGACY_V3_CONFIG_KEYS, LEGACY_V4_CONFIG_KEYS, migrateLegacyV4Config, sanitizeConfig, sanitizeLegacyConfig } from '../simulation/config'
+import { MAX_POPULATION, defaultConfig, LEGACY_V3_CONFIG_KEYS, LEGACY_V4_CONFIG_KEYS, migrateLegacyV4Config, sanitizeConfig, sanitizeLegacyConfig } from '../simulation/config'
 import type { Config } from '../simulation/types'
 import {
   EXPERIMENT_METRICS,
   INTERVENTION_CONFIG_KEYS,
   type ExperimentMetric,
   type ExperimentResult,
+  SETTLEMENT_OUTCOME_KEYS,
+  type SettlementEvidence,
+  type SettlementOutcomeCounts,
 } from './types'
 
 export const EXPERIMENT_EXPORT_VERSION = 1
@@ -211,10 +214,105 @@ function validatePlan(value: unknown): ValidatedPlan {
   return { id, replicates, generations, metrics, scenarioA, scenarioB, stopOnExtinction }
 }
 
-function validateMetricValues(value: unknown, metrics: readonly ExperimentMetric[], path: string): void {
+function validateMetricValues(value: unknown, metrics: readonly ExperimentMetric[], path: string): RecordValue {
   const values = record(value, path)
   exactKeys(values, metrics, [], path)
   for (const metric of metrics) nullableFinite(values[metric], `${path}.${metric}`)
+  return values
+}
+
+function addSafeCounts(total: number, value: number, path: string): number {
+  if (total > Number.MAX_SAFE_INTEGER - value) fail(`${path} exceeds the safe integer range`)
+  return total + value
+}
+
+function addPopulationCounts(left: number, right: number, path: string): number {
+  const total = addSafeCounts(left, right, path)
+  if (total > MAX_POPULATION) fail(`${path} exceeds the maximum population of ${MAX_POPULATION}`)
+  return total
+}
+
+interface ValidatedSettlementEvidence {
+  evidence: SettlementEvidence
+  /** Exact expected population at the following generation boundary. */
+  nextPopulation: number
+}
+
+/** Validate and normalize the optional settlement accounting extension. */
+function validateSettlementEvidence(value: unknown, path: string, generation: number): ValidatedSettlementEvidence {
+  const evidence = record(value, path)
+  exactKeys(evidence, ['generation', 'startPopulation', 'outcomes', 'birthsEligible', 'birthsAdmitted', 'birthsCapped'], ['birthsImmature'], path)
+  if (integer(evidence.generation, `${path}.generation`, 1, 1_000) !== generation) fail(`${path}.generation does not match the generation record`)
+
+  const startPopulation = integer(evidence.startPopulation, `${path}.startPopulation`, 0, MAX_POPULATION)
+  const outcomes = record(evidence.outcomes, `${path}.outcomes`)
+  exactKeys(outcomes, SETTLEMENT_OUTCOME_KEYS, [], `${path}.outcomes`)
+  const normalizedOutcomes = {} as SettlementOutcomeCounts
+  let outcomeTotal = 0
+  let survived = 0
+  for (const cause of SETTLEMENT_OUTCOME_KEYS) {
+    const count = integer(outcomes[cause], `${path}.outcomes.${cause}`, 0, MAX_POPULATION)
+    normalizedOutcomes[cause] = count
+    outcomeTotal = addPopulationCounts(outcomeTotal, count, `${path}.outcomes`)
+    if (cause === 'survived') survived = count
+  }
+  if (outcomeTotal !== startPopulation) fail(`${path}.outcomes must reconcile to startPopulation`)
+
+  const birthsEligible = integer(evidence.birthsEligible, `${path}.birthsEligible`, 0, MAX_POPULATION)
+  const birthsAdmitted = integer(evidence.birthsAdmitted, `${path}.birthsAdmitted`, 0, MAX_POPULATION)
+  const birthsCapped = integer(evidence.birthsCapped, `${path}.birthsCapped`, 0, MAX_POPULATION)
+  const admittedAndCapped = addPopulationCounts(birthsAdmitted, birthsCapped, `${path}.birthsAdmitted + birthsCapped`)
+  if (birthsEligible !== admittedAndCapped) fail(`${path}.birthsEligible must equal birthsAdmitted + birthsCapped`)
+  if (birthsEligible > survived) fail(`${path}.birthsEligible cannot exceed survived`)
+
+  let birthsImmature: number | undefined
+  if (Object.hasOwn(evidence, 'birthsImmature')) {
+    birthsImmature = integer(evidence.birthsImmature, `${path}.birthsImmature`, 0, MAX_POPULATION)
+    const eligibleAndImmature = addPopulationCounts(birthsEligible, birthsImmature, `${path}.birthsEligible + birthsImmature`)
+    if (eligibleAndImmature > survived) fail(`${path}.birthsEligible + birthsImmature cannot exceed survived`)
+  }
+
+  const nextPopulation = addPopulationCounts(survived, birthsAdmitted, `${path}.outcomes.survived + ${path}.birthsAdmitted`)
+  const normalized: SettlementEvidence = {
+    generation,
+    startPopulation,
+    outcomes: normalizedOutcomes,
+    birthsEligible,
+    birthsAdmitted,
+    birthsCapped,
+  }
+  if (Object.hasOwn(evidence, 'birthsImmature')) normalized.birthsImmature = birthsImmature
+  return { evidence: normalized, nextPopulation }
+}
+
+function validateEvidenceBackedMetrics(
+  values: RecordValue,
+  metrics: readonly ExperimentMetric[],
+  validated: ValidatedSettlementEvidence,
+  path: string,
+): void {
+  const evidence = validated.evidence
+  for (const metric of metrics) {
+    let expected: number | undefined
+    switch (metric) {
+      case 'population': expected = validated.nextPopulation; break
+      case 'survivalRate': expected = evidence.startPopulation ? evidence.outcomes.survived / evidence.startPopulation : 0; break
+      case 'births': expected = evidence.birthsAdmitted; break
+      case 'hunted': expected = evidence.outcomes.hunted; break
+      case 'energyDeaths': expected = evidence.outcomes.energy; break
+      case 'unfed': expected = evidence.outcomes.unfed; break
+      case 'late': expected = evidence.outcomes.late; break
+      case 'aged': expected = evidence.outcomes.aged; break
+    }
+    if (expected !== undefined && values[metric] !== expected) {
+      fail(`${path}.metrics.${metric} does not match settlementEvidence`)
+    }
+  }
+}
+
+interface ValidatedGenerationRecord {
+  generation: number
+  settlementEvidence?: ValidatedSettlementEvidence
 }
 
 function validateGenerationRecord(
@@ -223,11 +321,11 @@ function validateGenerationRecord(
   generation: number,
   metrics: readonly ExperimentMetric[],
   expectedInterventions: readonly string[],
-): void {
+): ValidatedGenerationRecord {
   const point = record(value, path)
-  exactKeys(point, ['generation', 'metrics', 'appliedInterventionIds'], [], path)
+  exactKeys(point, ['generation', 'metrics', 'appliedInterventionIds'], ['settlementEvidence'], path)
   if (integer(point.generation, `${path}.generation`, 1, 1_000) !== generation) fail(`${path}.generation is out of sequence`)
-  validateMetricValues(point.metrics, metrics, `${path}.metrics`)
+  const metricValues = validateMetricValues(point.metrics, metrics, `${path}.metrics`)
   const ids = array(point.appliedInterventionIds, `${path}.appliedInterventionIds`, MAX_INTERVENTIONS)
   if (ids.length !== expectedInterventions.length) fail(`${path}.appliedInterventionIds does not match the plan`)
   ids.forEach((id, index) => {
@@ -235,6 +333,11 @@ function validateGenerationRecord(
       fail(`${path}.appliedInterventionIds does not match the plan`)
     }
   })
+  const settlementEvidence = Object.hasOwn(point, 'settlementEvidence')
+    ? validateSettlementEvidence(point.settlementEvidence, `${path}.settlementEvidence`, generation)
+    : undefined
+  if (settlementEvidence) validateEvidenceBackedMetrics(metricValues, metrics, settlementEvidence, path)
+  return { generation, settlementEvidence }
 }
 
 function validateArm(
@@ -254,13 +357,21 @@ function validateArm(
   const generations = array(arm.generations, `${path}.generations`, plan.generations)
   if (generations.length !== completed) fail(`${path}.completedGenerations does not match generations`)
   if (!plan.stopOnExtinction && completed !== plan.generations) fail(`${path} does not cover the fixed horizon`)
-  generations.forEach((point, index) => validateGenerationRecord(
-    point,
-    `${path}.generations[${index}]`,
-    index + 1,
-    plan.metrics,
-    scenario.interventions.get(index + 1) ?? [],
-  ))
+  let previousEvidence: ValidatedSettlementEvidence | undefined
+  generations.forEach((point, index) => {
+    const validated = validateGenerationRecord(
+      point,
+      `${path}.generations[${index}]`,
+      index + 1,
+      plan.metrics,
+      scenario.interventions.get(index + 1) ?? [],
+    )
+    if (previousEvidence && validated.settlementEvidence
+      && previousEvidence.nextPopulation !== validated.settlementEvidence.evidence.startPopulation) {
+      fail(`${path}.generations[${index}].settlementEvidence.startPopulation does not match the prior settlement next population`)
+    }
+    previousEvidence = validated.settlementEvidence
+  })
   return completed
 }
 
