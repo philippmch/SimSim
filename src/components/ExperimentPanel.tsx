@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { sanitizeConfig } from '../simulation/config'
 import type { Config } from '../simulation/types'
 import {
   EXPERIMENT_METRIC_OPTIONS,
@@ -31,6 +30,7 @@ import { ExperimentCancelledError, runExperiment } from '../experiments/runner'
 import { fromExperimentJson, toExperimentJson, toTidyCsv } from '../experiments/serialize'
 import type { ExperimentPlan, ExperimentProgress, ExperimentResult, InterventionConfigKey } from '../experiments/types'
 import type { ExperimentWorkerEvent, ExperimentWorkerRequest } from '../experiments/protocol'
+import { ExperimentSettlementEvidence } from './ExperimentSettlementEvidence'
 
 interface ExperimentPanelProps {
   baseConfig: Config
@@ -118,19 +118,15 @@ function Results({ result, onReplay }: { result: ExperimentResult; onReplay: (co
     fromExperimentJson(json)
     download(`${result.plan.id}.json`, 'application/json', json)
   }
-  const replay = () => {
-    const seed = result.replicates[replicate]?.pairedSeed ?? result.plan.masterSeed
-    onReplay(sanitizeConfig({ ...result.plan.baseConfig, ...(result.plan.scenarioA.config ?? {}), seed }))
-  }
+  const selectedReplicate = Math.max(0, Math.min(result.replicates.length - 1, replicate))
   return <section className="experiment-results" aria-labelledby="experiment-results-title">
     <div className="experiment-results-head"><div><h3 id="experiment-results-title">Paired result</h3><p>{result.replicates.length} matched seeds · {metricLabel(metric)}</p>{earlyStopNote && <p>{earlyStopNote}</p>}</div><div className="experiment-effect">{final ? <><span>{final.generation === result.plan.generations ? 'Final treatment − control' : `Last comparable treatment − control · gen ${final.generation}`}</span><strong>{format(final.effect.mean, metric)}</strong><small>n={final.effect.count} comparable pairs · mean · median {format(final.effect.median, metric)}</small></> : <><span>No comparable paired effect</span><strong>—</strong><small>No generation had a numeric effect for both arms.</small></>}</div></div>
+    <ExperimentSettlementEvidence result={result} metric={metric} replicateIndex={selectedReplicate} onReplicateChange={setReplicate} onReplay={onReplay}/>
     <ResultPlot result={result}/>
     <div className="experiment-table-wrap"><table className="experiment-table"><caption>Per-generation medians, middle 50% intervals, and paired effects</caption><thead><tr><th>Gen</th><th>Control</th><th>Treatment</th><th>Effect</th></tr></thead><tbody>{points.map(point => <tr key={point.generation}><th>{point.generation}</th><td>{format(point.scenarioA.median, metric)} <small>[{format(point.scenarioA.q1, metric)}–{format(point.scenarioA.q3, metric)}]</small></td><td>{format(point.scenarioB.median, metric)} <small>[{format(point.scenarioB.q1, metric)}–{format(point.scenarioB.q3, metric)}]</small></td><td>{format(point.effect.mean, metric)} <small>mean · n={point.effect.count}</small></td></tr>)}</tbody></table></div>
     <div className="experiment-result-actions">
       <button onClick={exportJson}>Export JSON</button>
       <button onClick={() => download(`${result.plan.id}.csv`, 'text/csv;charset=utf-8', toTidyCsv(result))}>Export tidy CSV</button>
-      <label>Replay seed <select value={replicate} onChange={event => setReplicate(Number(event.target.value))}>{result.replicates.map(item => <option key={item.replicate} value={item.replicate}>#{item.replicate + 1} · {item.pairedSeed}</option>)}</select></label>
-      <button className="experiment-replay" onClick={replay}>Stage control seed in live simulation</button>
     </div>
   </section>
 }
