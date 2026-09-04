@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ArenaCanvasFallback, canStartSimulationCommand, formatCompactNextActionLabel, formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, hasOwnActivityField, initialManualStepStoryState, INITIAL_OBSERVED_PATH, InterventionFeedFallback, isManualStepStoryGenerationBoundary, ObservedStepStoryFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveAcknowledgedFinishGeneration, resolveArenaInspectionTransition, resolveManualStepStoryTransition, resolveTerminalOutcome, reviewSettlementAndNavigate, SelectedInspectorShell, shouldFocusResourcePatchInspector, shouldFocusSelectedInspector, SimulationActivityFallback, SimulationEventStory, simulationCommandAcknowledged, stepActivityAnnouncementSequence, transitionManualStepStoryState, type ManualStepStoryState, type NextActionCopyInput, type PendingSimulationCommand, type TerminalOutcomeCreature } from './App'
+import { ArenaCanvasFallback, ArenaViewport, canStartSimulationCommand, COMPACT_TRANSPORT_QUERY, formatCompactNextActionLabel, formatFounderMigrationCopy, formatNextActionCopy, formatPlaybackControlLabel, formatPlaybackPhaseAnnouncement, formatStepCompletion, GenerationAccountingFallback, hasOwnActivityField, initialManualStepStoryState, INITIAL_OBSERVED_PATH, InterventionFeedFallback, isManualStepStoryGenerationBoundary, NARROW_ARENA_VIEWPORT_STYLE, ObservedStepStoryFallback, ParametersPanelFallback, PlaybackPhaseStatus, resolveAcknowledgedFinishGeneration, resolveArenaInspectionTransition, resolveManualStepStoryTransition, resolveTerminalOutcome, reviewSettlementAndNavigate, SelectedInspectorShell, shouldFocusResourcePatchInspector, shouldFocusSelectedInspector, SimulationActivityFallback, SimulationEventStory, simulationCommandAcknowledged, stepActivityAnnouncementSequence, transitionManualStepStoryState, type ManualStepStoryState, type NextActionCopyInput, type PendingSimulationCommand, type TerminalOutcomeCreature } from './App'
 import { formatPerceptionTelemetry } from './components/CreatureInspector'
 import { createWorld, defaultConfig, finishGeneration as settleGeneration } from './simulation/engine'
 import { MAX_FOUNDER_MIGRATION_BATCH, MAX_POPULATION } from './simulation/config'
@@ -32,6 +32,20 @@ const creature = (overrides: Partial<TerminalOutcomeCreature> = {}): TerminalOut
 })
 
 describe('next action control copy', () => {
+  it('reserves short narrow viewports for the complete transport rail', () => {
+    expect(COMPACT_TRANSPORT_QUERY).toBe('(max-width: 720px)')
+    expect(NARROW_ARENA_VIEWPORT_STYLE).toEqual({
+      height: 'min(58svh, calc(100svh - 204px))',
+      minHeight: 'min(390px, calc(100svh - 204px))',
+    })
+    const compact = renderToStaticMarkup(createElement(ArenaViewport, { compact: true }, createElement('span', null, 'arena')))
+    const wide = renderToStaticMarkup(createElement(ArenaViewport, { compact: false }, createElement('span', null, 'arena')))
+    expect(compact).toContain('class="arena-wrap"')
+    expect(compact).toContain('height:min(58svh, calc(100svh - 204px))')
+    expect(compact).toContain('min-height:min(390px, calc(100svh - 204px))')
+    expect(wide).toBe('<div class="arena-wrap"><span>arena</span></div>')
+  })
+
   it('keeps narrow controls short without hiding unavailable or pending state', () => {
     expect(formatCompactNextActionLabel(ready())).toBe('Next action')
     expect(formatCompactNextActionLabel(ready({ pending: true }))).toBe('Advancing…')

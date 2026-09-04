@@ -28,6 +28,17 @@ const ParametersPanel=lazy(()=>import('./components/ParametersPanel'))
 const ResourcePatchInspector=lazy(()=>import('./components/ResourcePatchInspector'))
 const creatureStates=Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]
 
+/** Reserve enough short-viewport room for the complete wrapped transport rail. */
+export const COMPACT_TRANSPORT_QUERY = '(max-width: 720px)'
+export const NARROW_ARENA_VIEWPORT_STYLE = {
+  height: 'min(58svh, calc(100svh - 204px))',
+  minHeight: 'min(390px, calc(100svh - 204px))',
+} as const
+
+export function ArenaViewport({ compact, children }: { compact: boolean; children?: ReactNode }) {
+  return <div className="arena-wrap" style={compact ? NARROW_ARENA_VIEWPORT_STYLE : undefined}>{children}</div>
+}
+
 const copyConfig=(c:Config):Config=>({...c})
 
 export const INITIAL_OBSERVED_PATH='Inspect a creature, then choose Next action to observe its perception and decision path.'
@@ -447,6 +458,7 @@ function App(){
   const [settingsPanelRequested,setSettingsPanelRequested]=useState(false)
   const [experimentOpen,setExperimentOpen]=useState(false)
   const [isNarrow,setIsNarrow]=useState(()=>window.matchMedia('(max-width: 1050px)').matches)
+  const [compactTransport,setCompactTransport]=useState(()=>window.matchMedia(COMPACT_TRANSPORT_QUERY).matches)
   const [arenaKeysOpen,setArenaKeysOpen]=useState(()=>!window.matchMedia('(max-width: 1050px)').matches)
   const settingsToggleRef=useRef<HTMLButtonElement>(null)
   const experimentToggleRef=useRef<HTMLButtonElement>(null)
@@ -568,9 +580,12 @@ function App(){
 
   useEffect(()=>{
     const query=window.matchMedia('(max-width: 1050px)')
+    const compactQuery=window.matchMedia(COMPACT_TRANSPORT_QUERY)
     const change=()=>{setIsNarrow(query.matches);setArenaKeysOpen(!query.matches)}
+    const compactChange=()=>setCompactTransport(compactQuery.matches)
     query.addEventListener('change',change)
-    return()=>query.removeEventListener('change',change)
+    compactQuery.addEventListener('change',compactChange)
+    return()=>{query.removeEventListener('change',change);compactQuery.removeEventListener('change',compactChange)}
   },[])
 
   useEffect(()=>{
@@ -636,7 +651,7 @@ function App(){
     </header>
     <main aria-hidden={experimentOpen||undefined}>
       <section className="simulation-panel" aria-label="Simulation" aria-hidden={settingsOpen&&isNarrow||undefined}>
-        <div className="arena-wrap">
+        <ArenaViewport compact={compactTransport}>
           <Suspense fallback={<ArenaCanvasFallback/>}><ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual} selectedPatchId={selectedPatchId} onSelectPatch={selectPatch} arenaFocus={arenaFocus} playbackStatus={arenaStatus} playbackDetail={arenaDetail}/></Suspense>
           <div className="arena-badge" style={{pointerEvents:'none'}}><strong>{arenaDayLabel}</strong><small>Generation {world.generation}</small><small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} current food across ${world.environment.patches.length} resource patches`:`${world.food.length} current food`}</small>{showArenaQuickStart(world.ledger.length)&&ARENA_QUICK_START.map(line=><small key={line}>{line}</small>)}</div>
           <PlaybackPhaseStatus status={arenaStatus} detail={arenaDetail} playing={playing} suppressed={suppressPlaybackAnnouncementRef.current}/>
@@ -646,7 +661,7 @@ function App(){
             <div className="legend"><span>Body color = speed</span><i/><small>slower</small><small>faster</small></div>
           </details>
           {extinct&&<div className="extinct" role="status"><strong>Population extinct</strong><span>Use Founder migration to rescue this run, or adjust the parameters and restart.</span></div>}
-        </div>
+        </ArenaViewport>
         <div className="transport" role="group" aria-label="Playback controls">
           <button className="play" disabled={extinct} onClick={()=>{suppressPlaybackAnnouncementRef.current=false;setPlaying(v=>!v)}} aria-label={formatPlaybackControlLabel(arenaStatus,playing)}>{playing?'Ⅱ':'▶'}</button>
           <button onClick={actionControls.nextAction} disabled={actionControls.nextActionDisabled} aria-label={actionControls.nextActionAriaLabel} title={actionControls.nextActionTitle}>{isNarrow?actionControls.nextActionLabel:nextActionCopy.buttonLabel}</button>
