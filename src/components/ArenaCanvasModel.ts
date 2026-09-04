@@ -1,4 +1,5 @@
 import type { NextActionContext, NextActionResult } from '../simulation/scheduler'
+import { patchQualityMultiplier } from '../simulation/patchQuality'
 import type { DecisionSummary, Mode, TargetType, World } from '../simulation/types'
 
 export type CreatureState = 'safe'|Mode
@@ -18,7 +19,8 @@ export interface ArenaPlaybackDetailInput {
   livingCount: number
 }
 
-export const ARENA_PATCH_STOCK_KEY = 'Patch arcs = current food stock.'
+export const ARENA_PATCH_STOCK_KEY = 'Full inner rings = patch stock capacity; colored arcs = current food stock.'
+export const ARENA_PATCH_QUALITY_KEY = 'Tinted halo, dashed ring, and label = quality multiplier; greener/brighter patches regrow faster and their food carries more energy.'
 export const ARENA_SELECTED_OVERLAY_KEY = 'Selected: gold ring = focus · gold area = sight · dashed path = held destination captured at last decision · endpoint: solid dot = target still present (not current position), × = target gone at its last-known held location, diamond = waypoint · colored rings = memory · dotted rings = kin. Held decisions can persist between reaction windows.'
 export const ARENA_HUNT_CONTACT_KEY = 'Hunts resolve against the nearest eligible prey at contact, which may differ from the dashed held destination.'
 export const ARENA_FOCUS_TARGET_PATH_KEY = 'Active matches show dashed held destinations captured at last decision: solid dot = target still present (not current position), × = target gone at its last-known held location, diamond = waypoint. Held decisions can persist between reaction windows.'
@@ -149,7 +151,7 @@ export interface ArenaSelectedTargetInput {
 }
 
 type ArenaTargetCreature = Pick<World['creatures'][number], 'id' | 'individualId' | 'alive'>
-type ArenaTargetFood = Pick<World['food'][number], 'id'>
+type ArenaTargetFood = Pick<World['food'][number], 'id'> & { energy?: unknown }
 
 export function formatSelectedTarget(
   target: ArenaSelectedTargetInput,
@@ -162,7 +164,14 @@ export function formatSelectedTarget(
   if (target.targetType === 'home') return 'Home location'
   if (target.targetType === 'memory') return 'Remembered location'
   if (target.targetType === 'explore') return 'Exploration waypoint'
-  if (target.targetType === 'food') return target.targetId !== null && food.some(item => item.id === target.targetId) ? 'Food item' : unavailableEntity('Food')
+  if (target.targetType === 'food') {
+    const targetFood = target.targetId === null ? undefined : food.find(item => item.id === target.targetId)
+    if (!targetFood) return unavailableEntity('Food')
+    const energy = targetFood.energy
+    if (typeof energy !== 'number' || !Number.isFinite(energy)) return 'Food item'
+    const formattedEnergy = Math.max(0, energy).toFixed(Number.isInteger(energy) ? 0 : 1)
+    return `Food item · ${formattedEnergy} energy`
+  }
   if (target.targetType === 'threat') {
     const targetCreature = target.targetId === null ? undefined : creatures.find(creature => creature.id === target.targetId && creature.alive)
     return targetCreature
@@ -315,6 +324,9 @@ export interface ArenaAccessibleDescriptionInput {
   foodBudget: number
   obstacleCount: number
   ecologyMode: World['config']['ecologyMode']
+  /** Optional v6 telemetry. Omitted values keep legacy hand-authored worlds quiet. */
+  patchQualityVariation?: number
+  patchQualityRange?: readonly [number, number]
   hasSelectedCreature: boolean
   selectedIsHunting?: boolean
   focus?: ArenaFocus
@@ -322,6 +334,50 @@ export interface ArenaAccessibleDescriptionInput {
   selectedOutsideFocus?: boolean
   playbackStatus?: ArenaPlaybackStatus
   playbackDetail?: string
+}
+
+/**
+ * Keep the arena's quality language bounded even when it is asked to describe
+ * a retained or hand-authored world with malformed optional telemetry. The
+ * simulation's quality bias is normalized to [-1, 1], while contrast is a
+ * 0–1 control and represents a 0–2× multiplier range at its maximum.
+ */
+export function arenaPatchQualityMultiplier(bias: unknown, variation: unknown): number {
+  return patchQualityMultiplier(bias, variation)
+}
+
+export function arenaPatchQualityRange(
+  patches: ReadonlyArray<Pick<World['environment']['patches'][number], 'qualityBias'>>,
+  variation: unknown,
+): readonly [number, number] | undefined {
+  if (typeof variation !== 'number' || !Number.isFinite(variation)) return undefined
+  const safeVariation = Math.max(0, Math.min(1, variation))
+  if (safeVariation === 0) return [1, 1]
+  const values = patches.map(patch => arenaPatchQualityMultiplier(patch.qualityBias, safeVariation)).filter(Number.isFinite)
+  if (!values.length) return undefined
+  return [Math.max(0, Math.min(2, Math.min(...values))), Math.max(0, Math.min(2, Math.max(...values)))]
+}
+
+function formatArenaQualityMultiplier(value: number): string {
+  return `${Math.max(0, Math.min(2, value)).toFixed(2)}×`
+}
+
+export function formatArenaPatchQualityDescription(
+  ecologyMode: World['config']['ecologyMode'],
+  variation: unknown,
+  range?: readonly [number, number],
+): string {
+  if (ecologyMode !== 'energy-regrowth' || typeof variation !== 'number' || !Number.isFinite(variation)) return ''
+  const safeVariation = Math.max(0, Math.min(1, variation))
+  if (safeVariation === 0) return 'Patch quality is uniform at 1.00×; stock rings show capacity and arcs show current food.'
+  const safeRange = Array.isArray(range) && range.length === 2 && range.every(value => typeof value === 'number' && Number.isFinite(value))
+    ? [Math.max(0, Math.min(2, Math.min(range[0], range[1]))), Math.max(0, Math.min(2, Math.max(range[0], range[1])))] as const
+    : undefined
+  if (safeRange && safeRange[0] === safeRange[1]) return `Patch quality is uniform at ${formatArenaQualityMultiplier(safeRange[0])}; configured contrast can matter when multiple patches have different intrinsic quality.`
+  const boundedRange = safeRange
+    ? `Patch quality currently ranges from ${formatArenaQualityMultiplier(safeRange[0])} to ${formatArenaQualityMultiplier(safeRange[1])}. `
+    : 'Patch quality contrast is active within a bounded multiplier range. '
+  return `${boundedRange}Greener/brighter patches regrow faster; food from richer patches carries more energy.`
 }
 
 export function formatArenaOverlayDescription(
@@ -343,6 +399,7 @@ export function formatArenaAccessibleDescription(input: ArenaAccessibleDescripti
     ? `${input.foodCount} food items distributed across ${input.patchCount} resource patches`
     : `${input.foodCount} food remaining from a ${Math.round(input.foodBudget)}-item generation pulse across ${input.patchCount} patches`
   const overlayDescription = formatArenaOverlayDescription(input.ecologyMode, input.hasSelectedCreature, input.selectedIsHunting)
+  const qualityDescription = formatArenaPatchQualityDescription(input.ecologyMode, input.patchQualityVariation, input.patchQualityRange)
   const focusDescription = formatArenaFocusDescription(input.focus ?? 'all',input.focusCount,input.livingCreatures,input.selectedOutsideFocus)
   const allFocusPathDescription = input.focus === 'all' ? ' Choose an action focus to reveal dashed held destinations captured at the last decision for active matches; decisions can persist between reaction windows.' : ''
   const selectionHint = input.hasSelectedCreature
@@ -350,7 +407,7 @@ export function formatArenaAccessibleDescription(input: ArenaAccessibleDescripti
     : 'Select a creature to reveal its focus, sight, target, memory, and same-lineage overlays.'
   const playbackDescription = input.playbackDetail
     || (input.playbackStatus ? `Playback status: ${input.playbackStatus}.` : '')
-  return `Simulation arena, generation ${input.generation}, ${input.livingCreatures} living creatures: ${input.stateSummary}. ${playbackDescription ? `${playbackDescription} ` : ''}${resourceLabel}. ${input.obstacleCount} obstacles. ${overlayDescription ? `${overlayDescription} ` : ''}${focusDescription}${allFocusPathDescription} ${selectionHint} Creature body color shows speed and the bright body outline shows its current action. Click a creature or use the Inspect creature selector to select it.`
+  return `Simulation arena, generation ${input.generation}, ${input.livingCreatures} living creatures: ${input.stateSummary}. ${playbackDescription ? `${playbackDescription} ` : ''}${resourceLabel}. ${qualityDescription ? `${qualityDescription} ` : ''}${input.obstacleCount} obstacles. ${overlayDescription ? `${overlayDescription} ` : ''}${focusDescription}${allFocusPathDescription} ${selectionHint} Creature body color shows speed and the bright body outline shows its current action. Click a creature or use the Inspect creature selector to select it.`
 }
 
 export function formatArenaSelectionStatus(selectedIndividualId: number | null): string {

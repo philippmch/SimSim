@@ -20,6 +20,7 @@ export const INTERVENTION_CONSTRAINTS: readonly InterventionConstraint[] = [
   { key: 'senseEnergyFactor', label: 'Sensing energy cost', min: 0, max: 2, step: .05 },
   { key: 'predatorRatio', label: 'Predator size ratio', min: 1.01, max: 3, step: .01 },
   { key: 'foodRegrowthRate', label: 'Food regrowth rate', min: 0, max: 1, step: .01 },
+  { key: 'patchQualityVariation', label: 'Patch quality contrast', min: 0, max: 1, step: .05 },
   { key: 'attackCost', label: 'Attack energy cost', min: 0, max: 100, step: 1 },
   { key: 'reactionTime', label: 'Reaction time', min: 0, max: 5, step: .05 },
   { key: 'reproductionEnergyCost', label: 'Reproduction energy cost', min: 0, max: 300, step: 5 },
@@ -46,12 +47,13 @@ export const EXPERIMENT_METRIC_OPTIONS: readonly { key: ExperimentMetric; label:
   { key: 'avgExploration', label: 'Average exploration' },
 ]
 
-export type ExperimentPreset = 'drought' | 'movement' | 'predation'
+export type ExperimentPreset = 'drought' | 'movement' | 'predation' | 'patch-quality'
 
 export const EXPERIMENT_PRESETS: readonly { key: ExperimentPreset; label: string }[] = [
   { key: 'drought', label: 'Drought' },
   { key: 'movement', label: 'High movement cost' },
   { key: 'predation', label: 'Predation pressure' },
+  { key: 'patch-quality', label: 'Patch inequality' },
 ]
 
 export interface ExperimentDraft {
@@ -147,7 +149,7 @@ export function constraintFor(key: InterventionConfigKey): InterventionConstrain
 }
 
 export function inactiveInterventionReason(config:Config,key:InterventionConfigKey):string|null{
-  if((key==='foodRegrowthRate'||key==='reproductionEnergyCost')&&config.ecologyMode!=='energy-regrowth')return`${constraintFor(key).label} is inactive in classic lifecycle mode. Choose Energy + patch regrowth or another pressure.`
+  if((key==='foodRegrowthRate'||key==='patchQualityVariation'||key==='reproductionEnergyCost')&&config.ecologyMode!=='energy-regrowth')return`${constraintFor(key).label} is inactive in classic lifecycle mode. Choose Energy + patch regrowth or another pressure.`
   if(key==='attackCost'&&config.predationMode!=='contest')return`${constraintFor(key).label} is inactive with size-threshold predation. Choose Contested attacks or another pressure.`
   if(key==='reactionTime'&&config.perceptionMode!=='realistic')return`${constraintFor(key).label} is inactive with perfect perception. Choose realistic perception or another pressure.`
   return null
@@ -190,6 +192,12 @@ export function applyExperimentPreset(preset: ExperimentPreset, draft: Experimen
     interventionGeneration,
     interventionKey: 'predatorRatio',
     interventionValue: normalizeInterventionValue('predatorRatio', Math.max(1.01, baseConfig.predatorRatio - .2)),
+  }
+  if (preset === 'patch-quality') return {
+    ...draft,
+    interventionGeneration,
+    interventionKey: 'patchQualityVariation',
+    interventionValue: normalizeInterventionValue('patchQualityVariation', Math.max(.85, baseConfig.patchQualityVariation * 1.75)),
   }
   return {
     ...draft,

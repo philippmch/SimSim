@@ -11,6 +11,7 @@ export const INTERVENTION_CONFIG_KEYS = [
   'senseEnergyFactor',
   'predatorRatio',
   'foodRegrowthRate',
+  'patchQualityVariation',
   'attackCost',
   'reactionTime',
   'reproductionEnergyCost',

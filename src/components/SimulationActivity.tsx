@@ -357,10 +357,11 @@ export function formatActivityContext(moment: SimulationActivityMoment, config?:
     case 'food-collected': {
       const mode = ecologyMode(config)
       const foodEnergy = configNumber(config, 'foodEnergy')
+      const qualityVariation = configNumber(config, 'patchQualityVariation')
       if (mode === 'classic') return 'Model context: Classic mode awards one carried-food unit at contact and uses the legacy fixed 22-energy reward.'
       if (mode === 'energy-regrowth') return foodEnergy === null
-        ? 'Model context: Energy-regrowth mode uses item energy and patch stock; configured foodEnergy is unavailable.'
-        : `Model context: Energy-regrowth mode uses ${formatSetting(foodEnergy)} energy from each item and updates patch stock when the item belongs to a patch.`
+        ? 'Model context: Energy-regrowth mode uses each item’s recorded energy and patch stock; configured base food energy is unavailable.'
+        : `Model context: Energy-regrowth mode uses each item’s recorded energy; the configured ${formatSetting(foodEnergy)}-energy baseline${qualityVariation !== null && qualityVariation > 0 ? ' is scaled by persistent patch quality when food is produced' : ' is uniform for newly produced food'}, and collection updates its patch stock.`
       return 'Model context: Ecology mode unavailable; classic versus energy-regrowth food handling cannot be identified.'
     }
     case 'attack-success':
@@ -388,8 +389,10 @@ export function formatActivityContext(moment: SimulationActivityMoment, config?:
     }
     case 'natural-regrowth': {
       const capacity = configNumber(config, 'patchCapacity')
+      const qualityVariation = configNumber(config, 'patchQualityVariation')
       const capacityText = capacity === null ? 'the configured patch capacity, which is unavailable in this snapshot' : `the configured capacity of ${formatSetting(capacity)} food per patch`
-      return `Model context: Deterministic patch regrowth advances toward ${capacityText}; this record has no per-patch breakdown.`
+      const qualityText = ecologyMode(config) === 'energy-regrowth' && qualityVariation !== null && qualityVariation > 0 ? ' Persistent patch quality scales each patch’s regrowth rate.' : ''
+      return `Model context: Deterministic patch regrowth advances toward ${capacityText}.${qualityText} This record has no per-patch breakdown.`
     }
     case 'intervention':
       return moment.count === 0

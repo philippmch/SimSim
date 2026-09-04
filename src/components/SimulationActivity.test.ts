@@ -114,7 +114,7 @@ describe('simulation activity helpers', () => {
     ['attack-failure', 'Threshold predation should resolve an eligible contact meeting the size gate automatically; this failure is inconsistent or unavailable in threshold mode.'],
     ['energy-death', 'Energy reached zero; movement, sensing, and admitted contest attempts can spend it. Phase attribution is unavailable for this record.'],
     ['reached-home', 'In classic mode, carrying food and crossing the home radius ends the active day.'],
-    ['natural-regrowth', 'Deterministic patch regrowth advances toward the configured capacity of 60 food per patch; this record has no per-patch breakdown.'],
+    ['natural-regrowth', 'Deterministic patch regrowth advances toward the configured capacity of 60 food per patch. This record has no per-patch breakdown.'],
     ['intervention', 'The recorded user-applied change takes effect immediately; no downstream evolutionary claim is made from this record.'],
     ['generation-settlement', 'The exact next population is 4 creatures; survivors carry forward and admitted births are added at this recorded boundary.'],
   ] as [WorldActivityKind, string][])('gives %s a factual model-context line', (kind, expected) => {
@@ -126,8 +126,9 @@ describe('simulation activity helpers', () => {
   it('distinguishes classic and energy-regrowth food rules and reports missing ecology mode', () => {
     const normalized = normalizeActivityMoment(moment({ kind: 'food-collected' }), 0)!
     expect(formatActivityContext(normalized, { ecologyMode: 'classic', foodEnergy: 99 })).toContain('legacy fixed 22-energy reward')
-    expect(formatActivityContext(normalized, { ecologyMode: 'energy-regrowth', foodEnergy: 17 })).toContain('17 energy')
-    expect(formatActivityContext(normalized, { ecologyMode: 'energy-regrowth' })).toContain('configured foodEnergy is unavailable')
+    expect(formatActivityContext(normalized, { ecologyMode: 'energy-regrowth', foodEnergy: 17, patchQualityVariation: .45 })).toContain('configured 17-energy baseline is scaled by persistent patch quality')
+    expect(formatActivityContext(normalized, { ecologyMode: 'energy-regrowth', foodEnergy: 17, patchQualityVariation: 0 })).toContain('uniform for newly produced food')
+    expect(formatActivityContext(normalized, { ecologyMode: 'energy-regrowth' })).toContain('configured base food energy is unavailable')
     expect(formatActivityContext(normalized, {})).toContain('Ecology mode unavailable')
   })
 
@@ -165,6 +166,13 @@ describe('simulation activity helpers', () => {
     expect(contexts[1]).toContain('returning and crossing the home radius')
     expect(contexts[2]).toContain('no per-patch breakdown')
     expect(contexts[3]).toContain('takes effect immediately')
+  })
+
+  it('explains quality-scaled regrowth without inventing a patch-level event breakdown', () => {
+    const regrowth = normalizeActivityMoment(moment({ kind: 'natural-regrowth', count: 3 }), 0)!
+    const context = formatActivityContext(regrowth, { ecologyMode: 'energy-regrowth', patchCapacity: 60, patchQualityVariation: .45 })
+    expect(context).toContain('Persistent patch quality scales each patch’s regrowth rate')
+    expect(context).toContain('no per-patch breakdown')
   })
 
   it('does not claim that a zero-count intervention changed the world', () => {

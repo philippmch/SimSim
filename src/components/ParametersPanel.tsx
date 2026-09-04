@@ -50,6 +50,7 @@ function ParametersPanel({ draft, liveConfig, dirty, actionStatus, runtimeMode, 
   const importRef = useRef<HTMLInputElement>(null)
   const update = <K extends keyof Config>(key: K, value: Config[K]) => setDraft(config => ({ ...config, [key]: value }))
   const maturityAge = typeof draft.maturityAge === 'number' && Number.isFinite(draft.maturityAge) ? Math.max(0, Math.min(200, Math.round(draft.maturityAge))) : 0
+  const patchQualityVariation = typeof draft.patchQualityVariation === 'number' && Number.isFinite(draft.patchQualityVariation) ? Math.max(0, Math.min(1, draft.patchQualityVariation)) : 0
 
   return <>
     <div className="seed-row"><label htmlFor="seed">Random seed</label><input id="seed" type="number" value={draft.seed} min="1" max="9999999" onChange={event => { const value = event.currentTarget.valueAsNumber; update('seed', Number.isFinite(value) ? Math.max(1, Math.min(9999999, Math.round(value))) : defaultConfig.seed) }} /><button aria-label="Choose a new random seed" onClick={() => update('seed', Math.floor(Math.random() * 9999998) + 1)}>↻</button></div>
@@ -116,6 +117,7 @@ function ParametersPanel({ draft, liveConfig, dirty, actionStatus, runtimeMode, 
       <NumberControl label="Food patches" value={draft.foodPatchCount} min={1} max={8} step={1} onChange={value => update('foodPatchCount', value)} />
       <NumberControl label="Patchiness" value={Math.round(draft.foodPatchiness * 100)} min={0} max={100} step={5} unit="%" onChange={value => update('foodPatchiness', value / 100)} />
       <NumberControl label="Patch spread" value={draft.foodPatchSpread} min={.04} max={.25} step={.01} onChange={value => update('foodPatchSpread', value)} />
+      {draft.ecologyMode === 'energy-regrowth' && <><NumberControl label="Patch quality contrast" value={Math.round(patchQualityVariation * 100)} min={0} max={100} step={5} unit="%" onChange={value => update('patchQualityVariation', value / 100)} /><p className="model-note">Persistent richer patches regrow faster and their food yields more energy. Set 0% for uniform patches.</p></>}
       <NumberControl label="Obstacles" value={draft.obstacleCount} min={0} max={10} step={1} onChange={value => update('obstacleCount', value)} />
       <NumberControl label="Season strength" value={Math.round(draft.seasonAmplitude * 100)} min={0} max={70} step={5} unit="%" onChange={value => update('seasonAmplitude', value / 100)} />
       <NumberControl label="Season length" value={draft.seasonLength} min={2} max={30} step={1} unit=" gen" onChange={value => update('seasonLength', value)} />

@@ -27,9 +27,10 @@ high-diversity controls are available; zero variation produces exactly equal
 founders. Version-2 experiments migrate to zero founder variation so their prior
 deterministic starting populations remain reproducible. Version-3 setups migrate
 to classic lifecycle, perfect-perception, and threshold-predation modes. Version-4
-experiments migrate with reproductive maturity age **0** so their prior
-generation outcomes remain reproducible. Fresh version-5 setups use ecological
-modes and start with maturity age **1**; all mechanisms remain switchable.
+experiments migrate with reproductive maturity age **0**. Version-5 experiments
+retain their maturity setting and migrate with neutral patch quality, preserving
+their prior trajectories. Fresh version-6 setups use ecological modes, maturity
+age **1**, and contrasting patch quality; all mechanisms remain switchable.
 
 Biological individual and lineage identifiers are separate from transient render
 objects. A surviving adult keeps its individual identifier across generations;
@@ -46,10 +47,16 @@ line. Movement-only ticks are omitted, so this is not a long per-tick trace or
 replay. Clicking a creature still opens its bounded inspection telemetry.
 
 The seeded environment persists across generations. Food patches have visible
-stock, bounded capacity, and deterministic within-generation regrowth. Remaining
-food carries across generation boundaries in ecological mode. Obstacles persist,
-and seasons, trend, and response rate change the resource target. Classic mode
-retains the original generation-pulse food rules.
+stock, bounded capacity, and deterministic within-generation regrowth. Each patch
+also receives a persistent seeded quality: richer patches replenish faster and
+produce higher-energy food, while creatures weigh that value against travel
+distance. Patch multipliers are centered around the configured baseline, so
+their continuous item-regrowth rates sum to the same baseline before capacity
+and discrete rounding. Total nutritional supply can still rise with contrast
+because richer patches also produce higher-energy items. Remaining food carries
+across generation boundaries in ecological mode.
+Obstacles persist, and seasons, trend, and response rate change the resource
+target. Classic mode retains the original generation-pulse food rules.
 
 During a run, **Resource bloom**, **Drought**, and **Founder migration** apply
 immediately without restarting. They obey the food and population safety caps
@@ -65,6 +72,8 @@ The Experiment lab compares a control with a treatment across matched random
 seeds. Choose a preset pressure, intervention generation, outcome, replicate
 count, and fixed horizon; the chart reports both medians and middle-50%
 intervals on one shared scale, plus the paired treatment-minus-control effect.
+Patch quality contrast is available as a generation-boundary treatment pressure;
+the same persistent patch ordering becomes more or less unequal in both arms.
 Runs use a separate worker when available and can be cancelled without changing
 the live ecosystem. Results export as validated versioned JSON or tidy,
 spreadsheet-safe CSV. A result seed can be staged in the live parameters for an
@@ -106,9 +115,13 @@ must return home before the generation ends and retain part of their reserve.
 Their retained energy must be **strictly greater than** the configured
 reproduction cost, and their age must be at least `maturityAge`, before they can
 reproduce. Founders and newborns start at age 0; every survivor gains one age
-unit at each settlement. Fresh v5 runs therefore keep age-0 founders and
+unit at each settlement. Fresh v6 runs therefore keep age-0 founders and
 newborns out of the next reproduction pool, while v4 imports use maturity age 0
-for replay compatibility.
+for replay compatibility. Advanced patch multiplier is
+`1 + patchQualityVariation × qualityBias`; the seeded biases are bounded,
+centered around zero, and persist for the run. The multiplier scales both
+within-generation regrowth and the energy of newly produced food. Version-5 and
+older imports set `patchQualityVariation` to zero for replay compatibility.
 In classic mode, the original rule is unchanged: one food brought home survives
 and two also produce one offspring; classic mode does not apply the ecological
 maturity gate. These equations are calibrated for legible dynamics rather than

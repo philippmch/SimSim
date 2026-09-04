@@ -90,11 +90,34 @@ describe('parameters panel', () => {
     expect(markup).not.toContain('current age reaches 80 generations')
   })
 
+  it('stages patch quality contrast only for the ecological lifecycle', () => {
+    const ecological = renderToStaticMarkup(createElement(ParametersPanel, props({ dirty: true })))
+    expect(ecological).toContain('Patch quality contrast')
+    expect(ecological).toContain('id="patch-quality-contrast"')
+    expect(ecological).toContain('Persistent richer patches regrow faster and their food yields more energy.')
+    expect(ecological).toContain('min="0"')
+    expect(ecological).toContain('max="100"')
+    expect(ecological).toContain('step="5"')
+
+    const classic: Config = { ...defaultConfig, ecologyMode: 'classic' }
+    const classicMarkup = renderToStaticMarkup(createElement(ParametersPanel, props({ draft: classic, liveConfig: classic })))
+    expect(classicMarkup).not.toContain('Patch quality contrast')
+    expect(classicMarkup).not.toContain('Persistent richer patches')
+  })
+
   it('converts a maturity slider interaction into a numeric staged value', () => {
     const onChange = vi.fn()
     const control = NumberControl({ label: 'Reproduction maturity age', value: 1, min: 0, max: 200, step: 1, unit: ' gen', onChange })
     const children = control.props.children as unknown as Array<{ props: { onChange?: (event: unknown) => void } }>
     children[1].props.onChange?.({ target: { value: '7' } })
     expect(onChange).toHaveBeenCalledWith(7)
+  })
+
+  it('converts a quality contrast slider interaction into a numeric percentage', () => {
+    const onChange = vi.fn()
+    const control = NumberControl({ label: 'Patch quality contrast', value: 45, min: 0, max: 100, step: 5, unit: '%', onChange })
+    const children = control.props.children as unknown as Array<{ props: { onChange?: (event: unknown) => void } }>
+    children[1].props.onChange?.({ target: { value: '70' } })
+    expect(onChange).toHaveBeenCalledWith(70)
   })
 })

@@ -6,6 +6,8 @@ import {
   CREATURE_STATE_METADATA,
   arenaCreatureAlpha,
   arenaLineageRingAlpha,
+  arenaPatchQualityMultiplier,
+  arenaPatchQualityRange,
   arenaTargetPathEligible,
   classifyArenaHeldPathEndpoint,
   formatArenaAccessibleDescription,
@@ -37,6 +39,7 @@ export interface ArenaCanvasPalette {
   patchHaloStart: string
   patchHaloEnd: string
   patchRing: string
+  patchStockTrack: string
   sightFill: string
   sightStroke: string
   targetLine: string
@@ -70,6 +73,7 @@ export const ARENA_LIGHT_PALETTE: ArenaCanvasPalette = {
   patchHaloStart:'rgba(183,190,88,.16)',
   patchHaloEnd:'rgba(183,190,88,0)',
   patchRing:'rgba(171,183,78,.7)',
+  patchStockTrack:'rgba(45,75,60,.26)',
   sightFill:'rgba(227,188,63,.10)',
   sightStroke:'rgba(227,188,63,.7)',
   targetLine:'rgba(242,201,76,.6)',
@@ -103,6 +107,7 @@ export const ARENA_DARK_PALETTE: ArenaCanvasPalette = {
   patchHaloStart:'rgba(205,216,100,.18)',
   patchHaloEnd:'rgba(205,216,100,0)',
   patchRing:'rgba(205,216,100,.82)',
+  patchStockTrack:'rgba(213,238,221,.28)',
   sightFill:'rgba(245,211,83,.13)',
   sightStroke:'rgba(249,216,91,.84)',
   targetLine:'rgba(255,222,97,.78)',
@@ -186,6 +191,64 @@ function drawHeldPathEndpoint(
   ctx.restore()
 }
 
+function arenaQualityColor(multiplier: number, darkMode: boolean): string {
+  const t = Math.max(0, Math.min(1, multiplier / 2))
+  const hue = 30 + 100 * t
+  return `hsl(${hue} 72% ${darkMode ? 68 : 36}%)`
+}
+
+export interface ArenaPatchQualityGeometryInput {
+  width: number
+  height: number
+  pad: number
+  x: number
+  y: number
+  radius: number
+  labelHalfWidth?: number
+  labelHalfHeight?: number
+  labelGap?: number
+}
+
+export interface ArenaPatchQualityGeometry {
+  ringX: number
+  ringY: number
+  ringRadius: number
+  labelX: number
+  labelY: number
+  labelPlacement: 'above' | 'below' | 'inside'
+}
+
+const clampGeometryValue = (value: number, min: number, max: number) => min <= max ? Math.max(min, Math.min(max, value)) : (min + max) / 2
+
+/** Keep quality annotations inside the canvas without detaching the ring from
+ * the patch it identifies. Edge rings shrink just enough to remain visible. */
+export function arenaPatchQualityGeometry(input: ArenaPatchQualityGeometryInput): ArenaPatchQualityGeometry {
+  const width = Number.isFinite(input.width) ? Math.max(0, input.width) : 0
+  const height = Number.isFinite(input.height) ? Math.max(0, input.height) : 0
+  const pad = Number.isFinite(input.pad) ? Math.max(0, Math.min(Math.min(width, height) / 2, input.pad)) : 0
+  const inset = Math.min(2, pad, width / 2, height / 2)
+  const left = inset, right = Math.max(left, width - inset), top = inset, bottom = Math.max(top, height - inset)
+  const fieldWidth = Math.max(0, right - left), fieldHeight = Math.max(0, bottom - top)
+  const requestedRadius = Number.isFinite(input.radius) ? Math.max(0, input.radius) : 0
+  const sourceX = Number.isFinite(input.x) ? input.x : (left + right) / 2
+  const sourceY = Number.isFinite(input.y) ? input.y : (top + bottom) / 2
+  const ringX = clampGeometryValue(sourceX, left, right)
+  const ringY = clampGeometryValue(sourceY, top, bottom)
+  const ringRadius = Math.max(0, Math.min(requestedRadius, ringX - left, right - ringX, ringY - top, bottom - ringY))
+  const halfWidth = Number.isFinite(input.labelHalfWidth) ? Math.max(0, input.labelHalfWidth!) : 18
+  const halfHeight = Number.isFinite(input.labelHalfHeight) ? Math.max(0, input.labelHalfHeight!) : 7
+  const gap = Number.isFinite(input.labelGap) ? Math.max(0, input.labelGap!) : 5
+  const labelX = fieldWidth >= halfWidth * 2
+    ? clampGeometryValue(ringX, left + halfWidth, right - halfWidth)
+    : (left + right) / 2
+  const minLabelY = top + halfHeight, maxLabelY = bottom - halfHeight
+  const aboveY = ringY - ringRadius - gap
+  const belowY = ringY + ringRadius + gap
+  if (aboveY >= minLabelY) return { ringX, ringY, ringRadius, labelX, labelY: aboveY, labelPlacement: 'above' }
+  if (belowY <= maxLabelY) return { ringX, ringY, ringRadius, labelX, labelY: belowY, labelPlacement: 'below' }
+  return { ringX, ringY, ringRadius, labelX, labelY: clampGeometryValue(ringY, minLabelY, maxLabelY), labelPlacement: 'inside' }
+}
+
 /** Canvas geometry uses a 20px minimum inset on each side. During teardown or
  * responsive reflow ResizeObserver can briefly report a smaller box. */
 export function arenaCanvasCanDraw(width: number, height: number) {
@@ -239,9 +302,23 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, a
       }
       for (const patch of world.environment.patches) {
         const x = sx(patch.x), y = sy(patch.y), r = Math.max(24, Math.min(w, h) * world.config.foodPatchSpread * .72)
+        const advanced = world.config.ecologyMode === 'energy-regrowth'
+        const multiplier = advanced ? arenaPatchQualityMultiplier(patch.qualityBias, world.config.patchQualityVariation) : 1
+        const qualityColor = arenaQualityColor(multiplier, darkModeRef.current ?? false)
         const halo = ctx.createRadialGradient(x, y, 0, x, y, r); halo.addColorStop(0, palette.patchHaloStart); halo.addColorStop(1, palette.patchHaloEnd)
         ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill()
-        if (world.config.ecologyMode === 'energy-regrowth') { const stock = Math.max(0, Math.min(1, patch.stock / Math.max(1, world.config.patchCapacity))); ctx.strokeStyle = palette.patchRing; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y, Math.max(8, r * .32), -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * stock); ctx.stroke() }
+        if (advanced) {
+          const qualityTint = Math.max(.05, Math.min(.18, .05 + multiplier / 2 * .13))
+          ctx.save(); ctx.globalAlpha = qualityTint; ctx.fillStyle = qualityColor; ctx.beginPath(); ctx.arc(x, y, r * .86, 0, Math.PI * 2); ctx.fill(); ctx.restore()
+          const qualityGeometry = arenaPatchQualityGeometry({ width: w, height: h, pad, x, y, radius: Math.max(10, r * .72), labelHalfWidth: 18, labelHalfHeight: 7, labelGap: 5 })
+          const stockRadius = Math.max(8, r * .32)
+          // The outer dashed ring and compact label communicate quality; the
+          // inner complete track plus arc communicate stock independently.
+          ctx.save(); ctx.globalAlpha = .72; ctx.strokeStyle = qualityColor; ctx.lineWidth = Math.max(1.5, Math.min(3.5, r * .045)); ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.arc(qualityGeometry.ringX, qualityGeometry.ringY, qualityGeometry.ringRadius, 0, Math.PI * 2); ctx.stroke(); ctx.restore()
+          const stock = Math.max(0, Math.min(1, patch.stock / Math.max(1, world.config.patchCapacity)))
+          ctx.save(); ctx.strokeStyle = palette.patchStockTrack; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y, stockRadius, 0, Math.PI * 2); ctx.stroke(); ctx.strokeStyle = palette.patchRing; ctx.beginPath(); ctx.arc(x, y, stockRadius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * stock); ctx.stroke(); ctx.restore()
+          ctx.save(); ctx.fillStyle = qualityColor; ctx.font = `700 ${Math.max(8, Math.min(11, r * .19))}px system-ui`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(`${multiplier.toFixed(1)}×`, qualityGeometry.labelX, qualityGeometry.labelY); ctx.restore()
+        }
       }
       for (const obstacle of world.environment.obstacles) {
         const x = sx(obstacle.x), y = sy(obstacle.y), r = obstacle.radius * Math.min(w - pad * 2, h - pad * 2)
@@ -250,7 +327,12 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, a
         ctx.fillStyle = rock; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = palette.obstacleStroke; ctx.stroke()
       }
       for (const f of world.food) {
-        const x = sx(f.x), y = sy(f.y), r = Math.max(3.5, Math.min(w, h) * .008)
+        const x = sx(f.x), y = sy(f.y), baseRadius = Math.max(3.5, Math.min(w, h) * .008)
+        const baseEnergy = world.config.foodEnergy
+        const energyRatio = world.config.ecologyMode === 'energy-regrowth' && Number.isFinite(f.energy) && Number.isFinite(baseEnergy) && baseEnergy > 0
+          ? Math.max(.25, Math.min(2, f.energy / baseEnergy))
+          : 1
+        const r = baseRadius * (world.config.ecologyMode === 'energy-regrowth' ? .82 + energyRatio * .18 : 1)
         ctx.fillStyle = palette.foodShadow; ctx.beginPath(); ctx.ellipse(x + 1, y + r * .9, r * 1.2, r * .38, 0, 0, Math.PI * 2); ctx.fill()
         const g = ctx.createRadialGradient(x - r * .25, y - r * .35, 1, x, y, r); g.addColorStop(0, palette.foodStart); g.addColorStop(.4, palette.foodMiddle); g.addColorStop(1, palette.foodEnd)
         ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill()
@@ -301,7 +383,7 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, a
   for (const creature of livingCreatures) stateCounts[creature.home ? 'safe' : creature.mode]++
   const stateSummary = (Object.entries(CREATURE_STATE_METADATA) as [CreatureState, (typeof CREATURE_STATE_METADATA)[CreatureState]][]).map(([state, metadata]) => `${stateCounts[state]} ${metadata.label.toLowerCase()}`).join(', ')
   const selectedState = selected ? (selected.home ? 'safe' : selected.mode) : null
-  const accessibleDescription = formatArenaAccessibleDescription({ generation: world.generation, livingCreatures: livingCreatures.length, stateSummary, foodCount: world.food.length, patchCount: world.environment.patches.length, foodBudget: world.environment.foodBudget, obstacleCount: world.environment.obstacles.length, ecologyMode: world.config.ecologyMode, hasSelectedCreature: Boolean(selected), selectedIsHunting: selected?.mode === 'hunting', focus: arenaFocus, focusCount: arenaFocus === 'all' ? livingCreatures.length : stateCounts[arenaFocus], selectedOutsideFocus: arenaFocus !== 'all' && selectedState !== null && selectedState !== arenaFocus, playbackStatus, playbackDetail })
+  const accessibleDescription = formatArenaAccessibleDescription({ generation: world.generation, livingCreatures: livingCreatures.length, stateSummary, foodCount: world.food.length, patchCount: world.environment.patches.length, foodBudget: world.environment.foodBudget, obstacleCount: world.environment.obstacles.length, ecologyMode: world.config.ecologyMode, patchQualityVariation: world.config.ecologyMode === 'energy-regrowth' ? world.config.patchQualityVariation : undefined, patchQualityRange: world.config.ecologyMode === 'energy-regrowth' ? arenaPatchQualityRange(world.environment.patches, world.config.patchQualityVariation) : undefined, hasSelectedCreature: Boolean(selected), selectedIsHunting: selected?.mode === 'hunting', focus: arenaFocus, focusCount: arenaFocus === 'all' ? livingCreatures.length : stateCounts[arenaFocus], selectedOutsideFocus: arenaFocus !== 'all' && selectedState !== null && selectedState !== arenaFocus, playbackStatus, playbackDetail })
   return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={accessibleDescription}>
     Natural selection simulation arena. Live counts are available in the statistics region.
   </canvas><label className="creature-picker" htmlFor="arena-creature-picker">Inspect creature <select id="arena-creature-picker" aria-describedby="arena-creature-picker-help" value={selectedIndividualId ?? ''} onChange={e => onSelect(e.target.value ? Number(e.target.value) : null)} style={{ background: 'var(--paper)', color: 'var(--ink)', colorScheme: 'light dark' }}><option value="">No creature selected</option>{livingCreatures.sort((a, b) => a.individualId - b.individualId).map(c => <option key={c.individualId} value={c.individualId}>Individual {c.individualId}, lineage {c.lineageId}, {CREATURE_STATE_METADATA[c.home ? 'safe' : c.mode].label}</option>)}</select></label><span id="arena-creature-picker-help" className="sr-only">Choose a living creature to inspect its current behavior. Choose No creature selected to clear inspection.</span><span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{formatArenaSelectionStatus(selectedIndividualId)}</span></>

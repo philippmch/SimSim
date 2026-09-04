@@ -11,11 +11,13 @@ import {
   ARENA_FOCUS_TARGET_PATH_KEY,
   ARENA_LIGHT_PALETTE,
   ARENA_HUNT_CONTACT_KEY,
+  ARENA_PATCH_QUALITY_KEY,
   ARENA_PATCH_STOCK_KEY,
   ARENA_QUICK_START,
   ARENA_SELECTED_OVERLAY_KEY,
   arenaCanvasCanDraw,
   arenaCanvasPalette,
+  arenaPatchQualityGeometry,
   classifyArenaHeldPathEndpoint,
   arenaTargetPathEligible,
   listenToArenaColorScheme,
@@ -23,6 +25,8 @@ import {
   arenaPlaybackStatus,
   arenaCreatureAlpha,
   arenaLineageRingAlpha,
+  arenaPatchQualityMultiplier,
+  arenaPatchQualityRange,
   CREATURE_STATE_METADATA,
   formatArenaAccessibleDescription,
   formatArenaDayProgress,
@@ -30,6 +34,7 @@ import {
   formatArenaFocusOption,
   formatArenaOverlayDescription,
   formatArenaPlaybackDetail,
+  formatArenaPatchQualityDescription,
   formatArenaSelectionStatus,
   formatObservedPath,
   formatObservedDecisionMetadata,
@@ -176,6 +181,7 @@ describe('arena clarity helpers', () => {
     expect(ARENA_LIGHT_PALETTE.fieldEnd).toBe('#dce7d8')
     expect(ARENA_LIGHT_PALETTE.fieldGrid).toBe('rgba(37,75,62,.22)')
     expect(ARENA_LIGHT_PALETTE.patchHaloEnd).toBe('rgba(183,190,88,0)')
+    expect(ARENA_LIGHT_PALETTE.patchStockTrack).toContain('rgba')
     expect(ARENA_LIGHT_PALETTE.creatureBodyEnd).toBe('#304b35')
     expect(ARENA_LIGHT_PALETTE.creatureEdge).toBe('rgba(12,29,23,.82)')
     expect(ARENA_DARK_PALETTE.fieldStart).toBe('#14251e')
@@ -187,6 +193,48 @@ describe('arena clarity helpers', () => {
     expect(ARENA_DARK_PALETTE.creatureEye).not.toBe(ARENA_DARK_PALETTE.creatureBodyEnd)
     expect(CREATURE_STATE_METADATA.safe.color).toBe('#f8fafc')
     expect(CREATURE_STATE_METADATA.hunting.color).toBe('#fb7185')
+  })
+
+  it('keeps patch quality bounded and explains it separately from stock', () => {
+    expect(arenaPatchQualityMultiplier(-4, 2)).toBe(0)
+    expect(arenaPatchQualityMultiplier(4, 2)).toBe(2)
+    expect(arenaPatchQualityMultiplier('bad', Number.NaN)).toBe(1)
+    expect(arenaPatchQualityRange([{ qualityBias: -.8 }, { qualityBias: .6 }], .5)).toEqual([.6, 1.3])
+    expect(arenaPatchQualityRange([{ qualityBias: -.8 }, { qualityBias: .6 }], 0)).toEqual([1, 1])
+    expect(arenaPatchQualityRange([{ qualityBias: Number.NaN }], .5)).toEqual([1, 1])
+
+    const quality = formatArenaPatchQualityDescription('energy-regrowth', .5, [.6, 1.3])
+    expect(quality).toContain('Patch quality currently ranges from 0.60× to 1.30×')
+    expect(quality).toContain('regrow faster')
+    expect(quality).toContain('carries more energy')
+    expect(quality).not.toContain('stock arcs')
+    expect(formatArenaPatchQualityDescription('energy-regrowth', 0)).toContain('uniform at 1.00×')
+    expect(formatArenaPatchQualityDescription('energy-regrowth', .5, [1, 1])).toContain('configured contrast can matter when multiple patches')
+    expect(formatArenaPatchQualityDescription('classic', .5, [.8, 1.15])).toBe('')
+    expect(ARENA_PATCH_QUALITY_KEY).toContain('quality multiplier')
+    expect(ARENA_PATCH_STOCK_KEY).toContain('capacity')
+  })
+
+  it('keeps quality rings concentric and labels inside a narrow arena at every edge', () => {
+    const edgePatches = [
+      arenaPatchQualityGeometry({ width: 320, height: 320, pad: 20, x: 24, y: 24, radius: 42 }),
+      arenaPatchQualityGeometry({ width: 320, height: 320, pad: 20, x: 296, y: 24, radius: 42 }),
+      arenaPatchQualityGeometry({ width: 320, height: 320, pad: 20, x: 24, y: 296, radius: 42 }),
+      arenaPatchQualityGeometry({ width: 320, height: 320, pad: 20, x: 296, y: 296, radius: 42 }),
+    ]
+    for (const geometry of edgePatches) {
+      expect(geometry.ringX - geometry.ringRadius).toBeGreaterThanOrEqual(2)
+      expect(geometry.ringX + geometry.ringRadius).toBeLessThanOrEqual(318)
+      expect(geometry.ringY - geometry.ringRadius).toBeGreaterThanOrEqual(2)
+      expect(geometry.ringY + geometry.ringRadius).toBeLessThanOrEqual(318)
+      expect(geometry.labelX - 18).toBeGreaterThanOrEqual(2)
+      expect(geometry.labelX + 18).toBeLessThanOrEqual(318)
+      expect(geometry.labelY - 7).toBeGreaterThanOrEqual(2)
+      expect(geometry.labelY + 7).toBeLessThanOrEqual(318)
+    }
+    expect(edgePatches.map(geometry => [geometry.ringX, geometry.ringY])).toEqual([[24, 24], [296, 24], [24, 296], [296, 296]])
+    expect(edgePatches.map(geometry => geometry.ringRadius)).toEqual([22, 22, 22, 22])
+    expect(edgePatches.map(geometry => geometry.labelPlacement)).toEqual(['below', 'below', 'above', 'above'])
   })
 
   it('offers stable action focus labels and keeps the selected creature visible', () => {
@@ -309,6 +357,17 @@ describe('arena clarity helpers', () => {
     expect(description).not.toContain(ARENA_SELECTED_OVERLAY_KEY)
   })
 
+  it('announces the bounded quality range only for ecological worlds', () => {
+    const ecological = formatArenaAccessibleDescription(descriptionInput({ patchQualityVariation: .5, patchQualityRange: [.6, 1.3] }))
+    expect(ecological).toContain('Patch quality currently ranges from 0.60× to 1.30×')
+    expect(ecological).toContain('Greener/brighter patches regrow faster')
+
+    const classic = formatArenaAccessibleDescription(descriptionInput({ ecologyMode: 'classic', patchQualityVariation: .5, patchQualityRange: [.6, 1.3] }))
+    expect(classic).not.toContain('Patch quality')
+    expect(classic).not.toContain('regrow faster')
+    expect(classic).not.toContain('stock')
+  })
+
   it('includes playback status and its stable phase detail in the canvas description', () => {
     const detail = formatArenaPlaybackDetail({ status: 'Awaiting settlement', populationCount: 2, livingCount: 2 })
     const description = formatArenaAccessibleDescription(descriptionInput({ playbackStatus: 'Awaiting settlement', playbackDetail: detail }))
@@ -338,6 +397,8 @@ describe('arena clarity helpers', () => {
     expect(formatSelectedTarget({ targetType: 'threat', targetId: 43, targetX: .7, targetY: .8 }, [{ id: 43, individualId: 8, alive: true }])).toBe('Threat · Individual 8 · path ends at an escape waypoint')
     expect(formatSelectedTarget({ targetType: 'threat', targetId: 43 }, [{ id: 43, individualId: 8, alive: true }])).toBe('Threat · Individual 8')
     expect(formatSelectedTarget({ targetType: 'food', targetId: 901 }, [], [{ id: 901 }])).toBe('Food item')
+    expect(formatSelectedTarget({ targetType: 'food', targetId: 902 }, [], [{ id: 902, energy: 28.6 }])).toBe('Food item · 28.6 energy')
+    expect(formatSelectedTarget({ targetType: 'food', targetId: 903 }, [], [{ id: 903, energy: Number.NaN }])).toBe('Food item')
     expect(formatSelectedTarget({ targetType: null, targetId: null }, [])).toBe('None')
   })
 
@@ -370,7 +431,7 @@ describe('arena clarity helpers', () => {
     const path = formatObservedPath(world, { ticks: 1, stop: 'beat' }, observedContext(world))
     expect(path).toContain('perception recorded 1/2 creatures and 2/4 food')
     expect(path).toContain('decision recorded as food (reason noted: Nearby food utility)')
-    expect(path).toContain('current action: Finding food · target: Food item.')
+    expect(path).toContain('current action: Finding food · target: Food item')
     expect(path).not.toContain(String(internalCreatureId))
     if (internalFoodId !== undefined) expect(path).not.toContain(String(internalFoodId))
   })
