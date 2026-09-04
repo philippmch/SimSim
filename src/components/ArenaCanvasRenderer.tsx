@@ -176,7 +176,7 @@ export function listenToArenaColorScheme(
 const ARENA_ACTIVITY_KINDS = ['food-collected', 'attack-success', 'attack-failure', 'energy-death', 'reached-home', 'natural-regrowth', 'intervention', 'generation-settlement'] as const satisfies readonly WorldActivityKind[]
 const ARENA_ACTIVITY_KIND_SET = new Set<string>(ARENA_ACTIVITY_KINDS)
 const ARENA_ACTIVITY_AGGREGATE_KINDS = new Set<WorldActivityKind>(['natural-regrowth', 'generation-settlement'])
-const ARENA_ACTIVITY_SPOTLIGHT_KEY_COPY = 'Latest actor halo marks each actor’s current arena position; it does not show the historical event location.'
+const ARENA_ACTIVITY_SPOTLIGHT_KEY_COPY = 'Latest actor halo marks each actor’s current arena position; role tags identify recorded roles there. Neither shows the historical event location.'
 
 export type ArenaActivitySpotlightRole = 'attacker' | 'prey' | 'collector' | 'returning individual' | 'involved individual'
 
@@ -425,6 +425,168 @@ export function formatArenaActivitySpotlightCompact(moment: Pick<SimulationActiv
   return copy.length <= ARENA_ACTIVITY_SPOTLIGHT_COMPACT_LIMIT
     ? copy
     : `${copy.slice(0, ARENA_ACTIVITY_SPOTLIGHT_COMPACT_LIMIT - 1).trimEnd()}…`
+}
+
+export interface ArenaActivitySpotlightTag {
+  individualId: number
+  role: ArenaActivitySpotlightRole
+  label: string
+  x: number
+  y: number
+  size: number
+}
+
+export interface ArenaActivitySpotlightTagRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface ArenaActivitySpotlightTagGeometryInput {
+  width: number
+  height: number
+  pad: number
+  /** Normalized current actor position, matching the spotlight actor shape. */
+  x: number
+  y: number
+  size?: number
+  individualId: number
+  role: ArenaActivitySpotlightRole
+  label?: string
+  compact?: boolean
+  occupied?: readonly ArenaActivitySpotlightTagRect[]
+  anchors?: readonly ArenaActivitySpotlightTagRect[]
+}
+
+export interface ArenaActivitySpotlightTagGeometry extends ArenaActivitySpotlightTagRect {
+  placement: 'above-right' | 'above-left' | 'below-right' | 'below-left' | 'above' | 'below' | 'detached-above' | 'detached-below'
+  actorX: number
+  actorY: number
+  haloRadius: number
+  leaderStartX: number
+  leaderStartY: number
+  leaderEndX: number
+  leaderEndY: number
+}
+
+function arenaActivitySpotlightRole(value: unknown): value is ArenaActivitySpotlightRole {
+  return value === 'attacker' || value === 'prey' || value === 'collector' || value === 'returning individual' || value === 'involved individual'
+}
+
+/** Short, role-specific labels keep the two-actor overlay readable at mobile sizes. */
+export function formatArenaActivitySpotlightTagLabel(actor: Pick<ArenaActivitySpotlightActor, 'role' | 'individualId'>): string {
+  const role = actor.role === 'returning individual' ? 'Returning' : actor.role === 'involved individual' ? 'Involved' : actor.role[0].toUpperCase() + actor.role.slice(1)
+  return role + ' · Individual ' + actor.individualId
+}
+
+/** Tags are intentionally limited to attack pairs or one-actor records. */
+export function deriveArenaActivitySpotlightTags(spotlight: unknown): ArenaActivitySpotlightTag[] {
+  const actors = arenaSafeArray(arenaField(spotlight, 'actors'))
+  if (actors.length === 0 || actors.length > 2) return []
+  const tags: ArenaActivitySpotlightTag[] = []
+  for (let index = 0; index < actors.length; index++) {
+    const actor = actors[index]
+    const individualId = arenaSafeInteger(arenaField(actor, 'individualId'), 1)
+    const role = arenaField(actor, 'role')
+    const x = arenaFinite(arenaField(actor, 'x'))
+    const y = arenaFinite(arenaField(actor, 'y'))
+    const size = arenaFinite(arenaField(actor, 'size'))
+    if (individualId === null || !arenaActivitySpotlightRole(role) || x === null || y === null || x < 0 || x > 1 || y < 0 || y > 1 || size === null || size <= 0) continue
+    tags.push({
+      individualId,
+      role,
+      label: formatArenaActivitySpotlightTagLabel({ role, individualId }),
+      x,
+      y,
+      size: Math.max(.3, Math.min(2.8, size)),
+    })
+  }
+  return tags
+}
+
+const arenaActivitySpotlightTagClamp = (value: number, minimum: number, maximum: number): number => Math.max(minimum, Math.min(maximum, value))
+
+/**
+ * Place one role/Individual pill just outside its current-position halo.
+ * Placement is deterministic, finite-data guarded, and collision-aware; a
+ * missing safe slot is reported as null so a label never covers the actor.
+ */
+export function arenaActivitySpotlightTagGeometry(input: ArenaActivitySpotlightTagGeometryInput): ArenaActivitySpotlightTagGeometry | null {
+  if (![input.width, input.height, input.pad, input.x, input.y, input.individualId].every(Number.isFinite) || !Number.isSafeInteger(input.individualId) || input.individualId < 1 || !arenaActivitySpotlightRole(input.role)) return null
+  if (input.width <= 0 || input.height <= 0 || input.x < 0 || input.x > 1 || input.y < 0 || input.y > 1) return null
+  const width = input.width
+  const height = input.height
+  const pad = Math.min(Math.min(width, height) / 2, Math.max(0, input.pad))
+  const left = pad
+  const right = Math.max(left, width - pad)
+  const top = pad
+  const bottom = Math.max(top, height - pad)
+  const fieldWidth = right - left
+  const fieldHeight = bottom - top
+  if (![left, right, top, bottom, fieldWidth, fieldHeight].every(Number.isFinite) || fieldWidth <= 1 || fieldHeight <= 1) return null
+  const sizeValue = typeof input.size === 'number' && Number.isFinite(input.size) && input.size > 0 ? input.size : 1
+  const size = Math.max(.3, Math.min(2.8, sizeValue))
+  const extent = Math.min(width, height)
+  const base = Math.max(7, extent * .017 * size)
+  const actorX = left + input.x * fieldWidth
+  const actorY = top + input.y * fieldHeight - base * 1.55 * .35
+  const haloRadius = Math.max(base * 2.15, 15)
+  const label = typeof input.label === 'string' && input.label.trim() ? input.label.trim() : formatArenaActivitySpotlightTagLabel({ role: input.role, individualId: input.individualId })
+  const desiredWidth = Math.max(input.compact ? 64 : 78, label.length * 6.25 + 14)
+  const maximumWidth = input.compact ? 96 : 156
+  const boxWidth = Math.min(fieldWidth, maximumWidth, desiredWidth)
+  const boxHeight = Math.min(fieldHeight, input.compact ? 18 : 24)
+  const gap = input.compact ? 2 : 6
+  if (![actorX, actorY, haloRadius, boxWidth, boxHeight].every(Number.isFinite) || boxWidth <= 1 || boxHeight <= 1) return null
+  const candidate = (placement: ArenaActivitySpotlightTagGeometry['placement'], x: number, y: number) => ({ placement, x, y })
+  const rightCandidates = [
+    candidate('above-right', actorX + haloRadius + gap, actorY - haloRadius - gap - boxHeight),
+    candidate('below-right', actorX + haloRadius + gap, actorY + haloRadius + gap),
+  ]
+  const leftCandidates = [
+    candidate('above-left', actorX - haloRadius - gap - boxWidth, actorY - haloRadius - gap - boxHeight),
+    candidate('below-left', actorX - haloRadius - gap - boxWidth, actorY + haloRadius + gap),
+  ]
+  const centeredX = arenaActivitySpotlightTagClamp(actorX - boxWidth / 2, left, Math.max(left, right - boxWidth))
+  const above = candidate('above', centeredX, actorY - haloRadius - gap - boxHeight)
+  const below = candidate('below', centeredX, actorY + haloRadius + gap)
+  const candidates: Array<{ placement: ArenaActivitySpotlightTagGeometry['placement']; x: number; y: number }> = input.role === 'attacker'
+    ? [...rightCandidates, ...leftCandidates, above, below]
+    : input.role === 'prey'
+      ? [...leftCandidates, ...rightCandidates, below, above]
+      : input.x <= .5
+        ? [...rightCandidates, ...leftCandidates, above, below]
+        : [...leftCandidates, ...rightCandidates, above, below]
+  const anchors = (input.anchors ?? []).filter(rect => rect && [rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) && rect.width > 0 && rect.height > 0)
+  for (const anchor of anchors) {
+    const anchorXs = [centeredX, left, Math.max(left, right - boxWidth)]
+    for (const x of anchorXs) {
+      candidates.push(candidate('detached-above', x, anchor.y - gap - boxHeight))
+      candidates.push(candidate('detached-below', x, anchor.y + anchor.height + gap))
+    }
+  }
+  const occupied = [...(input.occupied ?? []), ...anchors]
+  const safeOccupied = occupied.filter(rect => rect && [rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) && rect.width > 0 && rect.height > 0)
+  const fits = (rect: { x: number; y: number }) => rect.x >= left && rect.y >= top && rect.x + boxWidth <= right && rect.y + boxHeight <= bottom
+  const overlaps = (rect: { x: number; y: number }) => safeOccupied.some(other => rect.x < other.x + other.width + gap && rect.x + boxWidth + gap > other.x && rect.y < other.y + other.height + gap && rect.y + boxHeight + gap > other.y)
+  const clearsHalo = (rect: { x: number; y: number }) => {
+    const nearestX = arenaActivitySpotlightTagClamp(actorX, rect.x, rect.x + boxWidth)
+    const nearestY = arenaActivitySpotlightTagClamp(actorY, rect.y, rect.y + boxHeight)
+    return Math.hypot(actorX - nearestX, actorY - nearestY) >= haloRadius + gap
+  }
+  const chosen = candidates.find(rect => fits(rect) && !overlaps(rect) && clearsHalo(rect))
+  if (!chosen) return null
+  const nearestX = arenaActivitySpotlightTagClamp(actorX, chosen.x, chosen.x + boxWidth)
+  const nearestY = arenaActivitySpotlightTagClamp(actorY, chosen.y, chosen.y + boxHeight)
+  const deltaX = nearestX - actorX
+  const deltaY = nearestY - actorY
+  const distance = Math.hypot(deltaX, deltaY)
+  const leaderStartX = arenaActivitySpotlightTagClamp(actorX + (distance > 0 ? deltaX / distance * (haloRadius + 1) : 0), left, right)
+  const leaderStartY = arenaActivitySpotlightTagClamp(actorY + (distance > 0 ? deltaY / distance * (haloRadius + 1) : 0), top, bottom)
+  const leaderEndX = arenaActivitySpotlightTagClamp(nearestX, left, right)
+  const leaderEndY = arenaActivitySpotlightTagClamp(nearestY, top, bottom)
+  return { x: chosen.x, y: chosen.y, width: boxWidth, height: boxHeight, placement: chosen.placement, actorX: arenaActivitySpotlightTagClamp(actorX, left, right), actorY: arenaActivitySpotlightTagClamp(actorY, top, bottom), haloRadius, leaderStartX, leaderStartY, leaderEndX, leaderEndY }
 }
 
 function formatArenaActivitySpotlightCue(spotlight: ArenaActivitySpotlight, config: unknown): ArenaActivitySpotlightCue | null {
@@ -765,6 +927,93 @@ function drawArenaActivitySpotlight(
   }
 }
 
+export function arenaActivitySpotlightHaloRect(
+  width: number,
+  height: number,
+  pad: number,
+  actor: Pick<ArenaActivitySpotlightTag, 'x' | 'y' | 'size'>,
+): ArenaActivitySpotlightTagRect {
+  const base = Math.max(7, Math.min(width, height) * .017 * actor.size)
+  const radius = Math.max(base * 2.15, 15)
+  const actorX = pad + actor.x * Math.max(0, width - pad * 2)
+  const actorY = pad + actor.y * Math.max(0, height - pad * 2) - base * 1.55 * .35
+  return { x: actorX - radius, y: actorY - radius, width: radius * 2, height: radius * 2 }
+}
+
+const ARENA_ACTIVITY_SPOTLIGHT_TAG_ACCENTS: Record<ArenaActivitySpotlightRole, string> = {
+  attacker: '#fb7185',
+  prey: '#fbbf24',
+  collector: '#a3e635',
+  'returning individual': '#60a5fa',
+  'involved individual': '#c4b5fd',
+}
+
+function drawArenaActivitySpotlightTags(
+  ctx: CanvasRenderingContext2D,
+  tags: ArenaActivitySpotlightTag[],
+  alpha: number,
+  width: number,
+  height: number,
+  pad: number,
+  externalOccupied: readonly ArenaActivitySpotlightTagRect[] = [],
+) {
+  if (!tags.length) return
+  const compact = width <= 720
+  const anchors: ArenaActivitySpotlightTagRect[] = compact
+    ? [
+      { x: 10, y: Math.max(0, height - 122), width: Math.max(0, width - 20), height: 70 },
+      { x: 12, y: Math.max(0, height - 60), width: Math.max(0, Math.min(205, width - 24)), height: 48 },
+      { x: 12, y: 12, width: Math.max(0, width - 24), height: 120 },
+    ]
+    : [
+      { x: Math.max(0, width - 430), y: 18, width: Math.min(410, width), height: Math.min(380, Math.max(0, height - 36)) },
+      { x: 20, y: 18, width: Math.max(0, Math.min(300, width - 40)), height: 106 },
+      { x: 18, y: Math.max(0, height - 60), width: Math.max(0, Math.min(245, width - 36)), height: 44 },
+    ]
+  const occupied: ArenaActivitySpotlightTagRect[] = [...externalOccupied]
+  const haloRects = tags.map(tag => arenaActivitySpotlightHaloRect(width, height, pad, tag))
+  for (let index = 0; index < tags.length; index++) {
+    const tag = tags[index]
+    const canvasLabel = compact ? tag.label.replace(' · Individual ', ' ') : tag.label
+    const geometry = arenaActivitySpotlightTagGeometry({
+      width,
+      height,
+      pad,
+      x: tag.x,
+      y: tag.y,
+      size: tag.size,
+      individualId: tag.individualId,
+      role: tag.role,
+      label: canvasLabel,
+      compact,
+      occupied: [...occupied, ...haloRects.filter((_, haloIndex) => haloIndex !== index)],
+      anchors,
+    })
+    if (!geometry) continue
+    occupied.push({ x: geometry.x, y: geometry.y, width: geometry.width, height: geometry.height })
+    const accent = ARENA_ACTIVITY_SPOTLIGHT_TAG_ACCENTS[tag.role]
+    ctx.save()
+    ctx.globalAlpha = alpha
+    ctx.lineCap = 'round'
+    ctx.strokeStyle = 'rgba(3, 17, 29, .96)'
+    ctx.lineWidth = 4
+    ctx.beginPath(); ctx.moveTo(geometry.leaderStartX, geometry.leaderStartY); ctx.lineTo(geometry.leaderEndX, geometry.leaderEndY); ctx.stroke()
+    ctx.strokeStyle = accent
+    ctx.lineWidth = 1.4
+    ctx.beginPath(); ctx.moveTo(geometry.leaderStartX, geometry.leaderStartY); ctx.lineTo(geometry.leaderEndX, geometry.leaderEndY); ctx.stroke()
+    ctx.fillStyle = 'rgba(3, 17, 29, .94)'
+    ctx.strokeStyle = accent
+    ctx.lineWidth = 1.4
+    ctx.beginPath(); ctx.roundRect(geometry.x, geometry.y, geometry.width, geometry.height, 6); ctx.fill(); ctx.stroke()
+    ctx.fillStyle = '#f8fafc'
+    ctx.font = '700 10px system-ui'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(truncateArenaCanvasText(ctx, canvasLabel, Math.max(1, geometry.width - 10)), geometry.x + geometry.width / 2, geometry.y + geometry.height / 2)
+    ctx.restore()
+  }
+}
+
 function truncateArenaCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
   if (maxWidth <= 0) return ''
   try {
@@ -781,12 +1030,9 @@ function truncateArenaCanvasText(ctx: CanvasRenderingContext2D, text: string, ma
 function drawArenaSelectedCreatureCallout(
   ctx: CanvasRenderingContext2D,
   callout: ArenaSelectedCreatureCallout,
-  width: number,
-  height: number,
-  pad: number,
+  geometry: ArenaSelectedCreatureCalloutGeometry,
   gold: string,
 ) {
-  const geometry = arenaSelectedCreatureCalloutGeometry({ width, height, pad, x: callout.x, y: callout.y, size: callout.size, compact: width <= 720 })
   const textInset = 8
   const maxTextWidth = Math.max(1, geometry.width - textInset * 2)
   ctx.save()
@@ -1001,6 +1247,8 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
   if (darkModeRef.current === null) darkModeRef.current = readArenaDarkMode()
   const activitySpotlight = resolveArenaActivitySpotlight(world)
   const activitySpotlightCue = activitySpotlight ? formatArenaActivitySpotlightCue(activitySpotlight, world.config) : null
+  const allActivitySpotlightTags = activitySpotlight ? deriveArenaActivitySpotlightTags(activitySpotlight) : []
+  const activitySpotlightTags = allActivitySpotlightTags.filter(tag => tag.individualId !== selectedIndividualId)
   const selectedCallout = deriveArenaSelectedCreatureCallout(world, selectedIndividualId)
   useEffect(() => {
     const canvas = ref.current
@@ -1013,6 +1261,10 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
       }
       const ctx = canvas.getContext('2d'); if (!ctx) return; ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       const w = rect.width, h = rect.height, pad = Math.max(20, Math.min(w, h) * .055), palette = arenaCanvasPalette(darkModeRef.current ?? false)
+      const selectedCalloutGeometry = selectedCallout ? arenaSelectedCreatureCalloutGeometry({ width: w, height: h, pad, x: selectedCallout.x, y: selectedCallout.y, size: selectedCallout.size, compact: w <= 720 }) : null
+      const activityTagObstacles = selectedCallout && selectedCalloutGeometry
+        ? [selectedCalloutGeometry, arenaActivitySpotlightHaloRect(w, h, pad, selectedCallout)]
+        : []
       ctx.clearRect(0, 0, w, h)
       const grad = ctx.createLinearGradient(0, 0, w, h); grad.addColorStop(0, palette.fieldStart); grad.addColorStop(1, palette.fieldEnd)
       ctx.fillStyle = grad; ctx.beginPath(); ctx.roundRect(pad, pad, w - pad * 2, h - pad * 2, Math.min(34, w * .05)); ctx.fill()
@@ -1111,12 +1363,15 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
         ctx.restore()
         ctx.restore()
       }
-      if (activitySpotlight) drawArenaActivitySpotlight(ctx, activitySpotlight, w, h, sx, sy)
+      if (activitySpotlight) {
+        drawArenaActivitySpotlight(ctx, activitySpotlight, w, h, sx, sy)
+        drawArenaActivitySpotlightTags(ctx, activitySpotlightTags, activitySpotlight.alpha, w, h, pad, activityTagObstacles)
+      }
       const pct = Math.min(1, world.dayTime / world.config.dayLength)
       ctx.fillStyle = palette.progressTrack; ctx.fillRect(pad, pad - 9, w - pad * 2, 3)
       ctx.fillStyle = palette.progressFill; ctx.fillRect(pad, pad - 9, (w - pad * 2) * pct, 3)
       for (const marker of endpointMarkers) drawHeldPathEndpoint(ctx, marker.kind, marker.x, marker.y, marker.color, marker.size)
-      if (selectedCallout) drawArenaSelectedCreatureCallout(ctx, selectedCallout, w, h, pad, palette.selectedRing)
+      if (selectedCallout && selectedCalloutGeometry) drawArenaSelectedCreatureCallout(ctx, selectedCallout, selectedCalloutGeometry, palette.selectedRing)
     }
     drawRef.current = draw; draw()
   }, [world, revision, selectedIndividualId, selectedPatchId, arenaFocus])
@@ -1189,7 +1444,7 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
     }
     dispatchArenaInspectionHit(null, onSelect, onSelectPatch)
   }
-  return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={accessibleDescription} data-arena-activity-spotlight={activitySpotlight ? 'true' : undefined} data-arena-activity-spotlight-sequence={activitySpotlight?.sequence} data-arena-activity-spotlight-kind={activitySpotlight?.kind} data-arena-activity-spotlight-tick={activitySpotlight?.tick} data-arena-activity-spotlight-age={activitySpotlight?.age} data-arena-activity-spotlight-actors={activitySpotlight?.actors.map(actor => actor.individualId).join(',')} data-arena-activity-spotlight-event={activitySpotlightCue ? 'true' : undefined} data-arena-activity-spotlight-event-copy={activitySpotlightCue?.event} data-arena-activity-spotlight-event-context={activitySpotlightCue?.context} data-arena-selected-callout={selectedCallout ? 'true' : undefined} data-arena-selected-callout-individual-id={selectedCallout?.individualId} data-arena-selected-callout-title={selectedCallout?.title} data-arena-selected-callout-detail={selectedCallout?.detail} data-arena-selected-callout-copy={selectedCallout?.description}>
+  return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={accessibleDescription} data-arena-activity-spotlight={activitySpotlight ? 'true' : undefined} data-arena-activity-spotlight-sequence={activitySpotlight?.sequence} data-arena-activity-spotlight-kind={activitySpotlight?.kind} data-arena-activity-spotlight-tick={activitySpotlight?.tick} data-arena-activity-spotlight-age={activitySpotlight?.age} data-arena-activity-spotlight-actors={activitySpotlight?.actors.map(actor => actor.individualId).join(',')} data-arena-activity-spotlight-event={activitySpotlightCue ? 'true' : undefined} data-arena-activity-spotlight-event-copy={activitySpotlightCue?.event} data-arena-activity-spotlight-event-context={activitySpotlightCue?.context} data-arena-activity-spotlight-tag-copies={activitySpotlightTags.length ? activitySpotlightTags.map(tag => tag.label).join(', ') : undefined} data-arena-selected-callout={selectedCallout ? 'true' : undefined} data-arena-selected-callout-individual-id={selectedCallout?.individualId} data-arena-selected-callout-title={selectedCallout?.title} data-arena-selected-callout-detail={selectedCallout?.detail} data-arena-selected-callout-copy={selectedCallout?.description}>
     Natural selection simulation arena. Live counts are available in the statistics region.
   </canvas><label className="creature-picker" htmlFor="arena-creature-picker">Inspect <select id="arena-creature-picker" aria-label="Inspect creatures or resource patches" aria-describedby="arena-creature-picker-help" value={selectedValue} onChange={e => selectInspection(e.target.value)} style={{ background: 'var(--paper)', color: 'var(--ink)', colorScheme: 'light dark', minHeight: 32, touchAction: 'manipulation' }}><option value="">Nothing selected</option><optgroup label="Creatures">{livingCreatures.slice().sort((a, b) => a.individualId - b.individualId).map(c => <option key={`creature:${c.individualId}`} value={`creature:${c.individualId}`}>Individual {c.individualId}, lineage {c.lineageId}, {CREATURE_STATE_METADATA[c.home ? 'safe' : c.mode].label}</option>)}</optgroup>{patchOptions.length > 0 && <optgroup label="Resource patches">{patchOptions.map(({ patch, ordinal, currentFood, quality }) => <option key={`patch:${ordinal}`} value={`patch:${ordinal}`}>Patch {ordinal} · {quality} · {currentFood} food</option>)}</optgroup>}</select></label><span id="arena-creature-picker-help" className="sr-only">Choose a living creature or resource patch to inspect. Creature options reveal behavior; patch options reveal live food, capacity, energy, and regrowth. Choose Nothing selected to clear inspection.</span><span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{formatArenaInspectionStatus(selectedIndividualId, selectedPatchId, selectedPatchOrdinal)}</span></>
 }

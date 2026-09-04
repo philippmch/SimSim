@@ -21,6 +21,8 @@ import {
   arenaCanvasCanDraw,
   arenaCanvasPalette,
   arenaActivitySpotlightAlpha,
+  arenaActivitySpotlightHaloRect,
+  arenaActivitySpotlightTagGeometry,
   arenaActivitySpotlightWindowTicks,
   arenaPatchQualityGeometry,
   classifyArenaHeldPathEndpoint,
@@ -55,8 +57,10 @@ import {
   hitTestArenaInspection,
   resolveArenaActivitySpotlight,
   deriveArenaActivitySpotlightCue,
+  deriveArenaActivitySpotlightTags,
   deriveArenaSelectedCreatureCallout,
   formatArenaActivitySpotlightCompact,
+  formatArenaActivitySpotlightTagLabel,
   sortArenaPatches,
   showArenaQuickStart,
   type ArenaAccessibleDescriptionInput,
@@ -265,6 +269,101 @@ describe('arena activity spotlight', () => {
     ])
   })
 
+  it('derives readable role tags only for one- and two-actor spotlights', () => {
+    const tagsFor = (entry: WorldActivityEntry) => {
+      const world = spotlightWorld()
+      world.activity = [entry]
+      return deriveArenaActivitySpotlightTags(resolveArenaActivitySpotlight(world))
+    }
+
+    expect(tagsFor(spotlightMoment({ kind: 'attack-failure', attackerId: 2, preyId: 3, actorIds: [2, 3] })).map(tag => tag.label)).toEqual([
+      'Attacker · Individual 2',
+      'Prey · Individual 3',
+    ])
+    expect(tagsFor(spotlightMoment({ kind: 'food-collected', actorIds: [4] }))[0]?.label).toBe('Collector · Individual 4')
+    expect(tagsFor(spotlightMoment({ kind: 'reached-home', actorIds: [5] }))[0]?.label).toBe('Returning · Individual 5')
+    expect(tagsFor(spotlightMoment({ kind: 'intervention', actorIds: [6] }))[0]?.label).toBe('Involved · Individual 6')
+    expect(tagsFor(spotlightMoment({ kind: 'intervention', actorIds: [1, 2, 3] }))).toEqual([])
+    expect(formatArenaActivitySpotlightTagLabel({ role: 'prey', individualId: 9 })).toBe('Prey · Individual 9')
+
+    const throwing = new Proxy({}, { get() { throw new Error('malformed spotlight actor') } })
+    expect(() => deriveArenaActivitySpotlightTags({ actors: [throwing, { role: 'collector', individualId: 7, x: .4, y: .5, size: 1 }] })).not.toThrow()
+    expect(deriveArenaActivitySpotlightTags({ actors: [throwing, { role: 'collector', individualId: 7, x: .4, y: .5, size: 1 }] }).map(tag => tag.label)).toEqual(['Collector · Individual 7'])
+    expect(deriveArenaActivitySpotlightTags({ actors: [{ role: 'collector', individualId: 7, x: Number.NaN, y: .5, size: 1 }] })).toEqual([])
+  })
+
+  it('keeps role tags outside their halo and inside compact and desktop fields', () => {
+    const cases = [
+      { width: 300, height: 276, pad: 20, compact: true },
+      { width: 900, height: 600, pad: 32, compact: false },
+    ] as const
+    for (const dimensions of cases) {
+      for (const [x, y] of [[0, 0], [1, 0], [0, 1], [1, 1], [.5, .5]] as const) {
+        const geometry = arenaActivitySpotlightTagGeometry({ ...dimensions, x, y, size: 1, individualId: 25, role: 'attacker' })
+        expect(geometry).not.toBeNull()
+        const tag = geometry!
+        const right = dimensions.width - dimensions.pad
+        const bottom = dimensions.height - dimensions.pad
+        expect(tag.x).toBeGreaterThanOrEqual(dimensions.pad)
+        expect(tag.y).toBeGreaterThanOrEqual(dimensions.pad)
+        expect(tag.x + tag.width).toBeLessThanOrEqual(right)
+        expect(tag.y + tag.height).toBeLessThanOrEqual(bottom)
+        const nearestX = Math.max(tag.x, Math.min(tag.x + tag.width, tag.actorX))
+        const nearestY = Math.max(tag.y, Math.min(tag.y + tag.height, tag.actorY))
+        expect(Math.hypot(tag.actorX - nearestX, tag.actorY - nearestY)).toBeGreaterThanOrEqual(tag.haloRadius + (dimensions.compact ? 2 : 6))
+        for (const value of [tag.leaderStartX, tag.leaderStartY, tag.leaderEndX, tag.leaderEndY]) {
+          expect(Number.isFinite(value)).toBe(true)
+        }
+        expect(tag.leaderStartX).toBeGreaterThanOrEqual(dimensions.pad)
+        expect(tag.leaderStartX).toBeLessThanOrEqual(right)
+        expect(tag.leaderStartY).toBeGreaterThanOrEqual(dimensions.pad)
+        expect(tag.leaderStartY).toBeLessThanOrEqual(bottom)
+        expect(tag.leaderEndX).toBeGreaterThanOrEqual(dimensions.pad)
+        expect(tag.leaderEndX).toBeLessThanOrEqual(right)
+        expect(tag.leaderEndY).toBeGreaterThanOrEqual(dimensions.pad)
+        expect(tag.leaderEndY).toBeLessThanOrEqual(bottom)
+      }
+    }
+
+    const attacker = arenaActivitySpotlightTagGeometry({ width: 900, height: 600, pad: 32, x: .5, y: .5, size: 2.8, individualId: 2, role: 'attacker' })!
+    const prey = arenaActivitySpotlightTagGeometry({ width: 900, height: 600, pad: 32, x: .5, y: .5, size: 2.8, individualId: 3, role: 'prey', occupied: [attacker] })
+    expect(prey).not.toBeNull()
+    expect(prey!.x + prey!.width <= attacker.x || prey!.x >= attacker.x + attacker.width || prey!.y + prey!.height <= attacker.y || prey!.y >= attacker.y + attacker.height).toBe(true)
+    const compactAnchors = [
+      { x: 10, y: 154, width: 280, height: 70 },
+      { x: 12, y: 216, width: 205, height: 48 },
+      { x: 12, y: 12, width: 276, height: 120 },
+    ]
+    const detached = arenaActivitySpotlightTagGeometry({ width: 300, height: 276, pad: 20, x: .65, y: .9, individualId: 25, role: 'attacker', compact: true, label: 'Attacker 25', anchors: compactAnchors })
+    expect(detached).not.toBeNull()
+    expect(detached?.placement).toMatch(/^detached-/)
+    expect(compactAnchors.every(anchor => detached!.x + detached!.width <= anchor.x || detached!.x >= anchor.x + anchor.width || detached!.y + detached!.height <= anchor.y || detached!.y >= anchor.y + anchor.height)).toBe(true)
+    expect(arenaActivitySpotlightTagGeometry({ width: 300, height: 276, pad: 20, x: .5, y: .5, individualId: 1, role: 'collector', occupied: [{ x: 20, y: 20, width: 260, height: 236 }] })).toBeNull()
+    expect(arenaActivitySpotlightTagGeometry({ width: Number.NaN, height: 276, pad: 20, x: .5, y: .5, individualId: 1, role: 'collector' })).toBeNull()
+    expect(arenaActivitySpotlightTagGeometry({ width: 300, height: 276, pad: 20, x: -1, y: .5, individualId: 1, role: 'collector' })).toBeNull()
+
+    const selectedCallout = arenaSelectedCreatureCalloutGeometry({ width: 300, height: 276, pad: 20, compact: true, x: .72, y: .95, size: 1 })
+    const selectedHalo = arenaActivitySpotlightHaloRect(300, 276, 20, { x: .72, y: .95, size: 1 })
+    const remainingActor = arenaActivitySpotlightTagGeometry({
+      width: 300,
+      height: 276,
+      pad: 20,
+      compact: true,
+      x: .82,
+      y: .95,
+      size: 1,
+      individualId: 6,
+      role: 'prey',
+      label: 'Prey 6',
+      occupied: [selectedCallout, selectedHalo],
+      anchors: compactAnchors,
+    })
+    expect(remainingActor).not.toBeNull()
+    for (const obstacle of [selectedCallout, selectedHalo]) {
+      expect(remainingActor!.x + remainingActor!.width <= obstacle.x || remainingActor!.x >= obstacle.x + obstacle.width || remainingActor!.y + remainingActor!.height <= obstacle.y || remainingActor!.y >= obstacle.y + obstacle.height).toBe(true)
+    }
+  })
+
   it('preserves founder actor order while capping the rendered batch at eight', () => {
     const world = spotlightWorld()
     const founderOrder = [12, 3, 9, 1, 8, 2, 7, 4, 6, 5]
@@ -341,7 +440,7 @@ describe('arena activity spotlight', () => {
     }))
 
     expect(key).toContain('data-arena-activity-spotlight-key-sequence="22"')
-    expect(key).toContain('Latest actor halo marks each actor’s current arena position; it does not show the historical event location.')
+    expect(key).toContain('Latest actor halo marks each actor’s current arena position; role tags identify recorded roles there. Neither shows the historical event location.')
     expect(key).toContain('Food collected · Generation 3 · day 1.00 · Individual 2 collected food.')
     expect(key).toContain('Model context: Energy-regrowth mode uses each item’s recorded energy')
     expect(compactKey).toContain('data-arena-activity-spotlight-cue="true"')
@@ -350,12 +449,27 @@ describe('arena activity spotlight', () => {
     expect(markup).toContain('data-arena-activity-spotlight="true"')
     expect(markup).toContain('data-arena-activity-spotlight-sequence="22"')
     expect(markup).toContain('data-arena-activity-spotlight-actors="2"')
+    expect(markup).toContain('data-arena-activity-spotlight-tag-copies="Collector · Individual 2"')
     expect(markup).toContain('data-arena-activity-spotlight-event="true"')
     expect(markup).toContain('data-arena-activity-spotlight-event-copy="Food collected · Generation 3 · day 1.00 · Individual 2 collected food."')
     expect(markup).toContain('Latest actor halo marks Individual 2')
     expect(markup).toContain('Highlighted event: Food collected · Generation 3 · day 1.00 · Individual 2 collected food.')
     expect(markup).toContain('Model context: Energy-regrowth mode uses each item’s recorded energy')
     expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
+
+    world.activity = [spotlightMoment({ sequence: 23, kind: 'attack-success', actorIds: [2, 1], attackerId: 2, preyId: 1 })]
+    const selectedMarkup = renderToStaticMarkup(createElement(ArenaCanvas, {
+      world,
+      revision: 0,
+      selectedIndividualId: 2,
+      onSelect: () => {},
+      arenaFocus: 'all',
+      playbackStatus: 'Paused',
+      playbackDetail: 'Paused.',
+    }))
+    expect(selectedMarkup).toContain('data-arena-activity-spotlight-tag-copies="Prey · Individual 1"')
+    expect(selectedMarkup).not.toContain('Attacker · Individual 2')
+    expect(selectedMarkup).toContain('data-arena-selected-callout-individual-id="2"')
   })
 
   it('keeps duplicate sequences tied to the exact spotlight source record', () => {
