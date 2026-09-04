@@ -130,18 +130,38 @@ function isForecastWorld(world: unknown): world is World {
   })
 }
 
-export interface GenerationHandoffProps {
+interface GenerationHandoffBaseProps {
   world: World | unknown
   playbackStatus: ArenaPlaybackStatus
   playing?: boolean
-  /** Pass null when a malformed legacy snapshot cannot support a forecast. */
-  forecast?: ReactNode
   onReviewGeneration: (generation: number) => void
   /** Set only for an explicit Finish generation request; autoplay leaves this null. */
   revealGeneration?: number | null
   /** Called only after the matching actual lane has been scrolled successfully. */
   onRevealComplete?: (generation: number) => void
 }
+
+type CustomForecastNode = Exclude<ReactNode, undefined>
+type PotentiallyRenderableForecastNode = Exclude<CustomForecastNode, boolean | null>
+
+export type GenerationHandoffProps = GenerationHandoffBaseProps & (
+  | {
+      /** Omit custom forecast props to use the built-in preview when world data is valid. */
+      forecast?: never
+      forecastAvailable?: never
+    }
+  | {
+      /** Custom preview content; use null when no preview can be rendered. */
+      forecast: PotentiallyRenderableForecastNode
+      /** Available custom previews must have a potentially renderable top-level value. */
+      forecastAvailable: true
+    }
+  | {
+      /** Explicit unavailable state for a custom preview, including null or boolean placeholders. */
+      forecast: CustomForecastNode
+      forecastAvailable: false
+    }
+)
 
 const currentLaneStyle: CSSProperties = {
   flex: '1 1 270px',
@@ -212,6 +232,7 @@ export function GenerationHandoff({
   playbackStatus,
   playing = false,
   forecast,
+  forecastAvailable,
   onReviewGeneration,
   revealGeneration,
   onRevealComplete,
@@ -219,17 +240,22 @@ export function GenerationHandoff({
   const { living, total, active } = countCreatures(world)
   const ledgers = read(world, 'ledger')
   const hasRecords = Array.isArray(ledgers) && ledgers.length > 0
+  const builtInForecastAvailable = forecast === undefined && isForecastWorld(world)
+  const customForecastPotentiallyRenderable = forecast !== undefined && forecast !== null && typeof forecast !== 'boolean'
+  const previewPresent = forecast === undefined
+    ? builtInForecastAvailable
+    : forecastAvailable === true && customForecastPotentiallyRenderable
   const forecastNode = forecast === undefined
-    ? isForecastWorld(world) ? <GenerationForecast world={world} playbackStatus={playbackStatus}/> : null
-    : forecast
+    ? builtInForecastAvailable ? <GenerationForecast world={world} playbackStatus={playbackStatus}/> : null
+    : previewPresent ? forecast : null
   const currentContext = playbackStatus === 'Extinct' ? 'No current cohort' : 'Current cohort'
-  const forecastContext = forecastNode ? playbackStatus === 'Extinct' ? 'no settlement preview' : 'if settled now' : null
+  const forecastContext = previewPresent ? playbackStatus === 'Extinct' ? 'no settlement preview' : 'if settled now' : null
   const comparisonContext = [currentContext, forecastContext, hasRecords ? 'previous recorded result' : 'no recorded result yet'].filter(Boolean).join(' · ')
   return <div className="interventions" role="group" aria-label="Generation handoff" style={{ alignItems: 'stretch', flexWrap: 'wrap', gap: '8px 14px' }}>
     <span style={{ flex: '1 1 100%', minWidth: 0, marginRight: 0, whiteSpace: 'normal' }}><strong style={{ fontSize: 12 }}>Generation handoff</strong><small>{comparisonContext}</small></span>
     <CurrentStateLane world={world} playbackStatus={playbackStatus} playing={playing} living={living} total={total} active={active}/>
     {forecastNode}
-    {hasRecords && <RecordedGenerationHandoff ledgers={ledgers} onReviewGeneration={onReviewGeneration} revealGeneration={revealGeneration} onRevealComplete={onRevealComplete}/>}
+    {hasRecords && <RecordedGenerationHandoff ledgers={ledgers} onReviewGeneration={onReviewGeneration} revealGeneration={revealGeneration} onRevealComplete={onRevealComplete} currentGeneration={read(world, 'generation')} forecastPresent={previewPresent} playbackStatus={playbackStatus}/>}
   </div>
 }
 

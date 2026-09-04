@@ -1,5 +1,6 @@
 import { useEffect, useRef, type CSSProperties } from 'react'
 import type { GenerationLedger } from '../simulation/types'
+import type { ArenaPlaybackStatus } from './ArenaCanvasModel'
 import {
   formatSettlementAnnouncement,
   formatSettlementEquation,
@@ -25,6 +26,38 @@ export interface GenerationHandoffRevealTarget {
 
 function safeGeneration(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value < Number.MAX_SAFE_INTEGER ? value : null
+}
+
+function safeNextGeneration(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 2 && value <= Number.MAX_SAFE_INTEGER ? value : null
+}
+
+function safeCurrentGeneration(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value <= Number.MAX_SAFE_INTEGER ? value : null
+}
+
+export interface GenerationHandoffTransition {
+  endedGeneration: number
+  currentGeneration: number
+}
+
+/** Connect a retained result to the current cohort only when every displayed link is safe and exact. */
+export function resolveGenerationHandoffTransition(
+  summary: SettlementReportSummary | null,
+  currentGeneration: unknown,
+  forecastPresent: boolean,
+  playbackStatus: ArenaPlaybackStatus = 'Running',
+): GenerationHandoffTransition | null {
+  if (!summary || playbackStatus === 'Extinct' || forecastPresent !== true) return null
+  const endedGeneration = safeGeneration(summary.generation)
+  const nextGeneration = safeNextGeneration(summary.nextGeneration)
+  const current = safeCurrentGeneration(currentGeneration)
+  if (endedGeneration === null || nextGeneration === null || current === null || endedGeneration + 1 !== nextGeneration || nextGeneration !== current) return null
+  return { endedGeneration, currentGeneration: current }
+}
+
+export function formatGenerationHandoffTransition(transition: GenerationHandoffTransition): string {
+  return `This settlement ended Generation ${transition.endedGeneration} and started the current Generation ${transition.currentGeneration} cohort at day 0. Current-state and preview numbers belong to Generation ${transition.currentGeneration}, not this recorded result.`
 }
 
 /** Resolve only an exact, safe generation match so autoplay never reveals a stale lane. */
@@ -65,9 +98,13 @@ export interface RecordedGenerationHandoffProps {
   onReviewGeneration: (generation: number) => void
   revealGeneration?: number | null
   onRevealComplete?: (generation: number) => void
+  /** Optional live context. Omit to preserve the standalone retained-result view. */
+  currentGeneration?: unknown
+  forecastPresent?: boolean
+  playbackStatus?: ArenaPlaybackStatus
 }
 
-export function RecordedGenerationHandoff({ ledgers, onReviewGeneration, revealGeneration = null, onRevealComplete }: RecordedGenerationHandoffProps) {
+export function RecordedGenerationHandoff({ ledgers, onReviewGeneration, revealGeneration = null, onRevealComplete, currentGeneration, forecastPresent = false, playbackStatus = 'Running' }: RecordedGenerationHandoffProps) {
   const actualRef = useRef<HTMLDivElement | null>(null)
   const revealAttemptRef = useRef<number | null>(null)
   const latest = latestSettlement(ledgers)
@@ -115,12 +152,14 @@ export function RecordedGenerationHandoff({ ledgers, onReviewGeneration, revealG
   }
 
   const summary = latest.summary
+  const transition = resolveGenerationHandoffTransition(summary, currentGeneration, forecastPresent, playbackStatus)
   const equation = settlementDescription(summary)
   const lossDescription = formatSettlementLosses(summary)
   const reproductionDescription = formatSettlementReproductionBreakdown(summary)
   return <>
     <div ref={actualRef} data-handoff-kind="actual" style={actualLaneStyle}>
       <span style={labelStyle}><strong>Actual recorded result</strong><small>Generation {summary.generation} → {summary.nextGeneration} · recorded at settlement</small></span>
+      {transition && <span data-handoff-detail="generation-transition" role="note" aria-label="Generation transition" style={{ ...detailStyle, color: 'var(--ink)' }}>{formatGenerationHandoffTransition(transition)}</span>}
       <span style={{ ...detailStyle, color: 'var(--ink)' }}>{equation}</span>
       <span data-handoff-detail="losses" style={detailStyle}>{lossDescription}</span>
       <span data-handoff-detail="reproduction" style={detailStyle}>{reproductionDescription}</span>

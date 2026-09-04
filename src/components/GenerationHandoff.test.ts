@@ -1,10 +1,12 @@
-import { createElement } from 'react'
+import { createElement, Fragment } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { GenerationLedger, World } from '../simulation/types'
 import { defaultConfig, createWorld } from '../simulation/engine'
 import { GenerationHandoff, formatGenerationHandoffDay, formatGenerationHandoffPhase, formatGenerationHandoffPopulation } from './GenerationHandoff'
-import { GENERATION_HANDOFF_REVEAL_SCROLL_OPTIONS, RecordedGenerationHandoff, resolveGenerationHandoffRevealTarget } from './RecordedGenerationHandoff'
+import type { GenerationHandoffProps } from './GenerationHandoff'
+import { GENERATION_HANDOFF_REVEAL_SCROLL_OPTIONS, RecordedGenerationHandoff, formatGenerationHandoffTransition, resolveGenerationHandoffRevealTarget, resolveGenerationHandoffTransition } from './RecordedGenerationHandoff'
+import type { SettlementReportSummary } from './SettlementReport'
 
 const makeLedger = (overrides: Record<string, unknown> = {}): GenerationLedger => ({
   generation: 4,
@@ -62,6 +64,23 @@ describe('generation handoff formatters', () => {
     expect(formatGenerationHandoffDay(31, 30)).toBe('Day progress unavailable')
     expect(formatGenerationHandoffPopulation(4, 3)).toBe('Living population unavailable')
   })
+
+  it('bridges an exact recorded settlement to the safe current cohort only when a preview exists', () => {
+    const summary = (generation: unknown, nextGeneration: unknown) => ({ generation, nextGeneration } as unknown as SettlementReportSummary)
+    const valid = resolveGenerationHandoffTransition(summary(4, 5), 5, true, 'Paused')
+    expect(valid).toEqual({ endedGeneration: 4, currentGeneration: 5 })
+    expect(formatGenerationHandoffTransition(valid!)).toBe('This settlement ended Generation 4 and started the current Generation 5 cohort at day 0. Current-state and preview numbers belong to Generation 5, not this recorded result.')
+    expect(resolveGenerationHandoffTransition(summary(4, 5), 6, true, 'Paused')).toBeNull()
+    expect(resolveGenerationHandoffTransition(summary(4, 5), 5, false, 'Paused')).toBeNull()
+    expect(resolveGenerationHandoffTransition(summary(4, 5), 5, true, 'Extinct')).toBeNull()
+    expect(resolveGenerationHandoffTransition(summary(4, Number.NaN), 5, true, 'Paused')).toBeNull()
+    expect(resolveGenerationHandoffTransition(summary(Number.NaN, 5), 5, true, 'Paused')).toBeNull()
+
+    const maxSafe = Number.MAX_SAFE_INTEGER
+    expect(resolveGenerationHandoffTransition(summary(maxSafe - 1, maxSafe), maxSafe, true, 'Paused')).toEqual({ endedGeneration: maxSafe - 1, currentGeneration: maxSafe })
+    expect(resolveGenerationHandoffTransition(summary(maxSafe, maxSafe), maxSafe, true, 'Paused')).toBeNull()
+    expect(resolveGenerationHandoffTransition(summary(maxSafe - 1, maxSafe), maxSafe + 1, true, 'Paused')).toBeNull()
+  })
 })
 
 describe('generation handoff states', () => {
@@ -86,11 +105,69 @@ describe('generation handoff states', () => {
       world: makeWorld({ generation: 4 }),
       playbackStatus: 'Paused',
       forecast: null,
+      forecastAvailable: false,
       onReviewGeneration: vi.fn(),
     }))
 
     expect(output).toContain('Current cohort · no recorded result yet')
     expect(output).not.toContain('data-handoff-kind="forecast"')
+  })
+
+  it('does not bridge a recorded result when the preview is explicitly unavailable', () => {
+    const output = renderToStaticMarkup(createElement(GenerationHandoff, {
+      world: makeWorld({ generation: 4, ledger: [makeLedger({ generation: 3 })] }),
+      playbackStatus: 'Paused',
+      forecast: null,
+      forecastAvailable: false,
+      onReviewGeneration: vi.fn(),
+    }))
+
+    expect(output).toContain('Actual recorded result')
+    expect(output).not.toContain('This settlement ended Generation 3')
+    expect(output).not.toContain('data-handoff-kind="forecast"')
+  })
+
+  it('uses explicit availability instead of ReactNode truthiness for custom forecasts', () => {
+    const world = makeWorld({ generation: 4, ledger: [makeLedger({ generation: 3 })] })
+    const visibleFalsey = renderToStaticMarkup(createElement(GenerationHandoff, {
+      world,
+      playbackStatus: 'Paused',
+      forecast: 0,
+      forecastAvailable: true,
+      onReviewGeneration: vi.fn(),
+    }))
+    const truthyEmpty = renderToStaticMarkup(createElement(GenerationHandoff, {
+      world,
+      playbackStatus: 'Paused',
+      forecast: createElement(Fragment),
+      forecastAvailable: false,
+      onReviewGeneration: vi.fn(),
+    }))
+    const undeclaredOverride = renderToStaticMarkup(createElement(GenerationHandoff, {
+      world,
+      playbackStatus: 'Paused',
+      forecast: createElement('span', null, 'Undeclared custom preview'),
+      onReviewGeneration: vi.fn(),
+    } as unknown as GenerationHandoffProps))
+    const contradictoryNullOverride = renderToStaticMarkup(createElement(GenerationHandoff, {
+      world,
+      playbackStatus: 'Paused',
+      forecast: null,
+      forecastAvailable: true,
+      onReviewGeneration: vi.fn(),
+    } as unknown as GenerationHandoffProps))
+
+    expect(visibleFalsey).toContain('Current cohort · if settled now · previous recorded result')
+    expect(visibleFalsey).toContain('This settlement ended Generation 3')
+    expect(visibleFalsey).toContain('>0<div')
+    expect(truthyEmpty).toContain('Current cohort · previous recorded result')
+    expect(truthyEmpty).not.toContain('if settled now')
+    expect(truthyEmpty).not.toContain('This settlement ended Generation 3')
+    expect(undeclaredOverride).not.toContain('Undeclared custom preview')
+    expect(undeclaredOverride).not.toContain('if settled now')
+    expect(undeclaredOverride).not.toContain('This settlement ended Generation 3')
+    expect(contradictoryNullOverride).not.toContain('if settled now')
+    expect(contradictoryNullOverride).not.toContain('This settlement ended Generation 3')
   })
 
   it('includes the recorded-result step in its visible sequence once a ledger exists', () => {
@@ -108,6 +185,8 @@ describe('generation handoff states', () => {
     expect(forecastIndex).toBeLessThan(actualIndex)
     expect(output).toContain('Forecast transition · Generation 4 → 5')
     expect(output).toContain('Generation 3 → 4 · recorded at settlement')
+    expect(output).toContain('This settlement ended Generation 3 and started the current Generation 4 cohort at day 0. Current-state and preview numbers belong to Generation 4, not this recorded result.')
+    expect(output).toContain('role="note" aria-label="Generation transition"')
     expect(output.match(/Actual recorded result/g)).toHaveLength(1)
     expect(output.match(/aria-live="polite"/g)).toHaveLength(1)
   })
@@ -155,6 +234,7 @@ describe('generation handoff states', () => {
     expect(output).toContain('role="status" aria-live="polite" aria-atomic="true"')
     expect(output).toContain('Recorded settlement, Generation 4 → 5 (actual result, not a counterfactual forecast)')
     expect(output.match(/aria-live="polite"/g)).toHaveLength(1)
+    expect(output).not.toContain('This settlement ended')
     expect(review).not.toHaveBeenCalled()
   })
 
@@ -200,6 +280,7 @@ describe('generation handoff states', () => {
     expect(output).not.toContain('evaluated →')
     expect(output.match(/aria-live="polite"/g)).toHaveLength(1)
     expect(output).not.toMatch(/NaN|Infinity|undefined/)
+    expect(output).not.toContain('This settlement ended')
   })
 
   it('keeps a valid actual result visible beside extinct recovery choices', () => {
@@ -217,7 +298,21 @@ describe('generation handoff states', () => {
     expect(output).toContain('No living cohort remains in the arena')
     expect(output).toContain('No current cohort · no settlement preview · previous recorded result')
     expect(output.match(/aria-live="polite"/g)).toHaveLength(1)
+    expect(output).not.toContain('This settlement ended')
     expect(`${actual}${output}`).not.toMatch(/NaN|Infinity|undefined/)
+  })
+
+  it('does not bridge a retained result to an unrelated current generation', () => {
+    const output = renderToStaticMarkup(createElement(GenerationHandoff, {
+      world: makeWorld({ generation: 9, ledger: [makeLedger({ generation: 3 })] }),
+      playbackStatus: 'Paused',
+      onReviewGeneration: vi.fn(),
+    }))
+
+    expect(output).toContain('Actual recorded result')
+    expect(output).toContain('Generation 3 → 4 · recorded at settlement')
+    expect(output).toContain('Forecast transition · Generation 9 → 10')
+    expect(output).not.toContain('This settlement ended Generation 3')
   })
 
   it('renders a useful unavailable state when world telemetry is malformed', () => {
