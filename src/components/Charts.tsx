@@ -224,6 +224,18 @@ export function formatTimelineSummary(entry:HistoryTimelineEntry){
 
 export const OUTCOME_FLOW_MISSING_TEXT='unavailable for malformed or partial record'
 export type OutcomeFlowCapState='available'|'unavailable'
+export type OutcomeFlowMaturityState='available'|'missing'|'invalid'
+
+/**
+ * Survivor-side reproduction buckets retained by advanced ledgers.  The
+ * first bucket is also the existing eligible-parent count; the other two
+ * buckets explain why the remaining survivors did not enter that funnel.
+ */
+export interface OutcomeFlowMaturityPartition {
+  matureEligible:number
+  energyReadyImmature:number
+  atOrBelowEnergyCost:number
+}
 
 export interface OutcomeFlowTimelineEntry {
   generation:number
@@ -236,6 +248,10 @@ export interface OutcomeFlowTimelineEntry {
   birthsAdmitted:number|null
   birthsCapped:number|null
   birthCapState:OutcomeFlowCapState
+  /** Provenance for the optional advanced maturity counter. */
+  maturityState:OutcomeFlowMaturityState
+  /** Present only when the advanced survivor partition reconciles exactly. */
+  maturity:OutcomeFlowMaturityPartition|null
   exactNextPopulation:number|null
   nextPopulationAvailable:boolean
 }
@@ -298,6 +314,14 @@ const isSafeNonnegativeInteger=(value:unknown):value is number=>typeof value==='
 const isRecord=(value:unknown):value is Record<string,unknown>=>Boolean(value&&typeof value==='object'&&!Array.isArray(value))
 const readRecordValue=(record:Record<string,unknown>,key:string):unknown=>{
   try{return record[key]}catch{return undefined}
+}
+type OutcomeFlowOwnFieldRead={state:'missing'}|{state:'present';value:unknown}|{state:'unreadable'}
+/** Distinguish old ledgers from malformed optional telemetry and read getters once. */
+const readOutcomeFlowOwnField=(record:Record<string,unknown>,key:string):OutcomeFlowOwnFieldRead=>{
+  try{
+    if(!Object.prototype.hasOwnProperty.call(record,key))return{state:'missing'}
+    try{return{state:'present',value:record[key]}}catch{return{state:'unreadable'}}
+  }catch{return{state:'unreadable'}}
 }
 
 export interface SelectionShiftTimelineEntry {
@@ -379,6 +403,16 @@ const validNextPopulation=(startPopulation:number|null,survivors:number|null,bir
   const total=safeAddIntegers(survivors,birthsAdmitted),birthCapacityKnownAndValid=birthsEligible===null||survivors===null||(birthsAdmitted!==null&&birthsAdmitted<=birthsEligible&&birthsEligible<=survivors)
   return startPopulation!==null&&survivors!==null&&survivors<=startPopulation&&birthsAdmitted!==null&&birthsAdmitted<=survivors&&birthCapacityKnownAndValid&&total!==null
 }
+const deriveOutcomeFlowMaturity=(survivors:number|null,birthsEligible:number|null,birthsAdmitted:number|null,birthsCapped:number|null,birthsImmature:unknown):OutcomeFlowMaturityPartition|null=>{
+  if(!isSafeNonnegativeInteger(survivors)||!isSafeNonnegativeInteger(birthsEligible)||!isSafeNonnegativeInteger(birthsAdmitted)||!isSafeNonnegativeInteger(birthsCapped)||!isSafeNonnegativeInteger(birthsImmature))return null
+  if(birthsAdmitted>birthsEligible||birthsEligible>survivors)return null
+  if(safeAddIntegers(birthsAdmitted,birthsCapped)!==birthsEligible)return null
+  const matureAndImmature=safeAddIntegers(birthsEligible,birthsImmature)
+  if(matureAndImmature===null||matureAndImmature>survivors)return null
+  const atOrBelowEnergyCost=survivors-matureAndImmature
+  if(!isSafeNonnegativeInteger(atOrBelowEnergyCost)||safeAddIntegers(matureAndImmature,atOrBelowEnergyCost)!==survivors)return null
+  return{matureEligible:birthsEligible,energyReadyImmature:birthsImmature,atOrBelowEnergyCost}
+}
 const normalizeOutcomeFlowLimit=(value:unknown)=>typeof value==='number'&&Number.isFinite(value)?Math.max(0,Math.floor(value)):MAX_TIMELINE_ENTRIES
 
 /**
@@ -407,23 +441,61 @@ export function buildOutcomeFlowTimeline(ledgers:unknown,limit=MAX_TIMELINE_ENTR
     const nextTotal=safeAddIntegers(survivors,birthsAdmitted)
     const nextPopulationAvailable=validNextPopulation(startPopulation,survivors,birthsEligible,birthsAdmitted)&&nextTotal!==null
     const birthCapState:OutcomeFlowCapState=validBirthCapacity(survivors,birthsEligible,birthsAdmitted,birthsCapped)?'available':'unavailable'
-    records.push({generation,startPopulation,outcomes,evaluated,cohortFlowAvailable,survivors,birthsEligible,birthsAdmitted,birthsCapped,birthCapState,exactNextPopulation:nextPopulationAvailable?nextTotal:null,nextPopulationAvailable})
+    const maturityField=readOutcomeFlowOwnField(rawLedger,'birthsImmature'),maturity=maturityField.state==='present'?deriveOutcomeFlowMaturity(survivors,birthsEligible,birthsAdmitted,birthsCapped,maturityField.value):null,maturityState:OutcomeFlowMaturityState=maturityField.state==='missing'?'missing':maturity?'available':'invalid'
+    records.push({generation,startPopulation,outcomes,evaluated,cohortFlowAvailable,survivors,birthsEligible,birthsAdmitted,birthsCapped,birthCapState,maturityState,maturity,exactNextPopulation:nextPopulationAvailable?nextTotal:null,nextPopulationAvailable})
   }
   return records
 }
 
 const outcomeFlowCountText=(value:number|null)=>value===null?'Unavailable':String(value)
 const outcomeFlowEntryValue=(entry:unknown,key:string)=>isRecord(entry)?readRecordValue(entry,key):undefined
-const outcomeFlowValue=(entry:unknown,cause:EndCause)=>{const value=outcomeFlowEntryValue(isRecord(entry)?readRecordValue(entry,'outcomes'):undefined,cause);return isSafeNonnegativeInteger(value)?value:null}
-const normalizedOutcomeFlowOutcomes=(entry:unknown)=>Object.fromEntries(END_CAUSES.map(cause=>[cause,outcomeFlowValue(entry,cause)])) as Record<EndCause,number|null>
-const outcomeFlowKnownText=(entry:unknown)=>END_CAUSES.filter(cause=>outcomeFlowValue(entry,cause)!==null).map(cause=>`${outcomeFlowValue(entry,cause)} ${cause==='survived'?'survived':OUTCOME_FLOW_LOSS_LABELS[cause]}`).join(', ')
+const outcomeFlowValue=(outcomes:unknown,cause:EndCause)=>{const value=isRecord(outcomes)?readRecordValue(outcomes,cause):undefined;return isSafeNonnegativeInteger(value)?value:null}
+const normalizedOutcomeFlowOutcomes=(entry:unknown)=>{
+  const rawOutcomes=outcomeFlowEntryValue(entry,'outcomes')
+  return Object.fromEntries(END_CAUSES.map(cause=>[cause,outcomeFlowValue(rawOutcomes,cause)])) as Record<EndCause,number|null>
+}
+const outcomeFlowKnownText=(outcomes:Record<EndCause,number|null>)=>END_CAUSES.filter(cause=>outcomes[cause]!==null).map(cause=>`${outcomes[cause]} ${cause==='survived'?'survived':OUTCOME_FLOW_LOSS_LABELS[cause]}`).join(', ')
 
 const outcomeFlowCountPhrase=(value:number,label:string,plural=label)=>`${value} ${value===1?label:plural}`
 
-interface OutcomeFlowSummaryLines {generation:string;cohort:string;next:string;cap:string;known:string;note:string}
+interface OutcomeFlowSummarySnapshot {
+  generation:unknown
+  startPopulation:number|null
+  outcomes:Record<EndCause,number|null>
+  survivors:number|null
+  birthsEligible:number|null
+  birthsAdmitted:number|null
+  birthsCapped:number|null
+  maturityState:OutcomeFlowMaturityState
+  maturityValue:unknown
+}
+
+const outcomeFlowMaturityStateValue=(value:unknown):OutcomeFlowMaturityState=>value===undefined?'missing':value==='available'||value==='missing'||value==='invalid'?value:'invalid'
+const buildOutcomeFlowSummarySnapshot=(entry:unknown):OutcomeFlowSummarySnapshot=>{
+  const generation=outcomeFlowEntryValue(entry,'generation'),startValue=outcomeFlowEntryValue(entry,'startPopulation'),outcomes=normalizedOutcomeFlowOutcomes(entry),birthsEligibleValue=outcomeFlowEntryValue(entry,'birthsEligible'),birthsAdmittedValue=outcomeFlowEntryValue(entry,'birthsAdmitted'),birthsCappedValue=outcomeFlowEntryValue(entry,'birthsCapped'),maturityStateValue=outcomeFlowEntryValue(entry,'maturityState'),maturityValue=outcomeFlowEntryValue(entry,'maturity')
+  return{generation,startPopulation:isSafeNonnegativeInteger(startValue)?startValue:null,outcomes,survivors:outcomes.survived,birthsEligible:isSafeNonnegativeInteger(birthsEligibleValue)?birthsEligibleValue:null,birthsAdmitted:isSafeNonnegativeInteger(birthsAdmittedValue)?birthsAdmittedValue:null,birthsCapped:isSafeNonnegativeInteger(birthsCappedValue)?birthsCappedValue:null,maturityState:outcomeFlowMaturityStateValue(maturityStateValue),maturityValue}
+}
+const outcomeFlowMaturityPartition=(snapshot:OutcomeFlowSummarySnapshot):OutcomeFlowMaturityPartition|null=>{
+  if(snapshot.maturityState!=='available')return null
+  const raw=snapshot.maturityValue,survivorsValue=snapshot.survivors,eligibleValue=snapshot.birthsEligible,admittedValue=snapshot.birthsAdmitted,cappedValue=snapshot.birthsCapped
+  if(!isRecord(raw)||!isSafeNonnegativeInteger(survivorsValue)||!isSafeNonnegativeInteger(eligibleValue)||!isSafeNonnegativeInteger(admittedValue)||!isSafeNonnegativeInteger(cappedValue))return null
+  const matureEligible=readRecordValue(raw,'matureEligible'),energyReadyImmature=readRecordValue(raw,'energyReadyImmature'),atOrBelowEnergyCost=readRecordValue(raw,'atOrBelowEnergyCost')
+  if(!isSafeNonnegativeInteger(matureEligible)||!isSafeNonnegativeInteger(energyReadyImmature)||!isSafeNonnegativeInteger(atOrBelowEnergyCost)||matureEligible!==eligibleValue||admittedValue>eligibleValue||eligibleValue>survivorsValue||safeAddIntegers(admittedValue,cappedValue)!==eligibleValue)return null
+  const matureAndImmature=safeAddIntegers(matureEligible,energyReadyImmature)
+  return matureAndImmature!==null&&matureAndImmature<=survivorsValue&&safeAddIntegers(matureAndImmature,atOrBelowEnergyCost)===survivorsValue?{matureEligible,energyReadyImmature,atOrBelowEnergyCost}:null
+}
+export const OUTCOME_FLOW_MATURITY_MISSING_TEXT='Maturity partition was not recorded in this retained record.'
+export const OUTCOME_FLOW_MATURITY_INVALID_TEXT='Maturity partition unavailable due to malformed or inconsistent retained counts.'
+const outcomeFlowMaturitySummary=(snapshot:OutcomeFlowSummarySnapshot)=>{
+  const partition=outcomeFlowMaturityPartition(snapshot)
+  if(snapshot.maturityState==='available'&&partition)return`Reproduction funnel: ${partition.matureEligible} mature + energy-eligible · ${partition.energyReadyImmature} waiting for maturity · ${partition.atOrBelowEnergyCost} at or below energy cost.`
+  return snapshot.maturityState==='missing'?OUTCOME_FLOW_MATURITY_MISSING_TEXT:OUTCOME_FLOW_MATURITY_INVALID_TEXT
+}
+
+interface OutcomeFlowSummaryLines {generation:string;cohort:string;next:string;cap:string;maturity:string;known:string;note:string}
 
 const buildOutcomeFlowSummaryLines=(entry:unknown):OutcomeFlowSummaryLines=>{
-  const generation=outcomeFlowEntryValue(entry,'generation'),startValue=outcomeFlowEntryValue(entry,'startPopulation'),startPopulation=isSafeNonnegativeInteger(startValue)?startValue:null,outcomes=normalizedOutcomeFlowOutcomes(entry),survivors=outcomes.survived,birthsEligibleValue=outcomeFlowEntryValue(entry,'birthsEligible'),birthsEligible=isSafeNonnegativeInteger(birthsEligibleValue)?birthsEligibleValue:null,birthsAdmittedValue=outcomeFlowEntryValue(entry,'birthsAdmitted'),birthsAdmitted=isSafeNonnegativeInteger(birthsAdmittedValue)?birthsAdmittedValue:null,birthsCappedValue=outcomeFlowEntryValue(entry,'birthsCapped'),birthsCapped=isSafeNonnegativeInteger(birthsCappedValue)?birthsCappedValue:null,cohortFlowAvailable=validCohortFlow(startPopulation,outcomes),nextPopulationAvailable=validNextPopulation(startPopulation,survivors,birthsEligible,birthsAdmitted),nextTotal=safeAddIntegers(survivors,birthsAdmitted),birthCapAvailable=validBirthCapacity(survivors,birthsEligible,birthsAdmitted,birthsCapped),evaluated=cohortFlowAvailable?startPopulation:null,losses=END_CAUSES.filter((cause):cause is Exclude<EndCause,'survived'>=>cause!=='survived'&&outcomes[cause]!==null&&outcomes[cause]>0).map(cause=>outcomeFlowCountPhrase(outcomes[cause]!,OUTCOME_FLOW_LOSS_LABELS[cause],OUTCOME_FLOW_LOSS_LABELS[cause]))
+  const snapshot=buildOutcomeFlowSummarySnapshot(entry),{generation,startPopulation,outcomes,survivors,birthsEligible,birthsAdmitted,birthsCapped}=snapshot,cohortFlowAvailable=validCohortFlow(startPopulation,outcomes),nextPopulationAvailable=validNextPopulation(startPopulation,survivors,birthsEligible,birthsAdmitted),nextTotal=safeAddIntegers(survivors,birthsAdmitted),birthCapAvailable=validBirthCapacity(survivors,birthsEligible,birthsAdmitted,birthsCapped),evaluated=cohortFlowAvailable?startPopulation:null,losses=END_CAUSES.filter((cause):cause is Exclude<EndCause,'survived'>=>cause!=='survived'&&outcomes[cause]!==null&&outcomes[cause]>0).map(cause=>outcomeFlowCountPhrase(outcomes[cause]!,OUTCOME_FLOW_LOSS_LABELS[cause],OUTCOME_FLOW_LOSS_LABELS[cause]))
   const cohort=cohortFlowAvailable&&evaluated!==null&&survivors!==null
     ?`Evaluated = survivors + losses: ${evaluated} = ${outcomeFlowCountPhrase(survivors,'survivor','survivors')}${losses.length?` + ${losses.join(' + ')}`:' + no recorded losses'}.`
     :`Evaluated = survivors + losses: ${OUTCOME_FLOW_MISSING_TEXT}.`
@@ -433,14 +505,14 @@ const buildOutcomeFlowSummaryLines=(entry:unknown):OutcomeFlowSummaryLines=>{
   const cap=birthCapAvailable&&birthsEligible!==null&&birthsAdmitted!==null&&birthsCapped!==null
     ?`Birth cap: eligible parents = admitted births + capped births: ${birthsEligible} = ${birthsAdmitted} + ${birthsCapped} (${outcomeFlowCountPhrase(birthsEligible,'eligible parent','eligible parents')}; ${outcomeFlowCountPhrase(birthsAdmitted,'admitted birth','admitted births')}; ${outcomeFlowCountPhrase(birthsCapped,'capped birth','capped births')}).`
     :`Birth cap: eligible parents = admitted births + capped births: ${OUTCOME_FLOW_MISSING_TEXT}.`
-  const known=cohortFlowAvailable?'':outcomeFlowKnownText(entry),generationText=isSafeNonnegativeInteger(generation)&&generation>=1?String(generation):'unavailable'
-  return{generation:generationText,cohort,next,cap,known:known?`Known outcomes: ${known}.`:'',note:'Descriptive counts only; they do not establish cause.'}
+  const known=cohortFlowAvailable?'':outcomeFlowKnownText(outcomes),generationText=isSafeNonnegativeInteger(generation)&&generation>=1?String(generation):'unavailable'
+  return{generation:generationText,cohort,next,cap,maturity:outcomeFlowMaturitySummary(snapshot),known:known?`Known outcomes: ${known}.`:'',note:'Descriptive counts only; they do not establish cause.'}
 }
 
 /** Describe both independent settlement accounting equations for the selected row. */
 export function formatOutcomeFlowSummary(entry:OutcomeFlowTimelineEntry){
   const lines=buildOutcomeFlowSummaryLines(entry)
-  return`Generation ${lines.generation}. ${lines.cohort} ${lines.next} ${lines.cap}${lines.known?` ${lines.known}`:''} ${lines.note}`
+  return`Generation ${lines.generation}. ${lines.cohort} ${lines.next} ${lines.cap} ${lines.maturity}${lines.known?` ${lines.known}`:''} ${lines.note}`
 }
 
 /** Backwards-friendly short alias for callers that want the selected-row copy. */
@@ -714,7 +786,7 @@ function OutcomeFlowHistory({ledgers,requestedGeneration}:{ledgers:unknown;reque
   }
   return <div className="history-facets outcome-flow-facets" role="group" aria-label={`Population outcome flow from generation ${entries[0].generation} to ${entries.at(-1)!.generation}. Selected generation ${selectedEntry.generation}. Cohort fates are evaluated survivors and losses; next population is survivors carried forward plus admitted births. Counts are descriptive, not causal.`}>
     <p className="journal-kicker">Outcome flow · shared scale 0–{flowMax}. The cohort row ends with the evaluated population; the next row starts with survivors and admitted births. Capped births stay in the summary and table because they are not part of the next population.</p>
-    <p className="journal-equation" style={summaryStyle}><strong>Generation {summaryLines.generation}.</strong><span>{summaryLines.cohort}</span><span>{summaryLines.next}</span><span>{summaryLines.cap}</span>{summaryLines.known&&<span>{summaryLines.known}</span>}<span>{summaryLines.note}</span></p>
+    <p className="journal-equation" style={summaryStyle}><strong>Generation {summaryLines.generation}.</strong><span>{summaryLines.cohort}</span><span>{summaryLines.next}</span><span>{summaryLines.cap}</span><span>{summaryLines.maturity}</span>{summaryLines.known&&<span>{summaryLines.known}</span>}<span>{summaryLines.note}</span></p>
     <div className="journal-kicker" role="group" aria-label="Outcome flow legend" style={legendStyle}>
       <strong style={{color:'var(--ink)'}}>Legend:</strong>{OUTCOME_FLOW_LEGEND.filter(item=>item.key!=='capped').map(item=><span key={item.key} style={{display:'inline-flex',alignItems:'center',gap:3}}><span aria-hidden="true" style={{display:'inline-block',width:10,height:10,flex:'0 0 auto',backgroundColor:item.color,backgroundImage:OUTCOME_FLOW_SWATCH_PATTERNS[item.pattern],border:'1px solid var(--line)',borderRadius:2}}/>{item.label}</span>)}
     </div>
@@ -722,7 +794,7 @@ function OutcomeFlowHistory({ledgers,requestedGeneration}:{ledgers:unknown;reque
     <details className="journal-events utility-breakdown" style={{fontSize:10}}>
       <summary style={{display:'flex',alignItems:'center',minHeight:44,padding:'8px 10px',cursor:'pointer',gap:6}}>Exact outcome table · {entries.length} retained {entries.length===1?'row':'rows'}</summary>
       <div style={{overflowX:'auto'}}>
-        <table><caption>Exact retained outcome flow by generation. Unavailable fields are malformed or partial observations.</caption><thead><tr><th scope="col">Generation</th><th scope="col">Recorded start</th><th scope="col">Reconciled evaluated</th>{END_CAUSES.map(cause=><th key={cause} scope="col">{cause==='survived'?'Survived':OUTCOME_FLOW_LEGEND.find(item=>item.key===cause)!.label}</th>)}<th scope="col">Eligible parents</th><th scope="col">Admitted births</th><th scope="col">Capped births</th><th scope="col">Birth-cap status</th><th scope="col">Exact next population</th></tr></thead><tbody>{entries.map((entry,index)=><tr key={`${entry.generation}-${index}`}><th scope="row">{entry.generation}</th><td>{outcomeFlowCountText(entry.startPopulation)}</td><td>{outcomeFlowCountText(entry.evaluated)}</td>{END_CAUSES.map(cause=><td key={cause}>{outcomeFlowCountText(entry.outcomes[cause])}</td>)}<td>{outcomeFlowCountText(entry.birthsEligible)}</td><td>{outcomeFlowCountText(entry.birthsAdmitted)}</td><td>{outcomeFlowCountText(entry.birthsCapped)}</td><td>{entry.birthCapState==='available'?'Available':'Unavailable'}</td><td>{outcomeFlowCountText(entry.exactNextPopulation)}</td></tr>)}</tbody></table>
+        <table><caption>Exact retained outcome flow by generation. Unavailable fields are malformed, partial, or not recorded in the retained observation.</caption><thead><tr><th scope="col">Generation</th><th scope="col">Recorded start</th><th scope="col">Reconciled evaluated</th>{END_CAUSES.map(cause=><th key={cause} scope="col">{cause==='survived'?'Survived':OUTCOME_FLOW_LEGEND.find(item=>item.key===cause)!.label}</th>)}<th scope="col">Eligible parents</th><th scope="col">Admitted births</th><th scope="col">Capped births</th><th scope="col">Birth-cap status</th><th scope="col">Mature + energy-eligible</th><th scope="col">Waiting for maturity</th><th scope="col">At or below energy cost</th><th scope="col">Exact next population</th></tr></thead><tbody>{entries.map((entry,index)=>{const partition=entry.maturityState==='available'?entry.maturity:null;return <tr key={`${entry.generation}-${index}`}><th scope="row">{entry.generation}</th><td>{outcomeFlowCountText(entry.startPopulation)}</td><td>{outcomeFlowCountText(entry.evaluated)}</td>{END_CAUSES.map(cause=><td key={cause}>{outcomeFlowCountText(entry.outcomes[cause])}</td>)}<td>{outcomeFlowCountText(entry.birthsEligible)}</td><td>{outcomeFlowCountText(entry.birthsAdmitted)}</td><td>{outcomeFlowCountText(entry.birthsCapped)}</td><td>{entry.birthCapState==='available'?'Available':'Unavailable'}</td><td>{partition?outcomeFlowCountText(partition.matureEligible):'Unavailable'}</td><td>{partition?outcomeFlowCountText(partition.energyReadyImmature):'Unavailable'}</td><td>{partition?outcomeFlowCountText(partition.atOrBelowEnergyCost):'Unavailable'}</td><td>{outcomeFlowCountText(entry.exactNextPopulation)}</td></tr>})}</tbody></table>
       </div>
     </details>
   </div>

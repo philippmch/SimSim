@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { BEHAVIOR_HISTORY_CONTEXT, BehaviorHistory, buildGenerationDelta, buildGenerationRuler, buildHistoryTimeline, buildObservedNonnegativeDomain, buildOutcomeFlowTimeline, buildRetainedShockNavigator, buildSelectionShiftTimeline, buildSpeedHistogram, completePendingGenerationJournalFocus, contrastRatio, formatGenerationDelta, formatOutcomeFlowSummary, formatRetainedShockNavigatorNotice, formatSelectionShiftValue, formatTimelineSummary, generationRulerOffset, GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE, GENERATION_JOURNAL_SCROLL_OPTIONS, HistoryChart, historyCoordinate, MAX_TIMELINE_ENTRIES, openGenerationJournalReview, OUTCOME_FLOW_CARD_SURFACES, OUTCOME_FLOW_LEGEND, OUTCOME_FLOW_MISSING_TEXT, RETAINED_SHOCK_ARIA_LABEL_LIMIT, RETAINED_SHOCK_CONTEXT, RETAINED_SHOCK_ORDER_NOTE, resolveOutcomeFlowGeneration, resolveTimelineGeneration, safeFiniteHistoryValue, safeNonnegativeHistoryValue, SPEED_HISTOGRAM_DOMAIN, traitColor, outcomeFlowScrollLeft, outcomeFlowSlotCenter } from './Charts'
+import { BEHAVIOR_HISTORY_CONTEXT, BehaviorHistory, buildGenerationDelta, buildGenerationRuler, buildHistoryTimeline, buildObservedNonnegativeDomain, buildOutcomeFlowTimeline, buildRetainedShockNavigator, buildSelectionShiftTimeline, buildSpeedHistogram, completePendingGenerationJournalFocus, contrastRatio, formatGenerationDelta, formatOutcomeFlowSummary, formatRetainedShockNavigatorNotice, formatSelectionShiftValue, formatTimelineSummary, generationRulerOffset, GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE, GENERATION_JOURNAL_SCROLL_OPTIONS, HistoryChart, historyCoordinate, MAX_TIMELINE_ENTRIES, openGenerationJournalReview, OUTCOME_FLOW_CARD_SURFACES, OUTCOME_FLOW_LEGEND, OUTCOME_FLOW_MISSING_TEXT, OUTCOME_FLOW_MATURITY_INVALID_TEXT, OUTCOME_FLOW_MATURITY_MISSING_TEXT, RETAINED_SHOCK_ARIA_LABEL_LIMIT, RETAINED_SHOCK_CONTEXT, RETAINED_SHOCK_ORDER_NOTE, resolveOutcomeFlowGeneration, resolveTimelineGeneration, safeFiniteHistoryValue, safeNonnegativeHistoryValue, SPEED_HISTOGRAM_DOMAIN, traitColor, outcomeFlowScrollLeft, outcomeFlowSlotCenter } from './Charts'
 import { speedColor } from './ArenaCanvasModel'
 import type { EndCause, GenerationLedger, HistoryPoint, World, WorldEvent } from '../simulation/types'
 
@@ -221,6 +221,83 @@ describe('population outcome flow history',()=>{
     const max=Number.MAX_SAFE_INTEGER,maxEntry=flowLedger(max,max,flowOutcomes({survived:max}),max,1,max-1),[safeEntry]=buildOutcomeFlowTimeline([maxEntry])
     expect(safeEntry).toMatchObject({generation:max,startPopulation:max,evaluated:max,cohortFlowAvailable:true,nextPopulationAvailable:false,exactNextPopulation:null})
     expect(formatOutcomeFlowSummary(safeEntry)).not.toMatch(/NaN|Infinity/)
+  })
+
+  it('retains the advanced survivor maturity partition, including zero immature survivors',()=>{
+    const advanced={...flowLedger(7,8,flowOutcomes({survived:8}),3,2,1),birthsImmature:2},[entry]=buildOutcomeFlowTimeline([advanced])
+    expect(entry).toMatchObject({maturityState:'available',maturity:{matureEligible:3,energyReadyImmature:2,atOrBelowEnergyCost:3}})
+    expect(formatOutcomeFlowSummary(entry)).toContain('Reproduction funnel: 3 mature + energy-eligible · 2 waiting for maturity · 3 at or below energy cost.')
+    const zero={...flowLedger(8,4,flowOutcomes({survived:4}),4,2,2),birthsImmature:0},[zeroEntry]=buildOutcomeFlowTimeline([zero])
+    expect(zeroEntry).toMatchObject({maturityState:'available',maturity:{matureEligible:4,energyReadyImmature:0,atOrBelowEnergyCost:0}})
+    expect(formatOutcomeFlowSummary(zeroEntry)).toContain('Reproduction funnel: 4 mature + energy-eligible · 0 waiting for maturity · 0 at or below energy cost.')
+  })
+
+  it('distinguishes absent legacy maturity from explicit and malformed telemetry',()=>{
+    const legacy=flowLedger(9,4,flowOutcomes({survived:4}),2,2,0),[legacyEntry]=buildOutcomeFlowTimeline([legacy])
+    expect(legacyEntry).toMatchObject({maturityState:'missing',maturity:null})
+    expect(formatOutcomeFlowSummary(legacyEntry)).toContain(OUTCOME_FLOW_MATURITY_MISSING_TEXT)
+    const malformedValues:unknown[]=[undefined,null,-1,1.5,Number.NaN,Number.POSITIVE_INFINITY,Number.NEGATIVE_INFINITY,'1',true,{}]
+    for(const birthsImmature of malformedValues){
+      const [entry]=buildOutcomeFlowTimeline([{...legacy,birthsImmature}])
+      expect(entry).toMatchObject({maturityState:'invalid',maturity:null})
+      expect(formatOutcomeFlowSummary(entry)).toContain(OUTCOME_FLOW_MATURITY_INVALID_TEXT)
+    }
+  })
+
+  it('reads a changing or throwing maturity getter at most once',()=>{
+    let changingReads=0
+    const changing=flowLedger(10,6,flowOutcomes({survived:6}),3,2,1) as unknown as Record<string,unknown>
+    Object.defineProperty(changing,'birthsImmature',{enumerable:true,get(){changingReads++;return changingReads===1?1:99}})
+    const [changingEntry]=buildOutcomeFlowTimeline([changing])
+    expect(changingReads).toBe(1)
+    expect(changingEntry).toMatchObject({maturityState:'available',maturity:{matureEligible:3,energyReadyImmature:1,atOrBelowEnergyCost:2}})
+    let throwingReads=0
+    const throwing=flowLedger(11,6,flowOutcomes({survived:6}),3,2,1) as unknown as Record<string,unknown>
+    Object.defineProperty(throwing,'birthsImmature',{enumerable:true,get(){throwingReads++;throw new Error('unreadable')}})
+    const [throwingEntry]=buildOutcomeFlowTimeline([throwing])
+    expect(throwingReads).toBe(1)
+    expect(throwingEntry).toMatchObject({maturityState:'invalid',maturity:null})
+  })
+
+  it('snapshots formatter accounting fields and uses outcome survivors as canonical',()=>{
+    const [base]=buildOutcomeFlowTimeline([{...flowLedger(11,6,flowOutcomes({survived:6}),3,2,1),birthsImmature:1}])
+    const snapshot={...base,survivors:99} as unknown as Record<string,unknown>
+    let outcomesReads=0,eligibleReads=0,admittedReads=0,cappedReads=0,stateReads=0,maturityReads=0
+    Object.defineProperties(snapshot,{
+      outcomes:{enumerable:true,get(){outcomesReads++;if(outcomesReads>1)throw new Error('outcomes read twice');return base.outcomes}},
+      birthsEligible:{enumerable:true,get(){eligibleReads++;if(eligibleReads>1)throw new Error('eligible read twice');return 3}},
+      birthsAdmitted:{enumerable:true,get(){admittedReads++;if(admittedReads>1)throw new Error('admitted read twice');return 2}},
+      birthsCapped:{enumerable:true,get(){cappedReads++;if(cappedReads>1)throw new Error('capped read twice');return 1}},
+      maturityState:{enumerable:true,get(){stateReads++;if(stateReads>1)throw new Error('state read twice');return 'available'}},
+      maturity:{enumerable:true,get(){maturityReads++;if(maturityReads>1)throw new Error('maturity read twice');return base.maturity}},
+    })
+    const summary=formatOutcomeFlowSummary(snapshot as never)
+    expect(summary).toContain('Birth cap: eligible parents = admitted births + capped births: 3 = 2 + 1')
+    expect(summary).toContain('Reproduction funnel: 3 mature + energy-eligible · 1 waiting for maturity · 2 at or below energy cost.')
+    expect(summary).not.toContain('99')
+    expect({outcomesReads,eligibleReads,admittedReads,cappedReads,stateReads,maturityReads}).toEqual({outcomesReads:1,eligibleReads:1,admittedReads:1,cappedReads:1,stateReads:1,maturityReads:1})
+  })
+
+  it('withholds maturity partitions when cap or survivor identities contradict',()=>{
+    const capContradiction={...flowLedger(12,6,flowOutcomes({survived:6}),3,1,1),birthsImmature:1},partitionContradiction={...flowLedger(13,6,flowOutcomes({survived:6}),3,2,1),birthsImmature:4},[capEntry,partitionEntry]=buildOutcomeFlowTimeline([capContradiction,partitionContradiction])
+    expect(capEntry).toMatchObject({maturityState:'invalid',maturity:null,birthCapState:'unavailable'})
+    expect(partitionEntry).toMatchObject({maturityState:'invalid',maturity:null,birthCapState:'available'})
+  })
+
+  it('renders maturity buckets for available rows and Unavailable for mixed retained rows',()=>{
+    const available={...flowLedger(14,8,flowOutcomes({survived:8}),3,2,1),birthsImmature:2},legacy=flowLedger(15,4,flowOutcomes({survived:4}),2,2,0),invalid={...flowLedger(16,6,flowOutcomes({survived:6}),3,2,1),birthsImmature:-1},markup=renderToStaticMarkup(createElement(HistoryChart,{world:flowWorld([available,legacy,invalid]),requestedGeneration:14,onSelectGeneration:()=>{}}))
+    expect(markup).toContain('Reproduction funnel: 3 mature + energy-eligible · 2 waiting for maturity · 3 at or below energy cost.')
+    expect(markup).toContain('<th scope="col">Mature + energy-eligible</th>')
+    expect(markup).toContain('<th scope="col">Waiting for maturity</th>')
+    expect(markup).toContain('<th scope="col">At or below energy cost</th>')
+    expect(markup).toContain('<th scope="row">14</th>')
+    expect(markup).toContain('<th scope="row">15</th>')
+    expect(markup).toContain('<th scope="row">16</th>')
+    expect(markup).toMatch(/Mature \+ energy-eligible<\/th>[\s\S]*?3<\/td>[\s\S]*?2<\/td>[\s\S]*?3<\/td>/)
+    expect(markup).toMatch(/<th scope="row">15<\/th>[\s\S]*?Unavailable[\s\S]*?Unavailable[\s\S]*?Unavailable/)
+    expect(markup).toMatch(/<th scope="row">16<\/th>[\s\S]*?Unavailable[\s\S]*?Unavailable[\s\S]*?Unavailable/)
+    expect(markup).toContain('style="overflow-x:auto"')
+    expect(markup).not.toMatch(/NaN|Infinity/)
   })
 
   it('keeps outcome colors readable on both card themes and gives each category a pattern cue',()=>{
