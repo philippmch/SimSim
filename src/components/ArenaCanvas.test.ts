@@ -3,6 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   ARENA_COLOR_SCHEME_QUERY,
+  ARENA_ACTIVITY_SPOTLIGHT_COMPACT_LIMIT,
   ARENA_DARK_PALETTE,
   ARENA_FOCUS_DIM_ALPHA,
   ARENA_FOCUS_LABELS,
@@ -53,7 +54,9 @@ import {
   hitTestArenaPatch,
   hitTestArenaInspection,
   resolveArenaActivitySpotlight,
+  deriveArenaActivitySpotlightCue,
   deriveArenaSelectedCreatureCallout,
+  formatArenaActivitySpotlightCompact,
   sortArenaPatches,
   showArenaQuickStart,
   type ArenaAccessibleDescriptionInput,
@@ -232,6 +235,8 @@ describe('arena activity spotlight', () => {
     ]
 
     expect(resolveArenaActivitySpotlight(world)).toMatchObject({ sequence: 12, kind: 'food-collected', tick: 200, age: 0, actors: [{ individualId: 2 }] })
+    expect(deriveArenaActivitySpotlightCue(world)?.compact).toContain('Highlighted · Food collected')
+    expect(deriveArenaActivitySpotlightCue(world)?.compact).not.toContain('Latest ·')
   })
 
   it('requires the current generation and accepts only the exact recent-age boundary', () => {
@@ -322,8 +327,9 @@ describe('arena activity spotlight', () => {
   it('exposes active SSR key, canvas data hooks, and accessible actor ids only for an active spotlight', async () => {
     const { ArenaCanvas } = await import('./ArenaCanvasRenderer')
     const world = spotlightWorld()
-    world.activity = [spotlightMoment({ sequence: 22, actorIds: [2] })]
+    world.activity = [spotlightMoment({ sequence: 22, actorIds: [2], summary: 'Individual 2 collected food.' })]
     const key = renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world }))
+    const compactKey = renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world, compact: true }))
     const markup = renderToStaticMarkup(createElement(ArenaCanvas, {
       world,
       revision: 0,
@@ -334,11 +340,74 @@ describe('arena activity spotlight', () => {
       playbackDetail: 'Paused.',
     }))
 
-    expect(key).toBe('<strong data-arena-activity-spotlight-key="true">Latest actor halo marks each actor’s current arena position; it does not show the historical event location.</strong>')
+    expect(key).toContain('data-arena-activity-spotlight-key-sequence="22"')
+    expect(key).toContain('Latest actor halo marks each actor’s current arena position; it does not show the historical event location.')
+    expect(key).toContain('Food collected · Generation 3 · day 1.00 · Individual 2 collected food.')
+    expect(key).toContain('Model context: Energy-regrowth mode uses each item’s recorded energy')
+    expect(compactKey).toContain('data-arena-activity-spotlight-cue="true"')
+    expect(compactKey).toContain('data-arena-activity-spotlight-key-sequence="22"')
+    expect(compactKey).toContain('Highlighted · Food collected · Individual 2 collected food.')
     expect(markup).toContain('data-arena-activity-spotlight="true"')
     expect(markup).toContain('data-arena-activity-spotlight-sequence="22"')
     expect(markup).toContain('data-arena-activity-spotlight-actors="2"')
+    expect(markup).toContain('data-arena-activity-spotlight-event="true"')
+    expect(markup).toContain('data-arena-activity-spotlight-event-copy="Food collected · Generation 3 · day 1.00 · Individual 2 collected food."')
     expect(markup).toContain('Latest actor halo marks Individual 2')
+    expect(markup).toContain('Highlighted event: Food collected · Generation 3 · day 1.00 · Individual 2 collected food.')
+    expect(markup).toContain('Model context: Energy-regrowth mode uses each item’s recorded energy')
+    expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
+  })
+
+  it('keeps duplicate sequences tied to the exact spotlight source record', () => {
+    const world = spotlightWorld()
+    world.activity = [
+      spotlightMoment({ sequence: 40, actorIds: [1], summary: 'First record must not leak.' }),
+      spotlightMoment({ sequence: 40, kind: 'attack-failure', actorIds: [2, 3], attackerId: 2, preyId: 3, contestChance: .41, summary: "Individual 2's attack on Individual 3 failed (contest chance 41%)." }),
+    ]
+
+    const spotlight = resolveArenaActivitySpotlight(world)
+    const cue = deriveArenaActivitySpotlightCue(world)
+    const compactKey = renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world, compact: true }))
+    expect(spotlight).toMatchObject({ sourceIndex: 1, sequence: 40, kind: 'attack-failure' })
+    expect(cue).toMatchObject({ sequence: 40, kind: 'attack-failure' })
+    expect(cue?.event).toContain("Individual 2's attack on Individual 3 failed")
+    expect(cue?.context).toContain('recorded contest chance 41%')
+    expect(cue?.event).not.toContain('First record')
+    expect(compactKey).toContain('Highlighted · Attack failed · Individual 2 → Individual 3 · 41% contest')
+    expect(compactKey).not.toContain('First record')
+  })
+
+  it('bounds compact copy and keeps malformed event prose out of an otherwise valid halo', async () => {
+    const long = formatArenaActivitySpotlightCompact({ kind: 'food-collected', kindLabel: 'Food collected', summary: 'individual context '.repeat(20), attackerId: null, preyId: null, contestChance: null })
+    expect(long.length).toBeLessThanOrEqual(ARENA_ACTIVITY_SPOTLIGHT_COMPACT_LIMIT)
+    expect(long.startsWith('Highlighted · Food collected ·')).toBe(true)
+    expect(long.endsWith('…')).toBe(true)
+
+    const { ArenaCanvas } = await import('./ArenaCanvasRenderer')
+    const world = spotlightWorld()
+    world.activity = [spotlightMoment({ sequence: 50, actorIds: [2], summary: '   ' })]
+    const key = renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world }))
+    const compactKey = renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world, compact: true }))
+    const markup = renderToStaticMarkup(createElement(ArenaCanvas, {
+      world,
+      revision: 0,
+      selectedIndividualId: null,
+      onSelect: () => {},
+      arenaFocus: 'all',
+      playbackStatus: 'Paused',
+      playbackDetail: 'Paused.',
+    }))
+
+    expect(resolveArenaActivitySpotlight(world)).toMatchObject({ sourceIndex: 0, sequence: 50 })
+    expect(deriveArenaActivitySpotlightCue(world)).toBeNull()
+    expect(key).toContain('data-arena-activity-spotlight-key="true"')
+    expect(key).not.toContain('data-arena-activity-spotlight-event="true"')
+    expect(key).not.toContain('data-arena-activity-spotlight-context="true"')
+    expect(compactKey).toBe('')
+    expect(markup).toContain('data-arena-activity-spotlight="true"')
+    expect(markup).not.toContain('data-arena-activity-spotlight-event="true"')
+    expect(markup).not.toContain('Highlighted event:')
+    expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
   })
 
   it('omits active cue, key, data hooks, and copy when no eligible current actor remains', async () => {
@@ -357,8 +426,10 @@ describe('arena activity spotlight', () => {
     }))
 
     expect(key).toBe('')
+    expect(renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world, compact: true }))).toBe('')
     expect(markup).not.toContain('data-arena-activity-spotlight="true"')
     expect(markup).not.toContain('Latest actor halo marks')
+    expect(markup).not.toContain('Highlighted event:')
   })
 })
 

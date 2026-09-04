@@ -19,6 +19,12 @@ import {
   type CreatureState,
 } from './ArenaCanvasModel'
 import { resourcePatchOrdinal, sortResourcePatchRecords } from './ResourcePatchPresentation'
+import {
+  formatActivityContext,
+  formatActivityMoment,
+  normalizeActivityMoment,
+  type SimulationActivityMoment,
+} from './SimulationActivity'
 
 interface Props {
   world: World
@@ -184,6 +190,8 @@ export interface ArenaActivitySpotlightActor {
 }
 
 export interface ArenaActivitySpotlight {
+  /** Source-array index keeps duplicate sequence records aligned with their exact event copy. */
+  sourceIndex: number
   sequence: number
   generation: number
   kind: WorldActivityKind
@@ -191,6 +199,8 @@ export interface ArenaActivitySpotlight {
   age: number
   alpha: number
   actors: ArenaActivitySpotlightActor[]
+  /** Absent when the raw record could support only a generic halo (for example, a malformed summary). */
+  activityMoment: SimulationActivityMoment | null
 }
 
 type ArenaRecord = Record<string, unknown>
@@ -351,15 +361,19 @@ export function resolveArenaActivitySpotlight(world: unknown): ArenaActivitySpot
     } catch {
       continue
     }
+    // Normalize this exact source record without sorting the bounded activity
+    // buffer on every arena frame. The source index keeps duplicate sequences
+    // tied to their own summary and context.
+    const normalizedMoment = normalizeActivityMoment(entry, sourceIndex)
     const rawSequence = arenaField(entry, 'sequence')
-    const sequence = rawSequence === undefined ? sourceIndex + 1 : arenaSafeInteger(rawSequence, 1)
-    const eventGeneration = arenaSafeGeneration(arenaField(entry, 'generation'))
-    const tick = arenaSafeInteger(arenaField(entry, 'tick'), 0)
-    const kind = arenaField(entry, 'kind')
+    const sequence = normalizedMoment?.sequence ?? (rawSequence === undefined ? sourceIndex + 1 : arenaSafeInteger(rawSequence, 1))
+    const eventGeneration = normalizedMoment?.generation ?? arenaSafeGeneration(arenaField(entry, 'generation'))
+    const tick = normalizedMoment?.tick ?? arenaSafeInteger(arenaField(entry, 'tick'), 0)
+    const kind = normalizedMoment?.kind ?? arenaField(entry, 'kind')
     if (sequence === null || eventGeneration === null || eventGeneration !== generation || tick === null || tick > currentTick || !arenaActivityKind(kind) || ARENA_ACTIVITY_AGGREGATE_KINDS.has(kind)) continue
     const age = currentTick - tick
     if (age > windowTicks) continue
-    const refs = arenaOrderedActorRefs(entry, kind)
+    const refs = arenaOrderedActorRefs(normalizedMoment ?? entry, kind)
     const actors: ArenaActivitySpotlightActor[] = []
     for (const ref of refs) {
       const current = currentActors.get(ref.individualId)
@@ -368,7 +382,7 @@ export function resolveArenaActivitySpotlight(world: unknown): ArenaActivitySpot
     }
     const cappedActors = actors.slice(0, MAX_FOUNDER_MIGRATION_BATCH)
     if (!cappedActors.length) continue
-    const candidate: ArenaActivitySpotlight = { sequence, generation, kind, tick, age, alpha: arenaActivitySpotlightAlpha(age, windowTicks), actors: cappedActors }
+    const candidate: ArenaActivitySpotlight = { sourceIndex, sequence, generation, kind, tick, age, alpha: arenaActivitySpotlightAlpha(age, windowTicks), actors: cappedActors, activityMoment: normalizedMoment }
     if (best === null || sequence > best.sequence || (sequence === best.sequence && sourceIndex > bestSourceIndex)) {
       best = candidate
       bestSourceIndex = sourceIndex
@@ -384,9 +398,66 @@ export function formatArenaActivitySpotlightDescription(spotlight: ArenaActivity
   return `Latest actor halo marks ${actors} at their current arena ${position}; it does not show the historical event location.`
 }
 
-export function ArenaActivitySpotlightKey({ world }: { world: World }): React.ReactElement | null {
-  if (!resolveArenaActivitySpotlight(world)) return null
-  return <strong data-arena-activity-spotlight-key="true">{ARENA_ACTIVITY_SPOTLIGHT_KEY_COPY}</strong>
+export interface ArenaActivitySpotlightCue {
+  sequence: number
+  kind: WorldActivityKind
+  compact: string
+  event: string
+  context: string
+  description: string
+}
+
+export const ARENA_ACTIVITY_SPOTLIGHT_COMPACT_LIMIT = 76
+
+function formatArenaActivitySpotlightContestPercent(chance: number): string {
+  const percent = chance * 100
+  if (percent > 0 && percent < .01) return '<0.01'
+  if (percent < .1) return percent.toFixed(2)
+  if (percent < 10) return percent.toFixed(1)
+  return percent.toFixed(0)
+}
+
+export function formatArenaActivitySpotlightCompact(moment: Pick<SimulationActivityMoment, 'kind' | 'kindLabel' | 'summary' | 'attackerId' | 'preyId' | 'contestChance'>): string {
+  const attack = (moment.kind === 'attack-success' || moment.kind === 'attack-failure') && moment.attackerId !== null && moment.preyId !== null
+  const copy = attack
+    ? `Highlighted · ${moment.kindLabel} · Individual ${moment.attackerId} → Individual ${moment.preyId}${moment.contestChance === null ? '' : ` · ${formatArenaActivitySpotlightContestPercent(moment.contestChance)}% contest`}`
+    : `Highlighted · ${moment.kindLabel} · ${moment.summary}`
+  return copy.length <= ARENA_ACTIVITY_SPOTLIGHT_COMPACT_LIMIT
+    ? copy
+    : `${copy.slice(0, ARENA_ACTIVITY_SPOTLIGHT_COMPACT_LIMIT - 1).trimEnd()}…`
+}
+
+function formatArenaActivitySpotlightCue(spotlight: ArenaActivitySpotlight, config: unknown): ArenaActivitySpotlightCue | null {
+  const moment = spotlight.activityMoment
+  if (!moment || moment.sourceIndex !== spotlight.sourceIndex || moment.sequence !== spotlight.sequence || moment.kind !== spotlight.kind || moment.tick !== spotlight.tick || moment.generation !== spotlight.generation) return null
+  const event = formatActivityMoment(moment)
+  const context = formatActivityContext(moment, config)
+  return {
+    sequence: spotlight.sequence,
+    kind: spotlight.kind,
+    compact: formatArenaActivitySpotlightCompact(moment),
+    event,
+    context,
+    description: `Highlighted event: ${event} ${context}`,
+  }
+}
+
+export function deriveArenaActivitySpotlightCue(world: unknown): ArenaActivitySpotlightCue | null {
+  const spotlight = resolveArenaActivitySpotlight(world)
+  return spotlight ? formatArenaActivitySpotlightCue(spotlight, arenaField(world, 'config')) : null
+}
+
+export function ArenaActivitySpotlightKey({ world, compact = false }: { world: World; compact?: boolean }): React.ReactElement | null {
+  const spotlight = resolveArenaActivitySpotlight(world)
+  if (!spotlight) return null
+  const cue = formatArenaActivitySpotlightCue(spotlight, world.config)
+  if (compact) return cue
+    ? <strong data-arena-activity-spotlight-cue="true" data-arena-activity-spotlight-key-sequence={cue.sequence}>{cue.compact}</strong>
+    : null
+  return <>
+    {cue && <><strong data-arena-activity-spotlight-event="true" data-arena-activity-spotlight-event-sequence={cue.sequence}>{cue.event}</strong><small data-arena-activity-spotlight-context="true" style={{ flexBasis: '100%', textAlign: 'right', lineHeight: 1.4, overflowWrap: 'anywhere' }}>{cue.context}</small></>}
+    <strong data-arena-activity-spotlight-key="true" data-arena-activity-spotlight-key-sequence={spotlight.sequence}>{ARENA_ACTIVITY_SPOTLIGHT_KEY_COPY}</strong>
+  </>
 }
 
 export interface ArenaSelectedCreatureCallout {
@@ -929,6 +1000,7 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
   const darkModeRef = useRef<boolean | null>(null)
   if (darkModeRef.current === null) darkModeRef.current = readArenaDarkMode()
   const activitySpotlight = resolveArenaActivitySpotlight(world)
+  const activitySpotlightCue = activitySpotlight ? formatArenaActivitySpotlightCue(activitySpotlight, world.config) : null
   const selectedCallout = deriveArenaSelectedCreatureCallout(world, selectedIndividualId)
   useEffect(() => {
     const canvas = ref.current
@@ -1081,8 +1153,9 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
     ? `Resource patch ${selectedPatchOrdinal} is selected for inspection; its live food, capacity, energy, and regrowth details appear below the arena.`
     : ''
   const activitySpotlightDescription = activitySpotlight ? formatArenaActivitySpotlightDescription(activitySpotlight) : ''
+  const activitySpotlightCueDescription = activitySpotlightCue?.description ?? ''
   const selectedCalloutDescription = selectedCallout?.description ?? ''
-  const accessibleDescription = `${accessibleBaseDescription} ${patchSelectionDescription}${activitySpotlightDescription ? ` ${activitySpotlightDescription}` : ''}${selectedCalloutDescription ? ` ${selectedCalloutDescription}` : ''} The combined selector includes living creatures and resource patches.`
+  const accessibleDescription = `${accessibleBaseDescription} ${patchSelectionDescription}${activitySpotlightDescription ? ` ${activitySpotlightDescription}` : ''}${activitySpotlightCueDescription ? ` ${activitySpotlightCueDescription}` : ''}${selectedCalloutDescription ? ` ${selectedCalloutDescription}` : ''} The combined selector includes living creatures and resource patches.`
   const patchOptions = sortArenaPatches(world.environment.patches).map((patch, index) => {
     const ordinal = index + 1
     const currentFood = world.food.filter(food => food.patchId === patch.id).length
@@ -1116,7 +1189,7 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
     }
     dispatchArenaInspectionHit(null, onSelect, onSelectPatch)
   }
-  return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={accessibleDescription} data-arena-activity-spotlight={activitySpotlight ? 'true' : undefined} data-arena-activity-spotlight-sequence={activitySpotlight?.sequence} data-arena-activity-spotlight-kind={activitySpotlight?.kind} data-arena-activity-spotlight-tick={activitySpotlight?.tick} data-arena-activity-spotlight-age={activitySpotlight?.age} data-arena-activity-spotlight-actors={activitySpotlight?.actors.map(actor => actor.individualId).join(',')} data-arena-selected-callout={selectedCallout ? 'true' : undefined} data-arena-selected-callout-individual-id={selectedCallout?.individualId} data-arena-selected-callout-title={selectedCallout?.title} data-arena-selected-callout-detail={selectedCallout?.detail} data-arena-selected-callout-copy={selectedCallout?.description}>
+  return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={accessibleDescription} data-arena-activity-spotlight={activitySpotlight ? 'true' : undefined} data-arena-activity-spotlight-sequence={activitySpotlight?.sequence} data-arena-activity-spotlight-kind={activitySpotlight?.kind} data-arena-activity-spotlight-tick={activitySpotlight?.tick} data-arena-activity-spotlight-age={activitySpotlight?.age} data-arena-activity-spotlight-actors={activitySpotlight?.actors.map(actor => actor.individualId).join(',')} data-arena-activity-spotlight-event={activitySpotlightCue ? 'true' : undefined} data-arena-activity-spotlight-event-copy={activitySpotlightCue?.event} data-arena-activity-spotlight-event-context={activitySpotlightCue?.context} data-arena-selected-callout={selectedCallout ? 'true' : undefined} data-arena-selected-callout-individual-id={selectedCallout?.individualId} data-arena-selected-callout-title={selectedCallout?.title} data-arena-selected-callout-detail={selectedCallout?.detail} data-arena-selected-callout-copy={selectedCallout?.description}>
     Natural selection simulation arena. Live counts are available in the statistics region.
   </canvas><label className="creature-picker" htmlFor="arena-creature-picker">Inspect <select id="arena-creature-picker" aria-label="Inspect creatures or resource patches" aria-describedby="arena-creature-picker-help" value={selectedValue} onChange={e => selectInspection(e.target.value)} style={{ background: 'var(--paper)', color: 'var(--ink)', colorScheme: 'light dark', minHeight: 32, touchAction: 'manipulation' }}><option value="">Nothing selected</option><optgroup label="Creatures">{livingCreatures.slice().sort((a, b) => a.individualId - b.individualId).map(c => <option key={`creature:${c.individualId}`} value={`creature:${c.individualId}`}>Individual {c.individualId}, lineage {c.lineageId}, {CREATURE_STATE_METADATA[c.home ? 'safe' : c.mode].label}</option>)}</optgroup>{patchOptions.length > 0 && <optgroup label="Resource patches">{patchOptions.map(({ patch, ordinal, currentFood, quality }) => <option key={`patch:${ordinal}`} value={`patch:${ordinal}`}>Patch {ordinal} · {quality} · {currentFood} food</option>)}</optgroup>}</select></label><span id="arena-creature-picker-help" className="sr-only">Choose a living creature or resource patch to inspect. Creature options reveal behavior; patch options reveal live food, capacity, energy, and regrowth. Choose Nothing selected to clear inspection.</span><span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{formatArenaInspectionStatus(selectedIndividualId, selectedPatchId, selectedPatchOrdinal)}</span></>
 }
