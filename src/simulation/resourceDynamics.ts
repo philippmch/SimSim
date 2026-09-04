@@ -1,4 +1,5 @@
 import { clamp,keyedRandom } from './random'
+import {patchQualityMultiplier,safePatchQualityBias,safePatchQualityVariation} from './patchQuality'
 
 export type ResourceEcologyMode='classic'|'energy-regrowth'
 
@@ -9,6 +10,8 @@ export interface ResourcePatchSpec{
   stock?:number
   accumulator?:number
   spawnSequence?:number
+  /** Intrinsic patch signal; absent legacy records are neutral. */
+  qualityBias?:number
 }
 
 export interface ResourcePatchState{
@@ -18,6 +21,8 @@ export interface ResourcePatchState{
   stock:number
   accumulator:number
   spawnSequence:number
+  /** Optional on legacy live worlds; normalized state creation fills 0. */
+  qualityBias?:number
 }
 
 export interface ResourceDynamicsState{patches:ResourcePatchState[]}
@@ -28,6 +33,8 @@ export interface ResourcePolicy{
   foodRegrowthRate:number
   foodPatchSpread:number
   maxFood:number
+  /** Optional for callers/configurations predating patch quality. */
+  patchQualityVariation?:number
 }
 
 export interface ResourceStep{
@@ -61,6 +68,7 @@ export function createResourceDynamicsState(patches:readonly ResourcePatchSpec[]
   return{patches:[...patches].sort((a,b)=>a.id-b.id).map(patch=>({
     id:patch.id,x:clamp(patch.x,0,1),y:clamp(patch.y,0,1),stock:whole(patch.stock??0),
     accumulator:nonNegative(patch.accumulator??0),spawnSequence:whole(patch.spawnSequence??0),
+    qualityBias:safePatchQualityBias(patch.qualityBias),
   }))}
 }
 
@@ -84,17 +92,24 @@ export function advanceResourceDynamics(state:ResourceDynamicsState,policy:Resou
 
   const dt=nonNegative(step.dt),duration=Math.max(Number.EPSILON,nonNegative(step.generationDuration))
   const capacity=whole(policy.patchCapacity),globalLimit=whole(policy.maxFood)
-  const perPatchRate=capacity*nonNegative(policy.foodRegrowthRate)/duration
+  const basePerPatchRate=capacity*nonNegative(policy.foodRegrowthRate)/duration
+  const variation=safePatchQualityVariation(policy.patchQualityVariation)
   const candidates:SpawnCandidate[]=[]
   for(const patch of patches){
     if(patch.stock>=capacity){patch.accumulator=0;continue}
     // Whole backlog represents production that was blocked previously and is discarded.
     const before=patch.accumulator%1
+    const perPatchRate=variation===0?basePerPatchRate:basePerPatchRate*patchQualityMultiplier(patch.qualityBias,variation)
     const generated=perPatchRate*dt
     const total=before+generated
     const patchSlots=Math.max(0,capacity-patch.stock)
-    const due=Math.min(patchSlots,Math.floor(total+1e-12))
-    patch.accumulator=Math.max(0,total-Math.floor(total+1e-12))
+    const generatedWhole=Math.floor(total+1e-12)
+    const due=Math.min(patchSlots,generatedWhole)
+    const remainder=Math.max(0,total-generatedWhole)
+    // Unequal floating-point rates otherwise retain ~1e-15 slicing noise.
+    // Canonicalize only the new quality branch; variation 0 keeps the exact
+    // pre-v6 accumulator arithmetic used by legacy trajectories.
+    patch.accumulator=variation===0?remainder:Number(remainder.toFixed(12))
     for(let index=0;index<due;index++){
       const threshold=index+1
       const time=perPatchRate>0?Math.max(0,(threshold-before)/perPatchRate):0

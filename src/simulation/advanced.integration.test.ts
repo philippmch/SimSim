@@ -1,8 +1,9 @@
 import{describe,expect,it}from'vitest'
-import{createWorld,finishGeneration,runGeneration,SIMULATION_TIMESTEP,tick}from'./engine'
+import{applyIntervention,createWorld,finishGeneration,runGeneration,SIMULATION_TIMESTEP,tick}from'./engine'
 import{CLASSIC_MODES,defaultConfig,MAX_FOOD}from'./config'
-import{advanceFoodBudget,effectiveFoodRegrowthRate}from'./environment'
+import{advanceFoodBudget,effectiveFoodRegrowthRate,spawnRegrownFood}from'./environment'
 import{advanceResourceDynamics,createResourceDynamicsState}from'./resourceDynamics'
+import{patchQualityMultiplier}from'./patchQuality'
 import{contestSuccessProbability}from'./predation'
 import{keyedRandom}from'./random'
 import type{Creature,Food,World}from'./types'
@@ -24,6 +25,29 @@ describe('integrated realistic perception and reaction',()=>{
 })
 
 describe('integrated resource and lifecycle mechanics',()=>{
+  it('keeps patch quality deterministic and scales advanced food energy without changing placement RNG',()=>{
+    const cfg={...defaultConfig,seed:9081,initialPopulation:1,foodPerDay:48,foodPatchCount:4,foodPatchiness:1,foodPatchSpread:.04,obstacleCount:0,patchQualityVariation:.75},rich=createWorld(cfg),neutral=createWorld({...cfg,patchQualityVariation:0})
+    expect(rich.environment).toEqual(createWorld(cfg).environment)
+    const biases=rich.environment.patches.map(patch=>patch.qualityBias??0)
+    expect(biases.reduce((sum,value)=>sum+value,0)).toBeCloseTo(0,12)
+    expect(Math.max(...biases.map(value=>Math.abs(value)))).toBeCloseTo(1,12)
+    expect(rich.food.map(food=>({id:food.id,x:food.x,y:food.y,patchId:food.patchId}))).toEqual(neutral.food.map(food=>({id:food.id,x:food.x,y:food.y,patchId:food.patchId})))
+    for(const food of rich.food){const patch=rich.environment.patches.find(candidate=>candidate.id===food.patchId);expect(food.energy).toBeCloseTo(cfg.foodEnergy*patchQualityMultiplier(patch?.qualityBias,cfg.patchQualityVariation),12)}
+    expect(new Set(rich.food.map(food=>food.energy)).size).toBeGreaterThan(1)
+    expect(neutral.food.every(food=>food.energy===cfg.foodEnergy)).toBe(true)
+  })
+
+  it('uses persistent patch quality for regrown and bloom food while drought leaves the landscape intact',()=>{
+    const world=advanced({seed:9082,initialPopulation:1,foodPerDay:0,foodPatchCount:4,patchQualityVariation:.7}),patch=world.environment.patches.find(candidate=>Math.abs(candidate.qualityBias??0)>.1)!
+    const [regrown]=spawnRegrownFood(world,[{patchId:patch.id,spawnSequence:0,x:patch.x,y:patch.y}])
+    expect(regrown.energy).toBeCloseTo(world.config.foodEnergy*patchQualityMultiplier(patch.qualityBias,world.config.patchQualityVariation),12)
+    const landscape=world.environment.patches.map(candidate=>({id:candidate.id,qualityBias:candidate.qualityBias}))
+    expect(applyIntervention(world,'resource-bloom')).toBeGreaterThan(0)
+    for(const food of world.food){const source=world.environment.patches.find(candidate=>candidate.id===food.patchId);expect(food.energy).toBeCloseTo(world.config.foodEnergy*patchQualityMultiplier(source?.qualityBias,world.config.patchQualityVariation),12)}
+    applyIntervention(world,'drought')
+    expect(world.environment.patches.map(candidate=>({id:candidate.id,qualityBias:candidate.qualityBias}))).toEqual(landscape)
+  })
+
   it('regrows obstacle-safe bounded food, conserves ledger mass, and honors drought',()=>{const w=advanced({initialPopulation:1,foodPerDay:defaultConfig.foodPerDay,foodRegrowthRate:1,patchCapacity:8,dayLength:5,obstacleCount:4});w.food=[];w.generationFoodStart=0;for(const patch of w.environment.patches){patch.stock=0;patch.accumulator=0}while(w.generation===1)tick(w,SIMULATION_TIMESTEP);const ledger=w.ledger[0];expect(ledger.foodProduced).toBeGreaterThan(0);expect(ledger.foodAtStart+ledger.foodProduced).toBe(ledger.foodConsumed+ledger.foodRemaining);expect(ledger.foodRemaining).toBeLessThanOrEqual(MAX_FOOD);expect(w.food.every(food=>food.x>.01&&food.x<.99&&food.y>.01&&food.y<.99&&w.environment.obstacles.every(obstacle=>Math.hypot(food.x-obstacle.x,food.y-obstacle.y)>obstacle.radius+.01))).toBe(true)
     const capped=advanced({initialPopulation:1,foodPerDay:120,foodRegrowthRate:1,patchCapacity:MAX_FOOD,dayLength:5});for(let i=0;i<80;i++)tick(capped,SIMULATION_TIMESTEP);expect(capped.food.length).toBeLessThanOrEqual(MAX_FOOD)
     const drought=advanced({initialPopulation:1,foodPerDay:0,foodRegrowthRate:1,dayLength:5});while(drought.generation===1)tick(drought,SIMULATION_TIMESTEP);expect(drought.ledger[0]).toMatchObject({foodAtStart:0,foodProduced:0,foodConsumed:0,foodRemaining:0})})

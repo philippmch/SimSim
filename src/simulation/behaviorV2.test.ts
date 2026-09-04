@@ -1,13 +1,15 @@
 import {describe,expect,it} from 'vitest'
 import {createWorld,defaultConfig,finishGeneration,SIMULATION_TIMESTEP,tick} from './engine'
-import {decide} from './behavior'
+import {decide,foodDistanceUtility,safeFoodEnergy} from './behavior'
 import {proposeMotion} from './motion'
 import {advanceFoodBudget,seasonalTarget} from './environment'
 import type {Creature} from './types'
 import {CLASSIC_MODES} from './config'
+import {distance} from './random'
 
 const world=(n=3,extra={})=>createWorld({...defaultConfig,...CLASSIC_MODES,initialPopulation:n,foodPerDay:0,obstacleCount:0,foodPatchCount:2,founderPhysicalVariation:0,founderBehaviorVariation:0,...extra})
 const food=(id:number,x:number,y:number)=>({id,x,y,patchId:null,energy:22})
+const advancedWorld=(extra:Partial<typeof defaultConfig>={})=>createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0,obstacleCount:0,foodPatchCount:2,founderPhysicalVariation:0,founderBehaviorVariation:0,...extra})
 
 describe('two-phase ecology',()=>{
   it('is invariant to creature array permutation',()=>{
@@ -142,6 +144,51 @@ describe('motion',()=>{
 })
 
 describe('utility, memory, and commitment',()=>{
+  it('chooses a richer farther food source when its value beats distance',()=>{
+    const w=advancedWorld(),c=w.creatures[0]
+    Object.assign(c,{x:.5,y:.5,homeX:.5,homeY:.5,sense:.4,energy:50,food:0,returning:false})
+    const poor={id:90,x:.54,y:.5,patchId:null,energy:2},rich={id:91,x:.68,y:.5,patchId:null,energy:100}
+    const chosen=decide(c,[c],[poor,rich],w.config,0,1,true)
+    expect(chosen.targetType).toBe('food')
+    expect(chosen.targetId).toBe(rich.id)
+    expect(chosen.summary?.reason).toContain('value and distance')
+    const reserve=w.config.startingEnergy+w.config.reproductionEnergyCost/Math.max(.05,w.config.energyRetention)
+    expect(foodDistanceUtility(c,rich,distance(c,rich),w.config,reserve)).toBeGreaterThan(foodDistanceUtility(c,poor,distance(c,poor),w.config,reserve))
+  })
+
+  it('uses the exact neutral baseline at energy ratio one and shares it with held targets',()=>{
+    const w=advancedWorld(),c=w.creatures[0],reserve=w.config.startingEnergy+w.config.reproductionEnergyCost/Math.max(.05,w.config.energyRetention)
+    Object.assign(c,{x:.5,y:.5,homeX:.05,homeY:.05,sense:.4,energy:50,food:0,returning:false,targetType:null,targetId:null})
+    const target={id:90,x:.58,y:.5,patchId:null,energy:w.config.foodEnergy}
+    const expected=(3.2+c.exploration+Math.max(0,reserve-c.energy)/Math.max(1,w.config.foodEnergy))/(.08+.06)
+    expect(foodDistanceUtility(c,target,.08,w.config,reserve)).toBe(expected)
+    const decision=decide(c,[c],[target],w.config,0,1,true)
+    expect(decision.summary?.candidates.find(candidate=>candidate.type==='food'&&candidate.targetId===target.id)?.score).toBeCloseTo(expected,12)
+
+    const held={...target,id:91,x:.62}
+    Object.assign(c,{targetType:'food',targetId:held.id,commitUntil:5})
+    const heldDecision=decide(c,[c],[target,held],w.config,1,2,true)
+    const heldScore=heldDecision.summary?.candidates.find(candidate=>candidate.type==='food'&&candidate.targetId===held.id)?.score
+    expect(heldScore).toBeCloseTo(foodDistanceUtility(c,held,distance(c,held),w.config,reserve,false),12)
+  })
+
+  it('keeps equal-value advanced food selection nearest-first and stable-id deterministic',()=>{
+    const w=advancedWorld({patchQualityVariation:0}),c=w.creatures[0]
+    Object.assign(c,{x:.5,y:.5,homeX:.5,homeY:.5,sense:.4,energy:50,food:0,returning:false})
+    const farther={id:89,x:.66,y:.5,patchId:null,energy:w.config.foodEnergy},tieHigh={id:91,x:.58,y:.5,patchId:null,energy:w.config.foodEnergy},tieLow={...tieHigh,id:90}
+    expect(decide(c,[c],[farther,tieHigh,tieLow],w.config,0,1).targetId).toBe(tieLow.id)
+    expect(decide(c,[c],[tieLow,tieHigh,farther],w.config,0,1).targetId).toBe(tieLow.id)
+  })
+
+  it('falls back safely for malformed food energy and zero configured baselines',()=>{
+    const w=advancedWorld({foodEnergy:0}),c=w.creatures[0],reserve=w.config.startingEnergy+w.config.reproductionEnergyCost/Math.max(.05,w.config.energyRetention)
+    Object.assign(c,{x:.5,y:.5,homeX:.5,homeY:.5,sense:.4,energy:50,food:0,returning:false})
+    expect(safeFoodEnergy({energy:Number.NaN},w.config)).toBe(0)
+    expect(safeFoodEnergy({energy:Number.POSITIVE_INFINITY},w.config)).toBe(0)
+    const baseline=foodDistanceUtility(c,{energy:0},.08,w.config,reserve)
+    expect(baseline).toBe(foodDistanceUtility(c,{energy:Number.NaN},.08,w.config,reserve))
+  })
+
   it('captures the highest-utility target and its provenance when no override applies',()=>{
     const w=world(1),c=w.creatures[0]
     Object.assign(c,{x:.5,y:.5,sense:.3,food:0})

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createWorld, defaultConfig, runGeneration as runWorldGeneration } from '../simulation/engine'
-import { CLASSIC_MODES, V4_ONLY_CONFIG_KEYS, V5_ONLY_CONFIG_KEYS } from '../simulation/config'
+import { CLASSIC_MODES, V4_ONLY_CONFIG_KEYS, V5_ONLY_CONFIG_KEYS, V6_ONLY_CONFIG_KEYS } from '../simulation/config'
 import { SETTLEMENT_OUTCOME_KEYS, type ExperimentPlan, type ReplicateResult } from './types'
 import {
   ExperimentCancelledError,
@@ -118,15 +118,13 @@ describe('paired experiment runner', () => {
   it('keeps all advanced ecology metrics exactly paired for identical arms', async () => {
     const metrics = ['avgEnergy', 'avgAge', 'aged', 'foodProduced', 'resourceAbundance', 'attackSuccessRate'] as const
     const result = await runExperiment(plan({ replicates: 1, generations: 2, metrics }))
-    for (const point of result.replicates[0].pairedDeltas) {
-      expect(Object.fromEntries(metrics.map(metric => [metric, point.metrics[metric]]))).toEqual({
-        avgEnergy: 0,
-        avgAge: 0,
-        aged: 0,
-        foodProduced: 0,
-        resourceAbundance: 0,
-        attackSuccessRate: point.generation === 1 ? null : 0,
-      })
+    const replicate = result.replicates[0]
+    for (const [index, point] of replicate.pairedDeltas.entries()) {
+      for (const metric of metrics) {
+        const control = replicate.scenarioA.generations[index].metrics[metric]
+        expect(replicate.scenarioB.generations[index].metrics[metric]).toBe(control)
+        expect(point.metrics[metric]).toBe(control === null ? null : 0)
+      }
     }
     expect(result.schemaVersion).toBe(1)
   })
@@ -163,17 +161,17 @@ describe('paired experiment runner', () => {
     expect(latestComparableAggregate(result.aggregates)).toBeNull()
   })
 
-  it('runs v4 continuous pressure interventions deterministically from their scheduled boundary', async () => {
+  it('runs continuous pressure interventions deterministically from their scheduled boundary', async () => {
     const input = plan({
       replicates: 1,
       generations: 2,
       baseConfig: { ...defaultConfig, initialPopulation: 5, foodPerDay: 8, dayLength: 5 },
       metrics: ['population', 'avgEnergy', 'foodProduced', 'resourceAbundance', 'attackSuccessRate'],
-      scenarioB: { id: 'treatment', label: 'Treatment', interventions: [{ id: 'v4-pressure', generation: 2, changes: { foodRegrowthRate: .5, attackCost: 12, reactionTime: .5, reproductionEnergyCost: 55 } }] },
+      scenarioB: { id: 'treatment', label: 'Treatment', interventions: [{ id: 'ecology-pressure', generation: 2, changes: { foodRegrowthRate: .5, patchQualityVariation: .9, attackCost: 12, reactionTime: .5, reproductionEnergyCost: 55 } }] },
     })
     const first = await runExperiment(input), second = await runExperiment(input)
     expect(second).toEqual(first)
-    expect(first.replicates[0].scenarioB.generations.map(point => point.appliedInterventionIds)).toEqual([[], ['v4-pressure']])
+    expect(first.replicates[0].scenarioB.generations.map(point => point.appliedInterventionIds)).toEqual([[], ['ecology-pressure']])
     expect(first.replicates[0].pairedDeltas[0].metrics).toEqual({
       population: 0,
       avgEnergy: 0,
@@ -194,12 +192,12 @@ describe('paired experiment runner', () => {
 
   it('applies scheduled interventions once at the correct boundary without mutating inputs', () => {
     const base = { ...defaultConfig }
-    const interventions = [{ id: 'drought', generation: 3, changes: { foodPerDay: 3, foodTrend: -.05 } }] as const
+    const interventions = [{ id: 'drought', generation: 3, changes: { foodPerDay: 3, foodTrend: -.05, patchQualityVariation: .8 } }] as const
     const before = structuredClone(interventions)
     const early = applyInterventionsAtBoundary(base, interventions, 2)
     expect(early).toEqual({ config: base, appliedIds: [] })
     const exact = applyInterventionsAtBoundary(base, interventions, 3)
-    expect(exact.config).toMatchObject({ foodPerDay: 3, foodTrend: -.05 })
+    expect(exact.config).toMatchObject({ foodPerDay: 3, foodTrend: -.05, patchQualityVariation: .8 })
     expect(exact.appliedIds).toEqual(['drought'])
     const repeated = applyInterventionsAtBoundary(exact.config, interventions, 3, new Set(exact.appliedIds))
     expect(repeated).toEqual({ config: exact.config, appliedIds: [] })
@@ -414,11 +412,24 @@ describe('paired experiment runner', () => {
   it('normalizes exact legacy v3 result configs to classic modes', async () => {
     const result = await runExperiment(plan({ replicates: 1, generations: 1, metrics: ['population'] }))
     const payload = JSON.parse(toExperimentJson(result))
-    for (const key of [...V4_ONLY_CONFIG_KEYS, ...V5_ONLY_CONFIG_KEYS]) delete payload.result.plan.baseConfig[key]
+    for (const key of [...V4_ONLY_CONFIG_KEYS, ...V5_ONLY_CONFIG_KEYS, ...V6_ONLY_CONFIG_KEYS]) delete payload.result.plan.baseConfig[key]
     const imported = fromExperimentJson(JSON.stringify(payload))
     expect(imported.result.plan.baseConfig).toMatchObject({ ecologyMode: 'classic', perceptionMode: 'perfect', predationMode: 'threshold' })
     expect(imported.result.plan.baseConfig.foodEnergy).toBe(defaultConfig.foodEnergy)
     expect(imported.result.plan.baseConfig.maturityAge).toBe(0)
+    expect(imported.result.plan.baseConfig.patchQualityVariation).toBe(0)
+  })
+
+  it('normalizes exact legacy v5 result configs with neutral patch quality', async () => {
+    const input = plan({ replicates: 1, generations: 2, baseConfig: { ...defaultConfig, seed: 6302, initialPopulation: 5, foodPerDay: 8, dayLength: 5 }, metrics: ['population', 'foodProduced'] })
+    const result = await runExperiment(input)
+    const payload = JSON.parse(toExperimentJson(result)) as any
+    delete payload.result.plan.baseConfig.patchQualityVariation
+    const imported = fromExperimentJson(JSON.stringify(payload))
+    expect(imported.result.plan.baseConfig).toMatchObject({ maturityAge: defaultConfig.maturityAge, patchQualityVariation: 0 })
+    const migratedResult = await runExperiment(imported.result.plan)
+    const explicitResult = await runExperiment({ ...input, baseConfig: { ...input.baseConfig, patchQualityVariation: 0 } })
+    expect(migratedResult).toEqual(explicitResult)
   })
 
   it('normalizes exact legacy v4 result configs without changing ecological modes and inherits maturity in partial scenarios', async () => {
@@ -432,18 +443,20 @@ describe('paired experiment runner', () => {
     const result = await runExperiment(input)
     const payload = JSON.parse(toExperimentJson(result)) as any
     delete payload.result.plan.baseConfig.maturityAge
+    delete payload.result.plan.baseConfig.patchQualityVariation
     const imported = fromExperimentJson(JSON.stringify(payload))
     expect(imported.result.plan.baseConfig).toMatchObject({
       ecologyMode: 'energy-regrowth',
       perceptionMode: 'realistic',
       predationMode: 'contest',
       maturityAge: 0,
+      patchQualityVariation: 0,
     })
     expect(imported.result.plan.scenarioB.config).toEqual({ startingEnergy: 125 })
     const migratedResult = await runExperiment(imported.result.plan)
     const explicitResult = await runExperiment({
       ...input,
-      baseConfig: { ...input.baseConfig, maturityAge: 0 },
+      baseConfig: { ...input.baseConfig, maturityAge: 0, patchQualityVariation: 0 },
     })
     expect(migratedResult).toEqual(explicitResult)
   })

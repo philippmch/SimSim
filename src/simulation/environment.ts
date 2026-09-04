@@ -1,6 +1,7 @@
 import type { Config,Environment,Food,World } from './types'
 import { clamp,distance,random } from './random'
 import {defaultConfig,MAX_FOOD} from './config'
+import {patchFoodEnergy,withPatchQualityBiases} from './patchQuality'
 import type {ResourcePlacementSpec} from './resourceDynamics'
 
 const valid=(x:number,y:number,env:Environment,margin=.012)=>x>margin&&x<1-margin&&y>margin&&y<1-margin&&!env.obstacles.some(o=>distance({x,y},o)<o.radius+margin)
@@ -19,6 +20,10 @@ export function createEnvironment(state:{rngState:number;nextId:number},cfg:Conf
       if(valid(x,y,env,.04)){env.patches.push({id:state.nextId++,x,y,stock:0,accumulator:0,spawnSequence:0});break}
     }
   }
+  // Quality is assigned after all patch identities exist so the centering and
+  // normalization are independent of placement order.  The helper is
+  // stateless; this does not consume or perturb the world's mutable RNG.
+  env.patches=withPatchQualityBiases(cfg.seed,env.patches)
   return env
 }
 
@@ -50,7 +55,12 @@ export function spawnFood(world:World,count:number,cfg:Config=world.config):Food
         y=patch.y+(random(world)+random(world)+random(world)-1.5)*spread
       }
       x=clamp(x,.055,.945);y=clamp(y,.055,.945)
-      if(valid(x,y,world.environment,.012)){const patch=nearestPatch(world,x,y);result.push({id:world.nextId++,x,y,patchId:patch?.id??null,energy:cfg.ecologyMode==='classic'?22:cfg.foodEnergy});break}
+      if(valid(x,y,world.environment,.012)){
+        const patch=nearestPatch(world,x,y)
+        const energy=cfg.ecologyMode==='classic'?22:patchFoodEnergy(cfg.foodEnergy,patch?.qualityBias,cfg.patchQualityVariation)
+        result.push({id:world.nextId++,x,y,patchId:patch?.id??null,energy})
+        break
+      }
     }
   }
   return result
@@ -64,4 +74,14 @@ export function syncPatchStocks(world:World){const counts=new Map<number,number>
 export function enforceAdvancedPatchCapacity(world:World){if(world.config.ecologyMode!=='energy-regrowth')return;const counts=new Map<number,number>(),kept:Food[]=[];for(const food of world.food){if(food.patchId===null)continue;const count=counts.get(food.patchId)??0;if(count>=world.config.patchCapacity||kept.length>=MAX_FOOD)continue;counts.set(food.patchId,count+1);kept.push(food)}world.food=kept;syncPatchStocks(world)}
 
 /** Materializes pure regrowth placements without mutable RNG; patch centers are a deterministic obstacle-safe fallback. */
-export function spawnRegrownFood(world:World,placements:readonly ResourcePlacementSpec[]):Food[]{const result:Food[]=[];for(const placement of placements){const patch=world.environment.patches.find(item=>item.id===placement.patchId);if(!patch)continue;const point=valid(placement.x,placement.y,world.environment,.012)?placement:{x:patch.x,y:patch.y};result.push({id:world.nextId++,x:point.x,y:point.y,patchId:patch.id,energy:world.config.foodEnergy})}return result}
+export function spawnRegrownFood(world:World,placements:readonly ResourcePlacementSpec[]):Food[]{
+  const result:Food[]=[]
+  for(const placement of placements){
+    const patch=world.environment.patches.find(item=>item.id===placement.patchId)
+    if(!patch)continue
+    const point=valid(placement.x,placement.y,world.environment,.012)?placement:{x:patch.x,y:patch.y}
+    const energy=world.config.ecologyMode==='classic'?22:patchFoodEnergy(world.config.foodEnergy,patch.qualityBias,world.config.patchQualityVariation)
+    result.push({id:world.nextId++,x:point.x,y:point.y,patchId:patch.id,energy})
+  }
+  return result
+}

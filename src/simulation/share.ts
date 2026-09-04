@@ -1,9 +1,10 @@
 import type {Config} from './types'
-import {CONFIG_VERSION,defaultConfig,migrateLegacyV4Config,sanitizeConfig,sanitizeLegacyConfig,validateExactConfig} from './config'
+import {CONFIG_VERSION,defaultConfig,migrateLegacyV4Config,migrateLegacyV5Config,sanitizeConfig,sanitizeLegacyConfig,validateExactConfig} from './config'
 
-export const STORAGE_KEY='evolution-field-lab:experiment:v5'
+export const STORAGE_KEY='evolution-field-lab:experiment:v6'
+export const LEGACY_V5_STORAGE_KEY='evolution-field-lab:experiment:v5'
 export const LEGACY_V4_STORAGE_KEY='evolution-field-lab:experiment:v4'
-/** Historical alias retained for consumers that used the v3 key before v5. */
+/** Historical alias retained for consumers that used the v3 key before later schema versions. */
 export const LEGACY_STORAGE_KEY='evolution-field-lab:experiment:v3'
 export const LEGACY_V3_STORAGE_KEY=LEGACY_STORAGE_KEY
 export const LEGACY_V2_STORAGE_KEY='evolution-field-lab:experiment:v2'
@@ -21,6 +22,7 @@ export function importExperiment(text:string):Config|null{
     if(record.version===2&&record.config&&typeof record.config==='object'&&!Array.isArray(record.config))return sanitizeLegacyConfig(record.config,true)
     if(record.version===3&&record.config&&typeof record.config==='object'&&!Array.isArray(record.config))return sanitizeLegacyConfig(record.config)
     if(record.version===4){const keys=Object.keys(record);if(keys.length!==2||!keys.includes('version')||!keys.includes('config'))return null;return migrateLegacyV4Config(record.config)}
+    if(record.version===5){const keys=Object.keys(record);if(keys.length!==2||!keys.includes('version')||!keys.includes('config'))return null;return migrateLegacyV5Config(record.config)}
     if(record.version===CONFIG_VERSION){const keys=Object.keys(record);if(keys.length!==2||!keys.includes('version')||!keys.includes('config'))return null;return validateExactConfig(record.config)}
     if('version'in record)return null
     const legacyKeys=['seed','initialPopulation','foodPerDay'];if(legacyKeys.every(key=>typeof record[key]==='number'))return sanitizeLegacyConfig(record)
@@ -31,6 +33,6 @@ export function encodeExperiment(config:Config){return encodeURIComponent(JSON.s
 export function decodeExperiment(value:string|null){if(!value||value.length>MAX_EXPERIMENT_QUERY)return null;try{return importExperiment(decodeURIComponent(value))}catch{return null}}
 export function configFromSearch(search:string){try{return decodeExperiment(new URLSearchParams(search).get('experiment'))}catch{return null}}
 export function loadInitialConfig(search:string,storage?:StorageLike|null){const fromUrl=configFromSearch(search);if(fromUrl)return fromUrl
-  try{for(const key of [STORAGE_KEY,LEGACY_V4_STORAGE_KEY,LEGACY_V3_STORAGE_KEY,LEGACY_V2_STORAGE_KEY]){const stored=storage?.getItem(key);if(stored){const parsed=importExperiment(stored);if(parsed)return parsed}}}catch{/* denied storage */}return{...defaultConfig}}
+  try{for(const key of [STORAGE_KEY,LEGACY_V5_STORAGE_KEY,LEGACY_V4_STORAGE_KEY,LEGACY_V3_STORAGE_KEY,LEGACY_V2_STORAGE_KEY]){const stored=storage?.getItem(key);if(stored){const parsed=importExperiment(stored);if(parsed)return parsed}}}catch{/* denied storage */}return{...defaultConfig}}
 export function persistExperiment(config:Config,storage?:StorageLike|null){const clean=sanitizeConfig(config);try{storage?.setItem(STORAGE_KEY,exportExperiment(clean))}catch{/* denied storage */}return clean}
 export function experimentUrl(config:Config,base:string){const url=new URL(base);url.searchParams.set('experiment',encodeExperiment(config));return url.toString()}

@@ -19,7 +19,7 @@ export interface Config {
   seasonAmplitude:number; seasonLength:number; environmentResponse:number; foodTrend:number
   founderPhysicalVariation:number;founderBehaviorVariation:number
   foodEnergy:number;preyEnergy:number;energyRetention:number;reproductionEnergyCost:number;offspringEnergy:number;maxAge:number;maturityAge:number
-  patchCapacity:number;foodRegrowthRate:number
+  patchCapacity:number;foodRegrowthRate:number;patchQualityVariation:number
   fieldOfView:number;detectionFalloff:number;reactionTime:number;obstacleOcclusion:boolean
   attackCost:number;handlingTime:number;contestSharpness:number;evasionWeight:number
 }
@@ -55,7 +55,7 @@ export interface DecisionSummary{
 export interface PerceptionCounts{total:number;detected:number;range:number;fov:number;occlusion:number;detection:number}
 export interface PerceptionDiagnostics{mode:PerceptionMode;reactionWindow:number;creatures:PerceptionCounts;food:PerceptionCounts}
 export interface Food {id:number;x:number;y:number;patchId:number|null;energy:number}
-export interface FoodPatch {id:number;x:number;y:number;stock:number;accumulator:number;spawnSequence:number}
+export interface FoodPatch {id:number;x:number;y:number;stock:number;accumulator:number;spawnSequence:number;/** Optional only for retained/hand-authored worlds from before patch-quality telemetry. */qualityBias?:number}
 export interface Obstacle {id:number;x:number;y:number;radius:number}
 export interface Environment {patches:FoodPatch[];obstacles:Obstacle[];foodBudget:number;targetFood:number}
 

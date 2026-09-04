@@ -39,6 +39,14 @@ describe('bounded world activity telemetry',()=>{
     expect(arriving.activity).toContainEqual(expect.objectContaining({kind:'reached-home',count:1,actorIds:[traveller.individualId]}))
   })
 
+  it('records the actual variable food reward in ecological activity',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0,obstacleCount:0,dayLength:60}),collector=world.creatures[0]
+    Object.assign(collector,{x:.5,y:.5,homeX:.05,homeY:.05,angle:0,sense:.4})
+    world.food=[{id:900,x:.5,y:.5,patchId:null,energy:27.4}]
+    tick(world,SIMULATION_TIMESTEP)
+    expect(world.activity.find(entry=>entry.kind==='food-collected')?.summary).toBe(`Individual ${collector.individualId} collected 27.4-energy food.`)
+  })
+
   it('records energy deaths and admitted attacks without changing RNG state',()=>{
     const doomed=classic(),creature=doomed.creatures[0],rngBefore=doomed.rngState
     creature.energy=0
