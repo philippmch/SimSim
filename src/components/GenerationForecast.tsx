@@ -119,7 +119,7 @@ export function formatGenerationForecastTransition(summary: GenerationForecastSu
 export function formatGenerationForecastFraming(status: ArenaPlaybackStatus): string {
   if (status === 'Awaiting settlement') return 'Not recorded until Finish generation'
   if (status === 'Extinct') return 'No cohort remains to evaluate'
-  return 'Counterfactual snapshot · not a prediction · updates as creatures act'
+  return 'Counterfactual, not a prediction · settling now gives active creatures no more time to find food or reach home · updates as they act'
 }
 
 export function formatGenerationForecastAriaLabel(summary: GenerationForecastSummary, status: ArenaPlaybackStatus = 'Running'): string {

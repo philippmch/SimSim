@@ -37,6 +37,16 @@ describe('generation forecast', () => {
     expect(summary.losses).toEqual({ hunted: 0, energy: 1, unfed: 0, late: 0, aged: 0 })
   })
 
+  it('updates a provisional missed-return loss when an active creature reaches home', () => {
+    const world = createWorld({ ...defaultConfig, initialPopulation: 1, foodPerDay: 0 })
+    const active = world.creatures[0]
+    Object.assign(active, { alive: true, home: false, energy: 100, age: 0 })
+    expect(summarizeGenerationForecast(world)).toMatchObject({ survivors: 0, losses: { late: 1 } })
+
+    active.home = true
+    expect(summarizeGenerationForecast(world)).toMatchObject({ survivors: 1, losses: { late: 0 } })
+  })
+
   it('partitions advanced survivors into mature, energy-ready immature, and at-or-below-cost parents', () => {
     const world = createWorld({ ...defaultConfig, initialPopulation: 4, foodPerDay: 0, energyRetention: .5, reproductionEnergyCost: 35, maturityAge: 2 })
     const [mature, immature, exactCost, dualConstraint] = world.creatures
@@ -105,9 +115,9 @@ describe('generation forecast', () => {
     expect(formatGenerationForecastTransition(summary)).toBe('Forecast transition · Generation 1 → 2')
     const ariaLabel = formatGenerationForecastAriaLabel(summary)
     expect(ariaLabel).toContain('Forecast transition · Generation 1 → 2')
-    expect(ariaLabel).toContain('Counterfactual snapshot · not a prediction · updates as creatures act')
+    expect(ariaLabel).toContain('settling now gives active creatures no more time to find food or reach home')
     expect(ariaLabel.match(/counterfactual/gi)).toHaveLength(1)
-    expect(ariaLabel.match(/updates as creatures act/gi)).toHaveLength(1)
+    expect(ariaLabel.match(/updates as they act/gi)).toHaveLength(1)
   })
 
   it('keeps singular, plural, zero, and journal loss labels readable', () => {
@@ -172,7 +182,8 @@ describe('generation forecast', () => {
       expect(markup).toContain('data-handoff-kind="forecast"')
       expect(markup).toContain('<strong>If generation ended now</strong>')
       expect(markup).toContain('Forecast transition · Generation 1 → 2')
-      expect(markup).toContain('Counterfactual snapshot · not a prediction · updates as creatures act')
+      expect(markup).toContain('Counterfactual, not a prediction')
+      expect(markup).toContain('active creatures no more time to find food or reach home')
       expect(markup).toContain(formatGenerationForecastEquation(summary))
       expect(markup).toContain(`aria-label="${formatGenerationForecastAriaLabel(summary, playbackStatus)}"`)
       expect(markup).not.toContain('aria-live')

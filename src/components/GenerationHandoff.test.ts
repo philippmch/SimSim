@@ -77,7 +77,7 @@ describe('generation handoff states', () => {
     expect(output).toContain('Current cohort · if settled now · no recorded result yet')
     expect(output.indexOf('data-handoff-kind="current"')).toBeLessThan(output.indexOf('data-handoff-kind="forecast"'))
     expect(output).toContain('Forecast transition · Generation 4 → 5')
-    expect(output).toContain('Counterfactual snapshot · not a prediction · updates as creatures act')
+    expect(output).toContain('settling now gives active creatures no more time to find food or reach home')
     expect(output).not.toContain('aria-live')
   })
 
