@@ -90,7 +90,7 @@ export function formatGenerationForecastBirths(summary: GenerationForecastSummar
     const capped = safeNonnegativeInteger(summary.cappedBirths) ?? 0
     const parentCount = (count: number, phrase: string) => `${count} ${phrase} ${count === 1 ? 'parent' : 'parents'}`
     const birthCount = (count: number, phrase: string) => `${count} ${phrase} ${count === 1 ? 'birth' : 'births'}`
-    const limited = `${energyLimited} ${energyLimited === 1 ? 'parent' : 'parents'} below reproduction cost`
+    const limited = `${energyLimited} ${energyLimited === 1 ? 'parent' : 'parents'} at or below reproduction cost`
     return `Reproduction: ${parentCount(eligible, 'mature + energy-eligible')} · ${parentCount(immature, 'energy-ready but immature')} · ${limited} · ${birthCount(admitted, 'admitted')} · ${birthCount(capped, 'capacity-capped')}.`
   }
   const parents = `${summary.eligibleParents} ${summary.eligibleParents === 1 ? 'eligible parent' : 'eligible parents'}`
@@ -127,7 +127,8 @@ export function formatGenerationForecastAriaLabel(summary: GenerationForecastSum
   const transition = formatGenerationForecastTransition(summary, status)
   const framing = formatGenerationForecastFraming(status)
   if (status === 'Extinct') return `${heading}. ${transition}. ${framing}.`
-  const details = `${formatGenerationForecastEquation(summary)}. Loss causes: ${formatGenerationForecastLosses(summary)}. ${formatGenerationForecastBirths(summary)}.`
+  const births = formatGenerationForecastBirths(summary)
+  const details = `${formatGenerationForecastEquation(summary)}. Loss causes: ${formatGenerationForecastLosses(summary)}. ${births}${/[.!?]$/.test(births) ? '' : '.'}`
   return `${heading}. ${transition}. ${framing}. ${details}`
 }
 

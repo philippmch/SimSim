@@ -3,6 +3,8 @@ import type { GenerationLedger } from '../simulation/types'
 import {
   formatSettlementAnnouncement,
   formatSettlementEquation,
+  formatSettlementLosses,
+  formatSettlementReproductionBreakdown,
   getSettlementGeneration,
   summarizeLatestSettlement,
   type SettlementReportSummary,
@@ -114,10 +116,14 @@ export function RecordedGenerationHandoff({ ledgers, onReviewGeneration, revealG
 
   const summary = latest.summary
   const equation = settlementDescription(summary)
+  const lossDescription = formatSettlementLosses(summary)
+  const reproductionDescription = formatSettlementReproductionBreakdown(summary)
   return <>
     <div ref={actualRef} data-handoff-kind="actual" style={actualLaneStyle}>
       <span style={labelStyle}><strong>Actual recorded result</strong><small>Generation {summary.generation} → {summary.nextGeneration} · recorded at settlement</small></span>
       <span style={{ ...detailStyle, color: 'var(--ink)' }}>{equation}</span>
+      <span data-handoff-detail="losses" style={detailStyle}>{lossDescription}</span>
+      <span data-handoff-detail="reproduction" style={detailStyle}>{reproductionDescription}</span>
       <span style={actionRowStyle}>
         <button type="button" className="settings-toggle" onClick={() => onReviewGeneration(summary.generation)} aria-label={`Review generation ${summary.generation}`}>Review generation {summary.generation}</button>
         <small style={detailStyle}>Actual result · not a counterfactual forecast</small>

@@ -37,7 +37,7 @@ describe('generation forecast', () => {
     expect(summary.losses).toEqual({ hunted: 0, energy: 1, unfed: 0, late: 0, aged: 0 })
   })
 
-  it('partitions advanced survivors into mature, energy-ready immature, and below-cost parents', () => {
+  it('partitions advanced survivors into mature, energy-ready immature, and at-or-below-cost parents', () => {
     const world = createWorld({ ...defaultConfig, initialPopulation: 4, foodPerDay: 0, energyRetention: .5, reproductionEnergyCost: 35, maturityAge: 2 })
     const [mature, immature, exactCost, dualConstraint] = world.creatures
     Object.assign(mature, { alive: true, home: true, age: 2, energy: 100 })
@@ -49,7 +49,7 @@ describe('generation forecast', () => {
     const summary = summarizeGenerationForecast(world)
 
     expect(summary).toMatchObject({ evaluatedCohort: 4, survivors: 4, eligibleParents: 1, immatureParents: 1, energyLimitedParents: 2, admittedBirths: 1, cappedBirths: 0, projectedNextPopulation: 5 })
-    expect(formatGenerationForecastBirths(summary)).toBe('Reproduction: 1 mature + energy-eligible parent · 1 energy-ready but immature parent · 2 parents below reproduction cost · 1 admitted birth · 0 capacity-capped births.')
+    expect(formatGenerationForecastBirths(summary)).toBe('Reproduction: 1 mature + energy-eligible parent · 1 energy-ready but immature parent · 2 parents at or below reproduction cost · 1 admitted birth · 0 capacity-capped births.')
     expect(world).toEqual(before)
   })
 
@@ -91,7 +91,7 @@ describe('generation forecast', () => {
     const summary = summarizeGenerationForecast(world)
 
     expect(summary).toMatchObject({ evaluatedCohort: MAX_POPULATION, survivors: MAX_POPULATION - 2, eligibleParents: MAX_POPULATION - 2, admittedBirths: 2, cappedBirths: MAX_POPULATION - 4, projectedNextPopulation: MAX_POPULATION })
-    expect(formatGenerationForecastBirths(summary)).toBe('Reproduction: 118 mature + energy-eligible parents · 0 energy-ready but immature parents · 0 parents below reproduction cost · 2 admitted births · 116 capacity-capped births.')
+    expect(formatGenerationForecastBirths(summary)).toBe('Reproduction: 118 mature + energy-eligible parents · 0 energy-ready but immature parents · 0 parents at or below reproduction cost · 2 admitted births · 116 capacity-capped births.')
   })
 
   it('formats the equation, nonzero losses, and counterfactual wording', () => {
@@ -143,11 +143,14 @@ describe('generation forecast', () => {
       cappedBirths: 0,
       losses: { hunted: 0, energy: 0, unfed: 0, late: 0, aged: 0 },
     }
-    expect(formatGenerationForecastBirths(zero)).toBe('Reproduction: 0 mature + energy-eligible parents · 0 energy-ready but immature parents · 0 parents below reproduction cost · 0 admitted births · 0 capacity-capped births.')
+    expect(formatGenerationForecastBirths(zero)).toBe('Reproduction: 0 mature + energy-eligible parents · 0 energy-ready but immature parents · 0 parents at or below reproduction cost · 0 admitted births · 0 capacity-capped births.')
 
     const singular = { ...zero, survivors: 3, eligibleParents: 1, immatureParents: 1, energyLimitedParents: 1, admittedBirths: 1, cappedBirths: 1 }
-    expect(formatGenerationForecastBirths(singular)).toBe('Reproduction: 1 mature + energy-eligible parent · 1 energy-ready but immature parent · 1 parent below reproduction cost · 1 admitted birth · 1 capacity-capped birth.')
+    expect(formatGenerationForecastBirths(singular)).toBe('Reproduction: 1 mature + energy-eligible parent · 1 energy-ready but immature parent · 1 parent at or below reproduction cost · 1 admitted birth · 1 capacity-capped birth.')
     expect(formatGenerationForecastBirths(singular)).not.toMatch(/NaN|undefined|Infinity/)
+    const ariaLabel = formatGenerationForecastAriaLabel(singular)
+    expect(ariaLabel).toContain(formatGenerationForecastBirths(singular))
+    expect(ariaLabel).not.toContain('birth..')
   })
 
   it('is deterministic and leaves the world untouched', () => {

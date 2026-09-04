@@ -146,12 +146,43 @@ describe('generation handoff states', () => {
     expect(output).toContain('Actual recorded result')
     expect(output).toContain('Generation 4 → 5 · recorded at settlement')
     expect(output).toContain('3 creatures evaluated → 2 survived + 1 admitted birth = 3 creatures in the next population')
+    expect(output).toContain('Total losses: 1 · Hunted: 1')
+    expect(output).not.toContain('Losses recorded: Total losses')
+    expect(output).toContain('Reproduction: 1 eligible parent · 1 admitted birth · 0 capacity-capped births')
+    expect(output).not.toContain('mature + energy-eligible')
     expect(output).toContain('Review generation 4')
     expect(output).toContain('Actual result · not a counterfactual forecast')
     expect(output).toContain('role="status" aria-live="polite" aria-atomic="true"')
     expect(output).toContain('Recorded settlement, Generation 4 → 5 (actual result, not a counterfactual forecast)')
     expect(output.match(/aria-live="polite"/g)).toHaveLength(1)
     expect(review).not.toHaveBeenCalled()
+  })
+
+  it('shows the full reconciled maturity funnel for advanced records, including zero and nonzero waits', () => {
+    const nonzero = recordedMarkup([makeLedger({
+      startPopulation: 5,
+      outcomes: { survived: 4, hunted: 1, energy: 0, unfed: 0, late: 0, aged: 0 },
+      birthsEligible: 3,
+      birthsAdmitted: 2,
+      birthsCapped: 1,
+      birthsImmature: 1,
+    })])
+    expect(nonzero).toContain('Reproduction: survivors · 3 mature + energy-eligible · 1 waiting for maturity · 0 at or below energy cost → births · 2 admitted · 1 capped')
+
+    const zero = recordedMarkup([makeLedger({ birthsImmature: 0 })])
+    expect(zero).toContain('Reproduction: survivors · 1 mature + energy-eligible · 0 waiting for maturity · 1 at or below energy cost → births · 1 admitted · 0 capped')
+    expect(`${nonzero}${zero}`).not.toMatch(/NaN|Infinity|undefined/)
+  })
+
+  it('keeps malformed or inconsistent optional reproduction telemetry explicitly unavailable', () => {
+    for (const birthsImmature of [null, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, '1']) {
+      const output = recordedMarkup([makeLedger({ birthsImmature })])
+      expect(output).toContain('Reproduction breakdown unavailable for this record')
+      expect(output).not.toMatch(/NaN|Infinity|undefined/)
+    }
+    const inconsistent = recordedMarkup([makeLedger({ birthsImmature: 2 })])
+    expect(inconsistent).toContain('Reproduction breakdown unavailable for this record')
+    expect(inconsistent.match(/aria-live="polite"/g)).toHaveLength(1)
   })
 
   it('keeps singular and zero settlement wording truthful through shared formatters', () => {

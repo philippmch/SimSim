@@ -41,6 +41,9 @@ export interface SettlementMaturityBreakdown {
   belowThreshold: number
 }
 
+/** Whether the retained record can distinguish maturity from older eligibility telemetry. */
+export type SettlementMaturityTelemetry = 'available' | 'missing' | 'invalid'
+
 export interface SettlementReportSummary {
   generation: number
   nextGeneration: number
@@ -53,6 +56,8 @@ export interface SettlementReportSummary {
   totalLosses: number | null
   cappedBirths: number | null
   maturity: SettlementMaturityBreakdown | null
+  /** Optional so callers constructing an older summary remain source-compatible. */
+  maturityTelemetry?: SettlementMaturityTelemetry
 }
 
 interface RecordLike {
@@ -70,6 +75,24 @@ function read(value: unknown, key: string): unknown {
     return source[key]
   } catch {
     return undefined
+  }
+}
+
+type OwnFieldRead = { state: 'missing' } | { state: 'present'; value: unknown } | { state: 'unreadable' }
+
+/** Distinguish an absent legacy field from an explicit or unreadable value, and invoke a getter at most once. */
+function readOwnField(value: unknown, key: string): OwnFieldRead {
+  const source = record(value)
+  if (!source) return { state: 'unreadable' }
+  try {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) return { state: 'missing' }
+  } catch {
+    return { state: 'unreadable' }
+  }
+  try {
+    return { state: 'present', value: source[key] }
+  } catch {
+    return { state: 'unreadable' }
   }
 }
 
@@ -111,9 +134,8 @@ function readSettlementBirthCounts(ledger: unknown, core: SettlementCore): { eli
  * particular, do not turn a missing birthsImmature field into zero: old
  * ledgers did not record this distinction.
  */
-function deriveSettlementMaturity(ledger: unknown, core: SettlementCore, births: SettlementBirthCounts | null): SettlementMaturityBreakdown | null {
+function deriveSettlementMaturity(immature: unknown, core: SettlementCore, births: SettlementBirthCounts | null): SettlementMaturityBreakdown | null {
   if (!births) return null
-  const immature = read(ledger, 'birthsImmature')
   if (!isFiniteNonnegativeInteger(immature)) return null
   const remaining = core.survivors - births.eligible - immature
   if (!isFiniteNonnegativeInteger(remaining)) return null
@@ -182,13 +204,18 @@ export function summarizeSettlementReport(ledger: GenerationLedger | unknown): S
     && core.survivors + totalLosses === core.evaluatedCohort
 
   const birthCounts = readSettlementBirthCounts(ledger, core)
+  const maturityField = readOwnField(ledger, 'birthsImmature')
+  const maturity = maturityField.state === 'present'
+    ? deriveSettlementMaturity(maturityField.value, core, birthCounts.counts)
+    : null
   return {
     ...core,
     eligibleParents: birthCounts.eligible,
     losses,
     totalLosses: reconciles ? totalLosses : null,
     cappedBirths: birthCounts.counts?.capped ?? null,
-    maturity: deriveSettlementMaturity(ledger, core, birthCounts.counts),
+    maturity,
+    maturityTelemetry: maturityField.state === 'missing' ? 'missing' : maturity ? 'available' : 'invalid',
   }
 }
 
@@ -261,8 +288,28 @@ function formatSettlementCount(count: number, singular: string, plural = `${sing
   return `${count} ${count === 1 ? singular : plural}`
 }
 
-function readSettlementMaturity(summary: unknown): SettlementMaturityBreakdown | null {
-  const maturity = read(summary, 'maturity')
+interface SettlementReproductionBreakdown {
+  eligible: number
+  admitted: number
+  capped: number
+}
+
+function readSettlementReproductionBreakdown(summary: unknown): SettlementReproductionBreakdown | null {
+  const eligible = read(summary, 'eligibleParents')
+  const admitted = read(summary, 'admittedBirths')
+  const capped = read(summary, 'cappedBirths')
+  const survivors = read(summary, 'survivors')
+  if (!isFiniteNonnegativeInteger(eligible)
+    || !isFiniteNonnegativeInteger(admitted)
+    || !isFiniteNonnegativeInteger(capped)
+    || !isFiniteNonnegativeInteger(survivors)
+    || admitted > eligible
+    || eligible > survivors
+    || eligible !== admitted + capped) return null
+  return { eligible, admitted, capped }
+}
+
+function readSettlementMaturityValue(summary: unknown, maturity: unknown): SettlementMaturityBreakdown | null {
   const matureEligible = read(maturity, 'matureEligible')
   const energyReadyImmature = read(maturity, 'energyReadyImmature')
   const belowThreshold = read(maturity, 'belowThreshold')
@@ -288,13 +335,66 @@ function readSettlementMaturity(summary: unknown): SettlementMaturityBreakdown |
   return { matureEligible, energyReadyImmature, belowThreshold }
 }
 
+type SettlementMaturityRead =
+  | { state: 'available'; maturity: SettlementMaturityBreakdown }
+  | { state: 'missing' }
+  | { state: 'invalid' }
+
+/** Apply the same maturity-provenance rules to visible and announced output. */
+function readSettlementMaturity(summary: unknown): SettlementMaturityRead {
+  const telemetryField = readOwnField(summary, 'maturityTelemetry')
+  if (telemetryField.state === 'unreadable') return { state: 'invalid' }
+  const telemetry = telemetryField.state === 'missing' ? undefined : telemetryField.value
+  if (telemetry !== undefined && telemetry !== 'available' && telemetry !== 'missing' && telemetry !== 'invalid') return { state: 'invalid' }
+
+  const maturityField = readOwnField(summary, 'maturity')
+  if (maturityField.state === 'unreadable') return { state: 'invalid' }
+  const maturityAbsent = maturityField.state === 'missing'
+    || (maturityField.state === 'present' && (maturityField.value === null || maturityField.value === undefined))
+  const maturity = maturityField.state === 'present' ? readSettlementMaturityValue(summary, maturityField.value) : null
+
+  if (telemetry === 'invalid') return { state: 'invalid' }
+  if (telemetry === 'available') return maturity ? { state: 'available', maturity } : { state: 'invalid' }
+  if (telemetry === 'missing') return maturityAbsent ? { state: 'missing' } : { state: 'invalid' }
+  if (maturity) return { state: 'available', maturity }
+  return maturityAbsent ? { state: 'missing' } : { state: 'invalid' }
+}
+
+function formatSettlementMaturityBreakdownValue(summary: SettlementReportSummary, maturity: SettlementMaturityBreakdown): string {
+  const admittedBirths = read(summary, 'admittedBirths') as number
+  const cappedBirths = read(summary, 'cappedBirths') as number
+  return `Reproduction: ${formatSettlementCount(maturity.matureEligible, 'mature + energy-eligible parent', 'mature + energy-eligible parents')} · ${formatSettlementCount(maturity.energyReadyImmature, 'energy-ready but immature survivor', 'energy-ready but immature survivors')} · ${formatSettlementCount(maturity.belowThreshold, 'survivor at or below reproduction energy cost', 'survivors at or below reproduction energy cost')} · ${formatSettlementCount(admittedBirths, 'admitted birth', 'admitted births')} · ${formatSettlementCount(cappedBirths, 'capacity-capped birth', 'capacity-capped births')}`
+}
+
 /** Format the complete, reconciled reproduction funnel for a recorded result. */
 export function formatSettlementMaturityBreakdown(summary: SettlementReportSummary): string {
   const maturity = readSettlementMaturity(summary)
-  if (!maturity) return SETTLEMENT_MATURITY_UNAVAILABLE
-  const admittedBirths = read(summary, 'admittedBirths') as number
-  const cappedBirths = read(summary, 'cappedBirths') as number
-  return `Reproduction: ${formatSettlementCount(maturity.matureEligible, 'mature + energy-eligible parent', 'mature + energy-eligible parents')} · ${formatSettlementCount(maturity.energyReadyImmature, 'energy-ready but immature survivor', 'energy-ready but immature survivors')} · ${formatSettlementCount(maturity.belowThreshold, 'survivor below reproduction threshold', 'survivors below reproduction threshold')} · ${formatSettlementCount(admittedBirths, 'admitted birth', 'admitted births')} · ${formatSettlementCount(cappedBirths, 'capacity-capped birth', 'capacity-capped births')}`
+  return maturity.state === 'available'
+    ? formatSettlementMaturityBreakdownValue(summary, maturity.maturity)
+    : SETTLEMENT_MATURITY_UNAVAILABLE
+}
+
+export const SETTLEMENT_REPRODUCTION_UNAVAILABLE = 'Reproduction breakdown unavailable for this record'
+
+function formatCompactSettlementMaturity(summary: SettlementReportSummary, maturity: SettlementMaturityBreakdown): string {
+  const births = readSettlementReproductionBreakdown(summary)
+  if (!births) return SETTLEMENT_REPRODUCTION_UNAVAILABLE
+  return `Reproduction: survivors · ${maturity.matureEligible} mature + energy-eligible · ${maturity.energyReadyImmature} waiting for maturity · ${maturity.belowThreshold} at or below energy cost → births · ${births.admitted} admitted · ${births.capped} capped`
+}
+
+/**
+ * Format the recorded reproduction funnel without inferring maturity for old
+ * ledgers.  A present but malformed maturity counter is not downgraded to the
+ * legacy view, because that could hide a contradictory advanced record.
+ */
+export function formatSettlementReproductionBreakdown(summary: SettlementReportSummary): string {
+  const maturity = readSettlementMaturity(summary)
+  if (maturity.state === 'invalid') return SETTLEMENT_REPRODUCTION_UNAVAILABLE
+  if (maturity.state === 'available') return formatCompactSettlementMaturity(summary, maturity.maturity)
+
+  const legacy = readSettlementReproductionBreakdown(summary)
+  if (!legacy) return SETTLEMENT_REPRODUCTION_UNAVAILABLE
+  return `Reproduction: ${formatSettlementCount(legacy.eligible, 'eligible parent', 'eligible parents')} · ${formatSettlementCount(legacy.admitted, 'admitted birth', 'admitted births')} · ${formatSettlementCount(legacy.capped, 'capacity-capped birth', 'capacity-capped births')}`
 }
 
 export function formatSettlementReportAriaLabel(summary: SettlementReportSummary): string {
@@ -314,12 +414,12 @@ export function formatSettlementAnnouncement(summary: SettlementReportSummary): 
   if (generation === null || !isValidSettlementNextGeneration(nextGeneration) || nextGeneration !== generation + 1 || equation === 'Settlement equation unavailable') return SETTLEMENT_REPORT_UNAVAILABLE
   const exactNextPopulation = read(summary, 'exactNextPopulation')
   if (!isFiniteNonnegativeInteger(exactNextPopulation)) return SETTLEMENT_REPORT_UNAVAILABLE
-  const capDescription = formatSettlementBirthCap(summary)
-  const cap = capDescription === 'No births capped' ? '' : ` ${capDescription}.`
   const maturity = readSettlementMaturity(summary)
-  const maturityNote = maturity && maturity.energyReadyImmature > 0
-    ? ` ${formatSettlementMaturityBreakdown(summary)}.`
+  const maturityNote = maturity.state === 'available' && maturity.maturity.energyReadyImmature > 0
+    ? ` ${formatSettlementMaturityBreakdownValue(summary, maturity.maturity)}.`
     : ''
+  const capDescription = formatSettlementBirthCap(summary)
+  const cap = maturityNote || capDescription === 'No births capped' ? '' : ` ${capDescription}.`
   return `Recorded settlement, Generation ${generation} → ${nextGeneration} (actual result, not a counterfactual forecast): ${equation}. ${formatSettlementLosses(summary)}.${cap}${maturityNote}`
 }
 
