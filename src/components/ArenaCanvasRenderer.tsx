@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react'
 import type React from 'react'
-import { MAX_POPULATION } from '../simulation/config'
-import type { World } from '../simulation/types'
+import { MAX_FOUNDER_MIGRATION_BATCH, MAX_POPULATION } from '../simulation/config'
+import { SIMULATION_TIMESTEP } from '../simulation/engine'
+import type { World, WorldActivityKind } from '../simulation/types'
 import {
   CREATURE_STATE_METADATA,
   arenaCreatureAlpha,
@@ -166,6 +167,224 @@ export function listenToArenaColorScheme(
   return () => {}
 }
 
+const ARENA_ACTIVITY_KINDS = ['food-collected', 'attack-success', 'attack-failure', 'energy-death', 'reached-home', 'natural-regrowth', 'intervention', 'generation-settlement'] as const satisfies readonly WorldActivityKind[]
+const ARENA_ACTIVITY_KIND_SET = new Set<string>(ARENA_ACTIVITY_KINDS)
+const ARENA_ACTIVITY_AGGREGATE_KINDS = new Set<WorldActivityKind>(['natural-regrowth', 'generation-settlement'])
+const ARENA_ACTIVITY_SPOTLIGHT_KEY_COPY = 'Latest actor halo marks each actor’s current arena position; it does not show the historical event location.'
+
+export type ArenaActivitySpotlightRole = 'attacker' | 'prey' | 'collector' | 'returning individual' | 'involved individual'
+
+export interface ArenaActivitySpotlightActor {
+  individualId: number
+  role: ArenaActivitySpotlightRole
+  roleLabel: string
+  x: number
+  y: number
+  size: number
+}
+
+export interface ArenaActivitySpotlight {
+  sequence: number
+  generation: number
+  kind: WorldActivityKind
+  tick: number
+  age: number
+  alpha: number
+  actors: ArenaActivitySpotlightActor[]
+}
+
+type ArenaRecord = Record<string, unknown>
+
+function arenaRecord(value: unknown): ArenaRecord | null {
+  if (value === null || typeof value !== 'object') return null
+  try {
+    return Array.isArray(value) ? null : value as ArenaRecord
+  } catch {
+    return null
+  }
+}
+
+function arenaField(value: unknown, key: string): unknown {
+  const source = arenaRecord(value)
+  if (!source) return undefined
+  try {
+    return source[key]
+  } catch {
+    return undefined
+  }
+}
+
+function arenaSafeInteger(value: unknown, minimum = 0): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum ? value : null
+}
+
+function arenaFinite(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function arenaSafeGeneration(value: unknown): number | null {
+  return arenaSafeInteger(value, 1)
+}
+
+function arenaActivityKind(value: unknown): value is WorldActivityKind {
+  return typeof value === 'string' && ARENA_ACTIVITY_KIND_SET.has(value)
+}
+
+function arenaSafeArray(value: unknown): readonly unknown[] {
+  try {
+    return Array.isArray(value) ? value : []
+  } catch {
+    return []
+  }
+}
+
+function arenaArrayLength(value: readonly unknown[]): number {
+  try {
+    return Number.isSafeInteger(value.length) && value.length >= 0 ? value.length : 0
+  } catch {
+    return 0
+  }
+}
+
+function arenaActorRoleLabel(role: ArenaActivitySpotlightRole): string {
+  if (role === 'attacker') return 'Attacker'
+  if (role === 'prey') return 'Prey'
+  if (role === 'collector') return 'Collector'
+  if (role === 'returning individual') return 'Returning individual'
+  return 'Involved individual'
+}
+
+function arenaOrderedActorRefs(entry: unknown, kind: WorldActivityKind): { individualId: number; role: ArenaActivitySpotlightRole }[] {
+  const refs: { individualId: number; role: ArenaActivitySpotlightRole }[] = []
+  const seen = new Set<number>()
+  const append = (value: unknown, role: ArenaActivitySpotlightRole) => {
+    const individualId = arenaSafeInteger(value, 1)
+    if (individualId === null || seen.has(individualId)) return
+    seen.add(individualId)
+    refs.push({ individualId, role })
+  }
+  if (kind === 'attack-success' || kind === 'attack-failure') {
+    append(arenaField(entry, 'attackerId'), 'attacker')
+    append(arenaField(entry, 'preyId'), 'prey')
+  }
+  const remainingRole: ArenaActivitySpotlightRole = kind === 'food-collected'
+    ? 'collector'
+    : kind === 'reached-home'
+      ? 'returning individual'
+      : 'involved individual'
+  let genericCount = 0
+  const actorIds = arenaSafeArray(arenaField(entry, 'actorIds'))
+  for (let index = 0; index < arenaArrayLength(actorIds); index++) {
+    let value: unknown
+    try {
+      value = actorIds[index]
+    } catch {
+      continue
+    }
+    const individualId = arenaSafeInteger(value, 1)
+    if (individualId === null || seen.has(individualId)) continue
+    append(individualId, genericCount === 0 ? remainingRole : 'involved individual')
+    genericCount++
+  }
+  return refs
+}
+
+/** Deterministic retention window for the actor halo; a 120-tick floor keeps it visible at faster playback. */
+export function arenaActivitySpotlightWindowTicks(reactionTime: unknown): number {
+  const duration = arenaFinite(reactionTime)
+  if (duration === null || duration < 0) return 120
+  const supportedDuration = Math.min(5, duration)
+  const reactionTicks = Math.ceil(supportedDuration / SIMULATION_TIMESTEP)
+  if (!Number.isSafeInteger(reactionTicks) || reactionTicks < 0) return Number.MAX_SAFE_INTEGER
+  return Math.max(120, Math.min(Number.MAX_SAFE_INTEGER, reactionTicks + 2))
+}
+
+/** Fade only from retained event age, never from wall-clock time or an animation loop. */
+export function arenaActivitySpotlightAlpha(age: unknown, windowTicks: unknown): number {
+  const currentAge = arenaFinite(age)
+  const window = arenaFinite(windowTicks)
+  if (currentAge === null || window === null || currentAge < 0 || window <= 0) return 0
+  const ratio = Math.max(0, Math.min(1, currentAge / window))
+  return Number((1 - ratio * .66).toFixed(3))
+}
+
+/**
+ * Find the newest eligible actor-level activity record and resolve its actors
+ * against the live cohort.  Every field is treated as untrusted so retained
+ * legacy snapshots cannot make the renderer throw or point at a stale actor.
+ */
+export function resolveArenaActivitySpotlight(world: unknown): ArenaActivitySpotlight | null {
+  const generation = arenaSafeGeneration(arenaField(world, 'generation'))
+  const currentTick = arenaSafeInteger(arenaField(world, 'tickIndex'), 0)
+  const creatures = arenaSafeArray(arenaField(world, 'creatures'))
+  if (generation === null || currentTick === null) return null
+
+  const currentActors = new Map<number, { x: number; y: number; size: number }>()
+  for (let index = 0; index < arenaArrayLength(creatures); index++) {
+    let creature: unknown
+    try {
+      creature = creatures[index]
+    } catch {
+      continue
+    }
+    const individualId = arenaSafeInteger(arenaField(creature, 'individualId'), 1)
+    const x = arenaFinite(arenaField(creature, 'x'))
+    const y = arenaFinite(arenaField(creature, 'y'))
+    if (individualId === null || arenaField(creature, 'alive') !== true || x === null || y === null || x < 0 || x > 1 || y < 0 || y > 1 || currentActors.has(individualId)) continue
+    const size = arenaFinite(arenaField(creature, 'size'))
+    currentActors.set(individualId, { x, y, size: size !== null && size > 0 ? Math.max(.3, Math.min(2.8, size)) : 1 })
+  }
+  if (!currentActors.size) return null
+
+  const windowTicks = arenaActivitySpotlightWindowTicks(arenaField(arenaField(world, 'config'), 'reactionTime'))
+  const activity = arenaSafeArray(arenaField(world, 'activity'))
+  let best: ArenaActivitySpotlight | null = null
+  let bestSourceIndex = -1
+  for (let sourceIndex = 0; sourceIndex < arenaArrayLength(activity); sourceIndex++) {
+    let entry: unknown
+    try {
+      entry = activity[sourceIndex]
+    } catch {
+      continue
+    }
+    const rawSequence = arenaField(entry, 'sequence')
+    const sequence = rawSequence === undefined ? sourceIndex + 1 : arenaSafeInteger(rawSequence, 1)
+    const eventGeneration = arenaSafeGeneration(arenaField(entry, 'generation'))
+    const tick = arenaSafeInteger(arenaField(entry, 'tick'), 0)
+    const kind = arenaField(entry, 'kind')
+    if (sequence === null || eventGeneration === null || eventGeneration !== generation || tick === null || tick > currentTick || !arenaActivityKind(kind) || ARENA_ACTIVITY_AGGREGATE_KINDS.has(kind)) continue
+    const age = currentTick - tick
+    if (age > windowTicks) continue
+    const refs = arenaOrderedActorRefs(entry, kind)
+    const actors: ArenaActivitySpotlightActor[] = []
+    for (const ref of refs) {
+      const current = currentActors.get(ref.individualId)
+      if (!current) continue
+      actors.push({ ...ref, roleLabel: arenaActorRoleLabel(ref.role), ...current })
+    }
+    const cappedActors = actors.slice(0, MAX_FOUNDER_MIGRATION_BATCH)
+    if (!cappedActors.length) continue
+    const candidate: ArenaActivitySpotlight = { sequence, generation, kind, tick, age, alpha: arenaActivitySpotlightAlpha(age, windowTicks), actors: cappedActors }
+    if (best === null || sequence > best.sequence || (sequence === best.sequence && sourceIndex > bestSourceIndex)) {
+      best = candidate
+      bestSourceIndex = sourceIndex
+    }
+  }
+  return best
+}
+
+/** Canonical wording distinguishes the live actor position from the retained event location. */
+export function formatArenaActivitySpotlightDescription(spotlight: ArenaActivitySpotlight): string {
+  const actors = spotlight.actors.map(actor => `Individual ${actor.individualId} (${actor.roleLabel.toLowerCase()})`).join(', ')
+  const position = spotlight.actors.length === 1 ? 'position' : 'positions'
+  return `Latest actor halo marks ${actors} at their current arena ${position}; it does not show the historical event location.`
+}
+
+export function ArenaActivitySpotlightKey({ world }: { world: World }): React.ReactElement | null {
+  if (!resolveArenaActivitySpotlight(world)) return null
+  return <strong data-arena-activity-spotlight-key="true">{ARENA_ACTIVITY_SPOTLIGHT_KEY_COPY}</strong>
+}
+
 /** Color-scheme and canvas lifecycle helpers remain in the renderer chunk. */
 function readArenaDarkMode(): boolean {
   return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
@@ -192,6 +411,49 @@ function drawHeldPathEndpoint(
     ctx.beginPath();ctx.moveTo(x,y-radius);ctx.lineTo(x+radius,y);ctx.lineTo(x,y+radius);ctx.lineTo(x-radius,y);ctx.closePath();ctx.globalAlpha=.22;ctx.fill();ctx.globalAlpha=.82;ctx.stroke()
   }
   ctx.restore()
+}
+
+function drawArenaActivitySpotlight(
+  ctx: CanvasRenderingContext2D,
+  spotlight: ArenaActivitySpotlight,
+  width: number,
+  height: number,
+  sx: (value: number) => number,
+  sy: (value: number) => number,
+) {
+  const extent = Math.min(width, height)
+  for (const actor of spotlight.actors) {
+    if (![actor.x, actor.y, actor.size].every(Number.isFinite)) continue
+    const base = Math.max(7, extent * .017 * actor.size)
+    const bodyHeight = base * 1.55
+    const x = sx(actor.x)
+    const y = sy(actor.y) - bodyHeight * .35
+    const radius = Math.max(base * 2.15, 15)
+    if (![x, y, radius].every(Number.isFinite)) continue
+    ctx.save()
+    ctx.globalAlpha = spotlight.alpha
+    ctx.lineCap = 'round'
+    ctx.setLineDash([8, 5])
+    ctx.strokeStyle = 'rgba(3, 17, 29, .96)'
+    ctx.lineWidth = 6
+    ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.stroke()
+    ctx.strokeStyle = '#22d3ee'
+    ctx.lineWidth = 2.4
+    ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.stroke()
+    ctx.setLineDash([])
+    for (let index = 0; index < 4; index++) {
+      const angle = index * Math.PI / 2
+      const inner = radius + 3
+      const outer = radius + Math.max(7, base * .55)
+      ctx.strokeStyle = 'rgba(3, 17, 29, .96)'
+      ctx.lineWidth = 4.5
+      ctx.beginPath(); ctx.moveTo(x + Math.cos(angle) * inner, y + Math.sin(angle) * inner); ctx.lineTo(x + Math.cos(angle) * outer, y + Math.sin(angle) * outer); ctx.stroke()
+      ctx.strokeStyle = '#22d3ee'
+      ctx.lineWidth = 1.8
+      ctx.beginPath(); ctx.moveTo(x + Math.cos(angle) * inner, y + Math.sin(angle) * inner); ctx.lineTo(x + Math.cos(angle) * outer, y + Math.sin(angle) * outer); ctx.stroke()
+    }
+    ctx.restore()
+  }
 }
 
 function arenaQualityColor(multiplier: number, darkMode: boolean): string {
@@ -381,6 +643,7 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
   const drawRef = useRef<() => void>(() => {})
   const darkModeRef = useRef<boolean | null>(null)
   if (darkModeRef.current === null) darkModeRef.current = readArenaDarkMode()
+  const activitySpotlight = resolveArenaActivitySpotlight(world)
   useEffect(() => {
     const canvas = ref.current
     if (!canvas) return
@@ -490,6 +753,7 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
         ctx.restore()
         ctx.restore()
       }
+      if (activitySpotlight) drawArenaActivitySpotlight(ctx, activitySpotlight, w, h, sx, sy)
       const pct = Math.min(1, world.dayTime / world.config.dayLength)
       ctx.fillStyle = palette.progressTrack; ctx.fillRect(pad, pad - 9, w - pad * 2, 3)
       ctx.fillStyle = palette.progressFill; ctx.fillRect(pad, pad - 9, (w - pad * 2) * pct, 3)
@@ -529,7 +793,8 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
   const patchSelectionDescription = selectedPatchId !== null && selectedPatchOrdinal !== null
     ? `Resource patch ${selectedPatchOrdinal} is selected for inspection; its live food, capacity, energy, and regrowth details appear below the arena.`
     : ''
-  const accessibleDescription = `${accessibleBaseDescription} ${patchSelectionDescription} The combined selector includes living creatures and resource patches.`
+  const activitySpotlightDescription = activitySpotlight ? formatArenaActivitySpotlightDescription(activitySpotlight) : ''
+  const accessibleDescription = `${accessibleBaseDescription} ${patchSelectionDescription}${activitySpotlightDescription ? ` ${activitySpotlightDescription}` : ''} The combined selector includes living creatures and resource patches.`
   const patchOptions = sortArenaPatches(world.environment.patches).map((patch, index) => {
     const ordinal = index + 1
     const currentFood = world.food.filter(food => food.patchId === patch.id).length
@@ -563,7 +828,7 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
     }
     dispatchArenaInspectionHit(null, onSelect, onSelectPatch)
   }
-  return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={accessibleDescription}>
+  return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={accessibleDescription} data-arena-activity-spotlight={activitySpotlight ? 'true' : undefined} data-arena-activity-spotlight-sequence={activitySpotlight?.sequence} data-arena-activity-spotlight-kind={activitySpotlight?.kind} data-arena-activity-spotlight-tick={activitySpotlight?.tick} data-arena-activity-spotlight-age={activitySpotlight?.age} data-arena-activity-spotlight-actors={activitySpotlight?.actors.map(actor => actor.individualId).join(',')}>
     Natural selection simulation arena. Live counts are available in the statistics region.
   </canvas><label className="creature-picker" htmlFor="arena-creature-picker">Inspect <select id="arena-creature-picker" aria-label="Inspect creatures or resource patches" aria-describedby="arena-creature-picker-help" value={selectedValue} onChange={e => selectInspection(e.target.value)} style={{ background: 'var(--paper)', color: 'var(--ink)', colorScheme: 'light dark', minHeight: 32, touchAction: 'manipulation' }}><option value="">Nothing selected</option><optgroup label="Creatures">{livingCreatures.slice().sort((a, b) => a.individualId - b.individualId).map(c => <option key={`creature:${c.individualId}`} value={`creature:${c.individualId}`}>Individual {c.individualId}, lineage {c.lineageId}, {CREATURE_STATE_METADATA[c.home ? 'safe' : c.mode].label}</option>)}</optgroup>{patchOptions.length > 0 && <optgroup label="Resource patches">{patchOptions.map(({ patch, ordinal, currentFood, quality }) => <option key={`patch:${ordinal}`} value={`patch:${ordinal}`}>Patch {ordinal} · {quality} · {currentFood} food</option>)}</optgroup>}</select></label><span id="arena-creature-picker-help" className="sr-only">Choose a living creature or resource patch to inspect. Creature options reveal behavior; patch options reveal live food, capacity, energy, and regrowth. Choose Nothing selected to clear inspection.</span><span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{formatArenaInspectionStatus(selectedIndividualId, selectedPatchId, selectedPatchOrdinal)}</span></>
 }

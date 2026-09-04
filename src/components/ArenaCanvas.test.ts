@@ -15,8 +15,11 @@ import {
   ARENA_PATCH_MIN_HIT_RADIUS,
   ARENA_PATCH_STOCK_KEY,
   ARENA_SELECTED_OVERLAY_KEY,
+  ArenaActivitySpotlightKey,
   arenaCanvasCanDraw,
   arenaCanvasPalette,
+  arenaActivitySpotlightAlpha,
+  arenaActivitySpotlightWindowTicks,
   arenaPatchQualityGeometry,
   classifyArenaHeldPathEndpoint,
   dispatchArenaInspectionHit,
@@ -34,6 +37,7 @@ import {
   arenaPatchQualityRange,
   CREATURE_STATE_METADATA,
   formatArenaAccessibleDescription,
+  formatArenaActivitySpotlightDescription,
   formatArenaDayProgress,
   formatArenaFocusDescription,
   formatArenaFocusOption,
@@ -47,6 +51,7 @@ import {
   formatSelectedTarget,
   hitTestArenaPatch,
   hitTestArenaInspection,
+  resolveArenaActivitySpotlight,
   sortArenaPatches,
   showArenaQuickStart,
   type ArenaAccessibleDescriptionInput,
@@ -55,7 +60,7 @@ import {
 import { createWorld, defaultConfig } from '../simulation/engine'
 import { advanceToNextAction } from '../simulation/scheduler'
 import type { NextActionContext } from '../simulation/scheduler'
-import type { World } from '../simulation/types'
+import type { World, WorldActivityEntry } from '../simulation/types'
 
 describe('arena renderer boundary', () => {
   it('resolves the split renderer with both the canvas and creature picker', async () => {
@@ -135,6 +140,26 @@ const observedWorld = (): World => {
 
 const observedContext = (world: World, selectedWasActive = true): NextActionContext => ({ selectedIndividualId: world.inspectedIndividualId, selectedWasActive })
 
+const spotlightMoment = (overrides: Partial<WorldActivityEntry> = {}): WorldActivityEntry => ({
+  sequence: 1,
+  generation: 3,
+  day: 1,
+  tick: 200,
+  kind: 'food-collected',
+  summary: 'Individual 1 collected food.',
+  count: 1,
+  actorIds: [1],
+  ...overrides,
+})
+
+const spotlightWorld = (): World => {
+  const world = createWorld({ ...defaultConfig, initialPopulation: 12, reactionTime: .15 })
+  world.generation = 3
+  world.tickIndex = 200
+  world.activity = []
+  return world
+}
+
 describe('arena color scheme lifecycle', () => {
   it('syncs the modern listener immediately, redraws on changes, and cleans it up', () => {
     let matches = true
@@ -192,6 +217,146 @@ describe('arena color scheme lifecycle', () => {
     matches = false
     emit()
     expect(changes).toEqual([false, true])
+  })
+})
+
+describe('arena activity spotlight', () => {
+  it('chooses the newest eligible actor record even when a newer aggregate and array order disagree', () => {
+    const world = spotlightWorld()
+    world.activity = [
+      spotlightMoment({ sequence: 14, kind: 'generation-settlement', actorIds: [3] }),
+      spotlightMoment({ sequence: 12, actorIds: [2] }),
+      spotlightMoment({ sequence: 10, actorIds: [1] }),
+    ]
+
+    expect(resolveArenaActivitySpotlight(world)).toMatchObject({ sequence: 12, kind: 'food-collected', tick: 200, age: 0, actors: [{ individualId: 2 }] })
+  })
+
+  it('requires the current generation and accepts only the exact recent-age boundary', () => {
+    const world = spotlightWorld()
+    const windowTicks = arenaActivitySpotlightWindowTicks(world.config.reactionTime)
+    world.activity = [
+      spotlightMoment({ sequence: 16, generation: 2, actorIds: [1] }),
+      spotlightMoment({ sequence: 15, tick: world.tickIndex + 1, actorIds: [1] }),
+      spotlightMoment({ sequence: 14, tick: world.tickIndex - windowTicks - 1, actorIds: [1] }),
+      spotlightMoment({ sequence: 13, tick: world.tickIndex - windowTicks, actorIds: [1] }),
+    ]
+    expect(resolveArenaActivitySpotlight(world)).toMatchObject({ sequence: 13, tick: world.tickIndex - windowTicks, age: windowTicks })
+
+    world.activity = [spotlightMoment({ sequence: 17, generation: 2, actorIds: [1] })]
+    expect(resolveArenaActivitySpotlight(world)).toBeNull()
+  })
+
+  it('orders and deduplicates attack roles before generic actor ids', () => {
+    const world = spotlightWorld()
+    world.activity = [spotlightMoment({ kind: 'attack-success', attackerId: 2, preyId: 1, actorIds: [9, 2, 1, 3, 9] })]
+    expect(resolveArenaActivitySpotlight(world)?.actors).toMatchObject([
+      { individualId: 2, role: 'attacker', roleLabel: 'Attacker' },
+      { individualId: 1, role: 'prey', roleLabel: 'Prey' },
+      { individualId: 9, role: 'involved individual', roleLabel: 'Involved individual' },
+      { individualId: 3, role: 'involved individual', roleLabel: 'Involved individual' },
+    ])
+  })
+
+  it('preserves founder actor order while capping the rendered batch at eight', () => {
+    const world = spotlightWorld()
+    const founderOrder = [12, 3, 9, 1, 8, 2, 7, 4, 6, 5]
+    world.activity = [spotlightMoment({ kind: 'intervention', actorIds: founderOrder })]
+    expect(resolveArenaActivitySpotlight(world)?.actors.map(actor => actor.individualId)).toEqual(founderOrder.slice(0, 8))
+  })
+
+  it('filters dead, absent, malformed, and non-finite-position actors', () => {
+    const world = spotlightWorld()
+    const throwing = new Proxy({}, { get() { throw new Error('malformed current actor') } })
+    world.creatures = [
+      { individualId: 1, alive: false, x: .1, y: .1, size: 1 },
+      { individualId: 2, alive: true, x: Number.NaN, y: .2, size: 1 },
+      { individualId: 3, alive: true, x: .3, y: .3, size: 1 },
+      { individualId: 4, alive: true, x: 2, y: .4, size: 1 },
+      throwing,
+    ] as unknown as World['creatures']
+    world.activity = [spotlightMoment({ actorIds: [1, 2, 99, 4, 3, '5' as unknown as number, Number.NaN] })]
+    expect(resolveArenaActivitySpotlight(world)?.actors.map(actor => actor.individualId)).toEqual([3])
+  })
+
+  it('ignores stray attack-role fields on non-attack interventions', () => {
+    const world = spotlightWorld()
+    world.activity = [spotlightMoment({ kind: 'intervention', actorIds: undefined, attackerId: 2, preyId: 1 })]
+    expect(resolveArenaActivitySpotlight(world)).toBeNull()
+  })
+
+  it('keeps alpha deterministic, clamps reaction windows, and never marks historical or future records', () => {
+    const world = spotlightWorld()
+    expect(arenaActivitySpotlightWindowTicks(0)).toBe(120)
+    expect(arenaActivitySpotlightWindowTicks(Number.MAX_VALUE)).toBe(202)
+    expect(arenaActivitySpotlightWindowTicks(-1)).toBe(120)
+    expect(arenaActivitySpotlightAlpha(0, 120)).toBe(1)
+    expect(arenaActivitySpotlightAlpha(120, 120)).toBe(.34)
+    expect(arenaActivitySpotlightAlpha(-1, 120)).toBe(0)
+
+    const boundary = world.tickIndex - arenaActivitySpotlightWindowTicks(world.config.reactionTime)
+    world.activity = [spotlightMoment({ tick: boundary })]
+    const first = resolveArenaActivitySpotlight(world)
+    const second = resolveArenaActivitySpotlight(world)
+    expect(first?.alpha).toBe(second?.alpha)
+    expect(first?.alpha).toBe(arenaActivitySpotlightAlpha(first?.age, arenaActivitySpotlightWindowTicks(world.config.reactionTime)))
+
+    world.activity = [spotlightMoment({ generation: world.generation - 1 })]
+    expect(resolveArenaActivitySpotlight(world)).toBeNull()
+    world.activity = [spotlightMoment({ tick: world.tickIndex + 1 })]
+    expect(resolveArenaActivitySpotlight(world)).toBeNull()
+  })
+
+  it('uses canonical copy that names current positions without claiming historical locations', () => {
+    const world = spotlightWorld()
+    world.activity = [spotlightMoment({ kind: 'attack-success', attackerId: 2, preyId: 1, actorIds: [2, 1] })]
+    const spotlight = resolveArenaActivitySpotlight(world)!
+    const description = formatArenaActivitySpotlightDescription(spotlight)
+    expect(description).toContain('Latest actor halo marks Individual 2 (attacker), Individual 1 (prey) at their current arena positions')
+    expect(description).toContain('it does not show the historical event location.')
+    expect(description).not.toContain('event location is current')
+  })
+
+  it('exposes active SSR key, canvas data hooks, and accessible actor ids only for an active spotlight', async () => {
+    const { ArenaCanvas } = await import('./ArenaCanvasRenderer')
+    const world = spotlightWorld()
+    world.activity = [spotlightMoment({ sequence: 22, actorIds: [2] })]
+    const key = renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world }))
+    const markup = renderToStaticMarkup(createElement(ArenaCanvas, {
+      world,
+      revision: 0,
+      selectedIndividualId: null,
+      onSelect: () => {},
+      arenaFocus: 'all',
+      playbackStatus: 'Paused',
+      playbackDetail: 'Paused.',
+    }))
+
+    expect(key).toBe('<strong data-arena-activity-spotlight-key="true">Latest actor halo marks each actor’s current arena position; it does not show the historical event location.</strong>')
+    expect(markup).toContain('data-arena-activity-spotlight="true"')
+    expect(markup).toContain('data-arena-activity-spotlight-sequence="22"')
+    expect(markup).toContain('data-arena-activity-spotlight-actors="2"')
+    expect(markup).toContain('Latest actor halo marks Individual 2')
+  })
+
+  it('omits active cue, key, data hooks, and copy when no eligible current actor remains', async () => {
+    const { ArenaCanvas } = await import('./ArenaCanvasRenderer')
+    const world = spotlightWorld()
+    world.activity = [spotlightMoment({ kind: 'generation-settlement', actorIds: [1] })]
+    const key = renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world }))
+    const markup = renderToStaticMarkup(createElement(ArenaCanvas, {
+      world,
+      revision: 0,
+      selectedIndividualId: null,
+      onSelect: () => {},
+      arenaFocus: 'all',
+      playbackStatus: 'Paused',
+      playbackDetail: 'Paused.',
+    }))
+
+    expect(key).toBe('')
+    expect(markup).not.toContain('data-arena-activity-spotlight="true"')
+    expect(markup).not.toContain('Latest actor halo marks')
   })
 })
 
