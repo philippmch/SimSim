@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { defaultConfig } from '../simulation/config'
 import type { Config, WorldActivityEntry, WorldActivityKind } from '../simulation/types'
-import SimulationActivity, { MAX_VISIBLE_ACTIVITY_ENTRIES, NO_ACTIVITY_MOMENTS, deriveActivityActorTargets, deriveActivityFeed, deriveSimulationActivity, formatActivityActorRelation, formatActivityAnnouncement, formatActivityContext, formatActivityMoment, formatActivityRetentionContext, hasWorldActivityTelemetry, normalizeActivityMoment, suppressesActivityAnnouncement } from './SimulationActivity'
+import SimulationActivity, { MAX_VISIBLE_ACTIVITY_ENTRIES, NO_ACTIVITY_MOMENTS, activityTimelineMarkerPercent, deriveActivityActorTargets, deriveActivityFeed, deriveActivityTimeline, deriveActivityTimelineSequenceGaps, deriveSimulationActivity, formatActivityActorRelation, formatActivityAnnouncement, formatActivityContext, formatActivityMoment, formatActivityRetentionContext, formatActivityTimelineCurrentMarker, formatActivityTimelineGap, formatActivityTimelineMoment, hasWorldActivityTelemetry, normalizeActivityMoment, suppressesActivityAnnouncement } from './SimulationActivity'
 
 const moment = (overrides: Partial<WorldActivityEntry> = {}): WorldActivityEntry => ({
   sequence: 1,
@@ -67,6 +67,23 @@ describe('simulation activity helpers', () => {
     expect(feed.displayedCount).toBe(MAX_VISIBLE_ACTIVITY_ENTRIES)
     expect(feed.droppedCount).toBe(5)
     expect(formatActivityRetentionContext(feed)).toBe(`Showing ${MAX_VISIBLE_ACTIVITY_ENTRIES} retained key moments, newest first; 5 records dropped or unavailable.`)
+  })
+
+  it('keeps omitted and invalid run-wide drop counters distinct from an exact zero', () => {
+    const known = deriveSimulationActivity([moment()], 0)
+    const omitted = deriveSimulationActivity([moment()])
+    const invalid = deriveSimulationActivity([moment()], Number.NaN)
+    const malformed = deriveSimulationActivity([moment(), { bad: true }])
+    const overflow = deriveSimulationActivity(Array.from({ length: MAX_VISIBLE_ACTIVITY_ENTRIES + 2 }, (_, index) => moment({ sequence: index + 1 })))
+
+    expect(known.activityDroppedKnown).toBe(true)
+    expect(formatActivityRetentionContext(known)).toContain('0 records dropped or unavailable')
+    expect(omitted.activityDroppedKnown).toBe(false)
+    expect(formatActivityRetentionContext(omitted)).toContain('drop count unavailable')
+    expect(invalid.activityDroppedKnown).toBe(false)
+    expect(formatActivityRetentionContext(invalid)).toContain('drop count unavailable')
+    expect(formatActivityRetentionContext(malformed)).toContain('at least 1 record was dropped or unavailable locally; run-wide drop count unavailable')
+    expect(formatActivityRetentionContext(overflow)).toContain('at least 2 records were dropped or unavailable locally; run-wide drop count unavailable')
   })
 
   it('returns an explicit empty state for absent or malformed buffers', () => {
@@ -203,6 +220,108 @@ describe('activity actor links', () => {
   })
 })
 
+describe('generation key-moment timeline', () => {
+  it('filters to the current generation, orders by day and tick, and retains the previous boundary only when relevant', () => {
+    const timeline = deriveActivityTimeline({
+      generation: 2,
+      dayTime: 4,
+      config: { dayLength: 18 },
+      activityDropped: 0,
+      activity: [
+        moment({ sequence: 1, generation: 1, day: 17.5, tick: 70, kind: 'generation-settlement', count: 4, summary: 'Generation 1 settled.' }),
+        moment({ sequence: 2, generation: 2, day: 3, tick: 12, summary: 'Later current event.' }),
+        moment({ sequence: 3, generation: 1, day: 4, tick: 16, summary: 'Older generation event.' }),
+        moment({ sequence: 4, generation: 2, day: 1, tick: 4, summary: 'First current event.' }),
+        moment({ sequence: 5, generation: 2, day: 1, tick: 4, kind: 'natural-regrowth', summary: 'Same-time current event.', count: 2 }),
+      ],
+    })
+
+    expect(timeline.moments.map(entry => entry.summary)).toEqual(['First current event.', 'Same-time current event.', 'Later current event.'])
+    expect(timeline.groups.map(group => group.moments.map(entry => entry.sequence))).toEqual([[4, 5], [2]])
+    expect(timeline.previousSettlement?.sequence).toBe(1)
+    expect(formatActivityTimelineMoment(timeline.moments[0])).toContain('Food collected · day 1.00 · tick 4 · count 1')
+  })
+
+  it('keeps same-time records in stable sequence order and exposes exact current-marker positions', () => {
+    const normalized = [
+      normalizeActivityMoment(moment({ sequence: 7, day: 1, tick: 4, summary: 'first' }), 0)!,
+      normalizeActivityMoment(moment({ sequence: 8, day: 1, tick: 4, summary: 'second' }), 1)!,
+      normalizeActivityMoment(moment({ sequence: 9, day: 1, tick: 5, summary: 'third' }), 2)!,
+    ]
+    expect(deriveActivityTimelineSequenceGaps(normalized)).toEqual([])
+    expect(activityTimelineMarkerPercent(0, 18)).toBe(0)
+    expect(activityTimelineMarkerPercent(9, 18)).toBe(50)
+    expect(activityTimelineMarkerPercent(18, 18)).toBe(100)
+    expect(activityTimelineMarkerPercent(18.01, 18)).toBeNull()
+    expect(activityTimelineMarkerPercent(Number.NaN, 18)).toBeNull()
+    expect(formatActivityTimelineCurrentMarker(9, 18)).toContain('50.00%')
+    expect(formatActivityTimelineCurrentMarker(19, 18)).toContain('unavailable')
+  })
+
+  it('discloses explicit retention loss, detectable sequence gaps, and malformed records', () => {
+    const timeline = deriveActivityTimeline({
+      generation: 1,
+      dayTime: 2,
+      config: { dayLength: 18 },
+      activityDropped: 3,
+      activity: [
+        moment({ sequence: 4, day: 0, tick: 0 }),
+        { ...moment({ sequence: undefined, day: 1, tick: 4 }), summary: undefined },
+        moment({ sequence: 5, day: 1.5, tick: 6 }),
+      ],
+    })
+    expect(timeline.sequenceGaps).toEqual([])
+    expect(timeline.invalidCount).toBe(1)
+    expect(timeline.gapMessage).toContain('3 older records were dropped')
+    expect(timeline.gapMessage).toContain('1 malformed record was unavailable')
+    expect(timeline.gapMessage).not.toContain('sequence gaps')
+
+    const sequenceGap = deriveActivityTimeline({
+      generation: 1,
+      dayTime: 2,
+      config: { dayLength: 18 },
+      activityDropped: 0,
+      activity: [moment({ sequence: 4 }), moment({ sequence: 6, day: 1 })],
+    })
+    expect(sequenceGap.sequenceGaps).toEqual([{ firstMissingSequence: 5, lastMissingSequence: 5, count: 1 }])
+    expect(formatActivityTimelineGap({ activityDropped: 0, invalidCount: 0, sequenceGaps: sequenceGap.sequenceGaps })).toContain('at least 1 unretained moment')
+    expect(formatActivityTimelineGap({ generation: 1, activityDropped: 0, invalidCount: 1, sequenceGaps: sequenceGap.sequenceGaps })).toContain('Signals may overlap')
+  })
+
+  it('labels overflow and gaps spanning other generations as run-wide diagnostics', () => {
+    const activity = Array.from({ length: MAX_VISIBLE_ACTIVITY_ENTRIES + 5 }, (_, index) => moment({
+      sequence: index + 1,
+      generation: index < MAX_VISIBLE_ACTIVITY_ENTRIES + 3 ? 1 : 2,
+      day: index < MAX_VISIBLE_ACTIVITY_ENTRIES + 3 ? index / 4 : index - MAX_VISIBLE_ACTIVITY_ENTRIES - 2,
+      tick: index,
+    })).filter(entry => entry.sequence !== MAX_VISIBLE_ACTIVITY_ENTRIES + 3)
+    const timeline = deriveActivityTimeline({ generation: 2, dayTime: 2, config: { dayLength: 18 }, activityDropped: 2, activity })
+
+    expect(timeline.moments.map(entry => entry.sequence)).toEqual([MAX_VISIBLE_ACTIVITY_ENTRIES + 4, MAX_VISIBLE_ACTIVITY_ENTRIES + 5])
+    expect(timeline.gapMessage).toContain('Run-wide activity diagnostic')
+    expect(timeline.gapMessage).toContain('visible Generation 2 lane')
+    expect(timeline.gapMessage).toContain('do not establish')
+  })
+
+  it('handles legacy activity without a drop counter and malformed ruler fields defensively', () => {
+    const timeline = deriveActivityTimeline({
+      generation: 1,
+      dayTime: Number.POSITIVE_INFINITY,
+      config: { dayLength: Number.NaN },
+      activity: [moment({ sequence: undefined }), { bad: true }],
+    })
+    expect(timeline.moments).toHaveLength(1)
+    expect(timeline.activityDroppedKnown).toBe(false)
+    expect(timeline.currentMarkerPercent).toBeNull()
+    expect(timeline.gapMessage).toContain('malformed')
+    expect(timeline.gapMessage).not.toMatch(/NaN|Infinity|undefined/)
+
+    const legacyWithoutActivity = deriveActivityTimeline({ events: [] })
+    expect(legacyWithoutActivity.generation).toBeNull()
+    expect(legacyWithoutActivity.groups).toEqual([])
+  })
+})
+
 describe('SimulationActivity SSR markup', () => {
   it('renders empty/reset copy with one polite announcement surface', () => {
     const markup = renderToStaticMarkup(createElement(SimulationActivity, { world: { activity: [], activityDropped: 0 } }))
@@ -211,6 +330,16 @@ describe('SimulationActivity SSR markup', () => {
     expect(markup).toContain('Showing 0 retained key moments, newest first; 0 records dropped or unavailable.')
     expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
     expect(markup).not.toContain('<details')
+  })
+
+  it('does not repeat the empty message for a generation-aware fresh run', () => {
+    const markup = renderToStaticMarkup(createElement(SimulationActivity, {
+      world: { generation: 1, dayTime: 0, config: { dayLength: 18 }, activity: [], activityDropped: 0 },
+    }))
+
+    expect(markup.match(/No current-generation key moments are retained yet\./g) ?? []).toHaveLength(0)
+    expect(markup.match(new RegExp(NO_ACTIVITY_MOMENTS.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) ?? []).toHaveLength(1)
+    expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
   })
 
   it('renders the newest valid moment prominently and exposes the full newest-first archive accessibly', () => {
@@ -315,5 +444,114 @@ describe('SimulationActivity SSR markup', () => {
     expect(markup).toContain('Individual 1 · dead in current cohort')
     expect(markup).toContain('Individual 2 · not in current cohort')
     expect(markup).toContain('Individual 3 · not in current cohort')
+  })
+
+  it('renders a chronological current-generation key-moment lane with actor affordances and one live announcement surface', () => {
+    const markup = renderToStaticMarkup(createElement(SimulationActivity, {
+      world: {
+        generation: 2,
+        dayTime: 9,
+        config: { dayLength: 18 },
+        activityDropped: 1,
+        activity: [
+          moment({ sequence: 1, generation: 1, day: 17.5, tick: 70, kind: 'generation-settlement', count: 2, summary: 'Generation 1 settled.' }),
+          moment({ sequence: 2, generation: 2, day: 3, tick: 12, kind: 'attack-success', attackerId: 2, preyId: 1, actorIds: [2, 1], summary: 'Individual 2 caught Individual 1.' }),
+          moment({ sequence: 3, generation: 2, day: 1, tick: 4, summary: 'Individual 2 collected food.' }),
+        ],
+        creatures: [{ individualId: 2, alive: true }, { individualId: 1, alive: false }],
+      },
+      selectedIndividualId: 2,
+      onShowIndividual: () => undefined,
+    }))
+
+    expect(markup).toContain('Generation key moments')
+    expect(markup).toContain('Key moments are the recorded events; movement-only ticks are not retained.')
+    expect(markup).toContain('data-activity-timeline-current-marker="true"')
+    expect(markup).toContain('left:50%')
+    expect(markup).toContain('Previous generation boundary')
+    expect(markup.indexOf('day 1.00 · tick 4')).toBeLessThan(markup.indexOf('day 3.00 · tick 12'))
+    expect(markup).toContain('count 1')
+    expect(markup).toContain('Show current arena state for Attacker Individual 2')
+    expect(markup).toContain('Run-wide activity diagnostic: 1 older record was dropped')
+    expect(markup).toContain('These signals do not establish that visible Generation 2 lane is incomplete')
+    expect(markup).toContain('Show chronological details · 2 current-generation key moments')
+    expect(markup).not.toContain('Show earlier chronological details')
+    expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
+  })
+
+  it('keeps a normally ordered latest moment out of the earlier chronology and archive', () => {
+    const markup = renderToStaticMarkup(createElement(SimulationActivity, {
+      world: {
+        generation: 1,
+        dayTime: 2,
+        config: { dayLength: 18 },
+        activityDropped: 0,
+        activity: [
+          moment({ sequence: 1, generation: 1, day: 1, tick: 4, summary: 'Earlier current moment.' }),
+          moment({ sequence: 2, generation: 1, day: 2, tick: 8, summary: 'Latest current moment.' }),
+        ],
+      },
+    }))
+
+    expect(markup).toContain('Show earlier chronological details · 1 earlier current-generation key moment')
+    expect(markup.match(/Earlier current moment\./g)).toHaveLength(1)
+    expect(markup.match(/Latest current moment\./g)).toHaveLength(1)
+    expect(markup).not.toContain('Earlier retained key moments, newest first')
+  })
+
+  it('points a latest previous-generation settlement to the latest card without duplicating it', () => {
+    const markup = renderToStaticMarkup(createElement(SimulationActivity, {
+      world: {
+        generation: 2,
+        dayTime: 0,
+        config: { dayLength: 18 },
+        activityDropped: 0,
+        activity: [
+          moment({ sequence: 1, generation: 1, day: 18, tick: 72, kind: 'generation-settlement', summary: 'Generation 1 settled.' }),
+        ],
+      },
+    }))
+
+    expect(markup).toContain('Previous settlement boundary is shown in the latest card below.')
+    expect(markup).not.toContain('Previous settlement boundary is retained in the chronological details.')
+    expect(markup).not.toContain('data-activity-timeline-details')
+    expect(markup.match(/Generation 1 settled\./g)).toHaveLength(1)
+  })
+
+  it('keeps omitted and invalid drop counters consistently unknown in the visible footer and timeline', () => {
+    const omitted = renderToStaticMarkup(createElement(SimulationActivity, {
+      world: { generation: 1, dayTime: 0, config: { dayLength: 18 }, activity: [moment({ generation: 1 })] },
+    }))
+    const invalid = renderToStaticMarkup(createElement(SimulationActivity, {
+      world: { generation: 1, dayTime: 0, config: { dayLength: 18 }, activityDropped: Number.NaN, activity: [moment({ generation: 1 })] },
+    }))
+
+    for (const markup of [omitted, invalid]) {
+      expect(markup).toContain('drop count unavailable (older records may have been dropped)')
+      expect(markup).toContain('Run-wide retention history is unavailable')
+      expect(markup).not.toContain('0 records dropped or unavailable')
+      expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
+    }
+  })
+
+  it('reads changing top-level snapshot getters once and uses one coherent activity history', () => {
+    const reads = { activity: 0, activityDropped: 0, generation: 0, dayTime: 0, config: 0, creatures: 0 }
+    const first = moment({ sequence: 1, generation: 2, summary: 'first snapshot event' })
+    const second = moment({ sequence: 2, generation: 1, summary: 'second snapshot event' })
+    const world = {
+      get activity() { reads.activity++; return reads.activity === 1 ? [first] : [second] },
+      get activityDropped() { reads.activityDropped++; return reads.activityDropped === 1 ? 0 : Number.NaN },
+      get generation() { reads.generation++; return reads.generation === 1 ? 2 : 1 },
+      get dayTime() { reads.dayTime++; return reads.dayTime === 1 ? 9 : Number.POSITIVE_INFINITY },
+      get config() { reads.config++; return reads.config === 1 ? { dayLength: 18 } : { dayLength: Number.NaN } },
+      get creatures() { reads.creatures++; return reads.creatures === 1 ? [{ individualId: 1, alive: true }] : [] },
+    }
+    const markup = renderToStaticMarkup(createElement(SimulationActivity, { world, onShowIndividual: () => undefined }))
+
+    expect(reads).toEqual({ activity: 1, activityDropped: 1, generation: 1, dayTime: 1, config: 1, creatures: 1 })
+    expect(markup).toContain('first snapshot event')
+    expect(markup).not.toContain('second snapshot event')
+    expect(markup).toContain('Current simulation time: day 9.00 / 18.00')
+    expect(markup).toContain('0 records dropped or unavailable')
   })
 })

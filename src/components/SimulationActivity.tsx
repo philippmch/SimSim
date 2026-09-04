@@ -248,12 +248,14 @@ export interface SimulationActivityFeed {
   retainedCount: number
   displayedCount: number
   droppedCount: number
+  /** False when the snapshot omitted or malformed the run-wide drop counter. */
+  activityDroppedKnown: boolean
   invalidCount: number
   retentionLimit: number
 }
 
 /** Normalize and order activity without mutating the engine's snapshot. */
-export function deriveSimulationActivity(activity: unknown, activityDropped: unknown = 0, retentionLimit: unknown = MAX_VISIBLE_ACTIVITY_ENTRIES): SimulationActivityFeed {
+export function deriveSimulationActivity(activity: unknown, activityDropped?: unknown, retentionLimit: unknown = MAX_VISIBLE_ACTIVITY_ENTRIES): SimulationActivityFeed {
   const source = safeArray(activity)
   const limit = safeRetentionLimit(retentionLimit)
   const normalized: SimulationActivityMoment[] = []
@@ -282,6 +284,7 @@ export function deriveSimulationActivity(activity: unknown, activityDropped: unk
     retainedCount: entries.length,
     displayedCount: entries.length,
     droppedCount: Math.min(Number.MAX_SAFE_INTEGER, explicitDropped + invalidCount + overflowCount),
+    activityDroppedKnown: safeInteger(activityDropped, 0),
     invalidCount,
     retentionLimit: limit,
   }
@@ -403,10 +406,193 @@ export function formatActivityAnnouncement(moment: SimulationActivityMoment | nu
   return moment ? `New key moment ${moment.sequence}: ${formatActivityMoment(moment)}` : ''
 }
 
-export function formatActivityRetentionContext(feed: Pick<SimulationActivityFeed, 'displayedCount' | 'retainedCount' | 'droppedCount'>): string {
+export function formatActivityRetentionContext(feed: Pick<SimulationActivityFeed, 'displayedCount' | 'retainedCount' | 'droppedCount' | 'activityDroppedKnown'>): string {
   const retained = `${feed.retainedCount} retained key ${feed.retainedCount === 1 ? 'moment' : 'moments'}`
+  if (!feed.activityDroppedKnown) return feed.droppedCount > 0
+    ? `Showing ${retained}, newest first; at least ${feed.droppedCount} ${feed.droppedCount === 1 ? 'record was' : 'records were'} dropped or unavailable locally; run-wide drop count unavailable.`
+    : `Showing ${retained}, newest first; drop count unavailable (older records may have been dropped).`
   const dropped = `${feed.droppedCount} ${feed.droppedCount === 1 ? 'record' : 'records'}`
   return `Showing ${retained}, newest first; ${dropped} dropped or unavailable.`
+}
+
+export interface ActivityTimelineSequenceGap {
+  firstMissingSequence: number
+  lastMissingSequence: number
+  count: number
+}
+
+export interface ActivityTimelineMomentGroup {
+  day: number
+  tick: number
+  positionPercent: number | null
+  moments: SimulationActivityMoment[]
+}
+
+export interface SimulationActivityTimeline {
+  generation: number | null
+  currentDay: number | null
+  dayLength: number | null
+  currentMarkerPercent: number | null
+  moments: SimulationActivityMoment[]
+  groups: ActivityTimelineMomentGroup[]
+  previousSettlement: SimulationActivityMoment | null
+  activityDropped: number | null
+  activityDroppedKnown: boolean
+  invalidCount: number
+  sequenceGaps: ActivityTimelineSequenceGap[]
+  gapMessage: string | null
+}
+
+function safeTimelineGeneration(value: unknown): number | null {
+  return safeInteger(value, 1) ? value : null
+}
+
+function safeTimelineDay(value: unknown): number | null {
+  return finiteNonnegative(value) ? value : null
+}
+
+function safeTimelineDayLength(value: unknown): number | null {
+  return finiteNonnegative(value) && value > 0 ? value : null
+}
+
+/** Return a ruler position only when the recorded value can truthfully fit the day. */
+export function activityTimelineMarkerPercent(day: unknown, dayLength: unknown): number | null {
+  const currentDay = safeTimelineDay(day)
+  const duration = safeTimelineDayLength(dayLength)
+  if (currentDay === null || duration === null || currentDay > duration) return null
+  return currentDay / duration * 100
+}
+
+export function formatActivityTimelineTime(moment: Pick<SimulationActivityMoment, 'day' | 'tick'>): string {
+  const day = safeTimelineDay(field(moment, 'day'))
+  const tick = field(moment, 'tick')
+  if (day === null || !safeInteger(tick, 0)) return 'time unavailable'
+  return `day ${day.toFixed(2)} · tick ${tick}`
+}
+
+export function formatActivityTimelineMoment(moment: SimulationActivityMoment): string {
+  const kindLabel = safeSummary(field(moment, 'kindLabel')) ?? 'Event'
+  const count = field(moment, 'count')
+  const countText = safeInteger(count, 0) ? `count ${count}` : 'count unavailable'
+  const summary = safeSummary(field(moment, 'summary')) ?? 'Summary unavailable.'
+  return `${kindLabel} · ${formatActivityTimelineTime(moment)} · ${countText} · ${summary}`
+}
+
+export function formatActivityTimelineCurrentMarker(day: unknown, dayLength: unknown): string {
+  const currentDay = safeTimelineDay(day)
+  const duration = safeTimelineDayLength(dayLength)
+  const percent = activityTimelineMarkerPercent(day, dayLength)
+  if (currentDay === null || duration === null || percent === null) return 'Current simulation time unavailable; the day ruler needs a valid current day within a valid day length.'
+  return `Current simulation time: day ${currentDay.toFixed(2)} / ${duration.toFixed(2)} (${percent.toFixed(2)}% of this day).`
+}
+
+/** Detect missing sequence numbers without treating a legacy/rebased sequence as a gap. */
+export function deriveActivityTimelineSequenceGaps(entries: unknown): ActivityTimelineSequenceGap[] {
+  const sourceOrder: SimulationActivityMoment[] = []
+  for (const value of safeArray(entries)) {
+    const sourceIndex = field(value, 'sourceIndex')
+    const sequence = field(value, 'sequence')
+    if (safeInteger(sourceIndex, 0) && safeInteger(sequence, 1)) sourceOrder.push(value as SimulationActivityMoment)
+  }
+  sourceOrder.sort((first, second) => first.sourceIndex - second.sourceIndex || first.sequence - second.sequence)
+  const gaps: ActivityTimelineSequenceGap[] = []
+  for (let index = 1; index < sourceOrder.length; index++) {
+    const previous = sourceOrder[index - 1].sequence
+    const current = sourceOrder[index].sequence
+    // A decreasing sequence is either a legacy reorder or a deliberate cursor
+    // rebase after MAX_SAFE_INTEGER; it is not evidence of omitted records.
+    if (current <= previous || current - previous <= 1) continue
+    gaps.push({ firstMissingSequence: previous + 1, lastMissingSequence: current - 1, count: current - previous - 1 })
+  }
+  return gaps
+}
+
+export interface ActivityTimelineGapInput {
+  generation?: number | null
+  activityDropped: number | null
+  activityDroppedKnown?: boolean
+  invalidCount: number
+  sequenceGaps: readonly ActivityTimelineSequenceGap[]
+}
+
+/** Explain run-wide retention signals without attributing them to one generation. */
+export function formatActivityTimelineGap(input: ActivityTimelineGapInput | unknown): string | null {
+  const rawDropped = field(input, 'activityDropped')
+  const activityDroppedKnown = field(input, 'activityDroppedKnown')
+  const activityDropped = activityDroppedKnown === false
+    ? null
+    : rawDropped === null || rawDropped === undefined ? null : (safeInteger(rawDropped, 0) ? rawDropped : null)
+  const rawInvalidCount = field(input, 'invalidCount')
+  const invalidCount = safeInteger(rawInvalidCount, 0) ? rawInvalidCount : 0
+  const sequenceGaps = safeArray(field(input, 'sequenceGaps'))
+  let missingFromSequences = 0
+  for (const gap of sequenceGaps) {
+    const count = field(gap, 'count')
+    if (safeInteger(count, 0)) missingFromSequences = Math.min(Number.MAX_SAFE_INTEGER, missingFromSequences + count)
+  }
+  const dropped = activityDropped !== null && activityDropped > 0 ? activityDropped : 0
+  const parts: string[] = []
+  if (dropped > 0) parts.push(`${dropped} older ${dropped === 1 ? 'record was' : 'records were'} dropped from the bounded activity buffer`)
+  if (missingFromSequences > 0) parts.push(`retained sequence gaps expose at least ${missingFromSequences} unretained ${missingFromSequences === 1 ? 'moment' : 'moments'}`)
+  if (invalidCount > 0) parts.push(`${invalidCount} malformed ${invalidCount === 1 ? 'record was' : 'records were'} unavailable`)
+  const generation = field(input, 'generation')
+  const generationText = safeTimelineGeneration(generation) === null ? 'the visible generation lane' : `visible Generation ${safeTimelineGeneration(generation)} lane`
+  const overlapNote = missingFromSequences > 0 && invalidCount > 0 ? ' Signals may overlap when a malformed record is also a missing sequence entry.' : ''
+  if (parts.length > 0) return `Run-wide activity diagnostic: ${parts.join('; ')}.${overlapNote} These signals do not establish that ${generationText} is incomplete. Movement-only ticks are not retained.`
+  if (activityDropped === null) return 'Run-wide retention history is unavailable in this snapshot; this lane shows retained key moments only, and no generation-completeness claim is made. Movement-only ticks are not retained.'
+  return null
+}
+
+function chronologicalActivityMoments(entries: readonly SimulationActivityMoment[]): SimulationActivityMoment[] {
+  return [...entries].sort((first, second) => first.day - second.day || first.tick - second.tick || first.sequence - second.sequence || first.sourceIndex - second.sourceIndex)
+}
+
+function groupActivityTimelineMoments(moments: readonly SimulationActivityMoment[], dayLength: number | null): ActivityTimelineMomentGroup[] {
+  const groups: ActivityTimelineMomentGroup[] = []
+  for (const moment of moments) {
+    const previous = groups.at(-1)
+    if (previous && previous.day === moment.day && previous.tick === moment.tick) {
+      previous.moments.push(moment)
+      continue
+    }
+    groups.push({ day: moment.day, tick: moment.tick, positionPercent: activityTimelineMarkerPercent(moment.day, dayLength), moments: [moment] })
+  }
+  return groups
+}
+
+/** Derive the truthful current-generation story from the retained activity buffer. */
+export function deriveActivityTimeline(world: unknown): SimulationActivityTimeline {
+  const activity = field(world, 'activity')
+  const rawDropped = field(world, 'activityDropped')
+  const feed = deriveSimulationActivity(activity, rawDropped)
+  const activityDroppedKnown = feed.activityDroppedKnown
+  const activityDropped = activityDroppedKnown ? safeDroppedCount(rawDropped) : null
+  const generation = safeTimelineGeneration(field(world, 'generation'))
+  const currentDay = safeTimelineDay(field(world, 'dayTime'))
+  const dayLength = safeTimelineDayLength(field(field(world, 'config'), 'dayLength'))
+  const retained = feed.entries
+  const moments = generation === null ? [] : chronologicalActivityMoments(retained.filter(moment => moment.generation === generation))
+  const previousGeneration = generation !== null && generation > 1 ? generation - 1 : null
+  const previousSettlement = previousGeneration === null
+    ? null
+    : [...retained]
+      .filter(moment => moment.kind === 'generation-settlement' && moment.generation === previousGeneration)
+      .sort((first, second) => second.sequence - first.sequence || second.sourceIndex - first.sourceIndex)[0] ?? null
+  const sequenceGaps = deriveActivityTimelineSequenceGaps(retained)
+  return {
+    generation,
+    currentDay,
+    dayLength,
+    currentMarkerPercent: activityTimelineMarkerPercent(currentDay, dayLength),
+    moments,
+    groups: groupActivityTimelineMoments(moments, dayLength),
+    previousSettlement,
+    activityDropped,
+    activityDroppedKnown,
+    invalidCount: feed.invalidCount,
+    sequenceGaps,
+    gapMessage: formatActivityTimelineGap({ generation, activityDropped, activityDroppedKnown, invalidCount: feed.invalidCount, sequenceGaps }),
+  }
 }
 
 function activityKey(moment: SimulationActivityMoment | null): string | null {
@@ -466,6 +652,93 @@ function ActivityActorAffordances({ moment, currentCreatures, selectedIndividual
   </div>
 }
 
+interface ActivityTimelineProps {
+  timeline: SimulationActivityTimeline
+  latest: SimulationActivityMoment | null
+  currentCreatures: unknown
+  selectedIndividualId?: number | null
+  onShowIndividual?: ActivityActorCallback
+}
+
+function activityTimelineCountLabel(moment: SimulationActivityMoment): string {
+  return `count ${moment.count}`
+}
+
+function hasActivityActors(moment: SimulationActivityMoment): boolean {
+  return moment.actorIds.length > 0 || moment.attackerId !== null || moment.preyId !== null
+}
+
+function ActivityTimelineEvent({ moment, currentCreatures, selectedIndividualId, onShowIndividual }: ActivityActorAffordancesProps) {
+  return <div data-activity-timeline-event={`${moment.sequence}-${moment.sourceIndex}`} style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2, padding: '4px 0', overflowWrap: 'anywhere' }}>
+    <span style={{ minWidth: 0, fontSize: 10, lineHeight: 1.3, color: 'var(--muted)' }}>{moment.kindLabel} · {formatActivityTimelineTime(moment)} · {activityTimelineCountLabel(moment)}</span>
+    <span style={{ minWidth: 0, fontSize: 11, lineHeight: 1.35 }}>{moment.summary}</span>
+    {hasActivityActors(moment) && (onShowIndividual || selectedIndividualId !== undefined) && <ActivityActorAffordances moment={moment} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual}/>}
+  </div>
+}
+
+function ActivityTimeline({ timeline, latest, currentCreatures, selectedIndividualId, onShowIndividual }: ActivityTimelineProps) {
+  if (timeline.generation === null) return null
+  const hasTimelineContent = timeline.groups.length > 0 || timeline.previousSettlement !== null
+  const chronologicalLatest = timeline.moments.at(-1) ?? null
+  const suppressLatestMoment = latest !== null && chronologicalLatest !== null && activityKey(latest) === activityKey(chronologicalLatest)
+  const detailGroups = timeline.groups.map(group => ({
+    ...group,
+    moments: suppressLatestMoment ? group.moments.filter(moment => activityKey(moment) !== activityKey(latest)) : group.moments,
+  })).filter(group => group.moments.length > 0)
+  const detailBoundary = timeline.previousSettlement && activityKey(timeline.previousSettlement) !== activityKey(latest)
+    ? timeline.previousSettlement
+    : null
+  const detailMomentCount = detailGroups.reduce((count, group) => count + group.moments.length, 0)
+  const hasDetailContent = detailMomentCount > 0 || detailBoundary !== null
+  const markerText = formatActivityTimelineCurrentMarker(timeline.currentDay, timeline.dayLength)
+  const listLabel = suppressLatestMoment
+    ? `Earlier Generation ${timeline.generation} key moments, earliest to latest; the latest retained moment is shown immediately after this timeline; movement-only ticks are not retained`
+    : `Generation ${timeline.generation} key moments in chronological time order; movement-only ticks are not retained`
+  const currentSummary = timeline.moments.length === 0
+    ? 'No current-generation key moments are retained yet.'
+    : `${timeline.moments.length} current-generation ${timeline.moments.length === 1 ? 'key moment' : 'key moments'} across ${timeline.groups.length} ${timeline.groups.length === 1 ? 'time point' : 'time points'}.`
+  const detailParts = [detailMomentCount > 0 ? `${detailMomentCount} ${suppressLatestMoment ? 'earlier ' : ''}current-generation ${detailMomentCount === 1 ? 'key moment' : 'key moments'}` : '', detailBoundary ? 'previous settlement boundary retained' : ''].filter(Boolean)
+  const detailsSummary = `Show ${suppressLatestMoment ? 'earlier ' : ''}chronological details · ${detailParts.join(' · ')}`
+  const previousSettlementLocation = timeline.previousSettlement
+    ? detailBoundary
+      ? ' Previous settlement boundary is retained in the chronological details.'
+      : ' Previous settlement boundary is shown in the latest card below.'
+    : ''
+  return <section data-activity-timeline="true" role="group" aria-labelledby="simulation-activity-timeline-title" style={{ flex: '1 1 100%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4, padding: '7px 0 5px', borderTop: '1px solid color-mix(in srgb, var(--muted) 35%, transparent)' }}>
+    <span style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1, overflowWrap: 'anywhere' }}>
+      <span id="simulation-activity-timeline-title" style={{ fontSize: 12, fontWeight: 700 }}>Generation key moments</span>
+      <small style={{ fontSize: 10 }}>Generation {timeline.generation} · earliest → latest · retained event records only</small>
+    </span>
+    <small style={{ minWidth: 0, fontSize: 10, lineHeight: 1.35, overflowWrap: 'anywhere' }}>Key moments are the recorded events; movement-only ticks are not retained.</small>
+    {hasTimelineContent && <span data-activity-timeline-summary="true" style={{ minWidth: 0, fontSize: 11, lineHeight: 1.35, overflowWrap: 'anywhere' }}>{currentSummary}{previousSettlementLocation}</span>}
+    <div data-activity-timeline-ruler="true" aria-hidden="true" style={{ position: 'relative', height: 22, margin: '1px 6px 0', borderBottom: '1px solid var(--muted)', color: 'var(--muted)', fontSize: 9 }}>
+      <span style={{ position: 'absolute', left: 0, bottom: 2 }}>day 0</span>
+      <span style={{ position: 'absolute', right: 0, bottom: 2 }}>{timeline.dayLength === null ? 'day ?' : `day ${timeline.dayLength.toFixed(2)}`}</span>
+      {timeline.groups.map(group => group.positionPercent !== null && <span key={`${group.day}-${group.tick}`} data-activity-timeline-event-marker="true" style={{ position: 'absolute', left: `${group.positionPercent}%`, top: 2, width: 7, height: 7, transform: 'translateX(-3px)', borderRadius: '50%', background: 'var(--muted)', boxShadow: '0 0 0 1px var(--paper)' }} />)}
+      {timeline.currentMarkerPercent !== null && <span data-activity-timeline-current-marker="true" style={{ position: 'absolute', left: `${timeline.currentMarkerPercent}%`, top: 0, bottom: 0, width: 2, transform: 'translateX(-1px)', background: 'var(--accent)', borderRadius: 2 }} />}
+    </div>
+    <small data-activity-timeline-current-marker-copy="true" style={{ minWidth: 0, fontSize: 10, lineHeight: 1.35, color: 'var(--muted)', overflowWrap: 'anywhere' }}>{markerText}</small>
+    {hasDetailContent
+      ? <details data-activity-timeline-details="true">
+        <summary style={{ fontSize: 11, minHeight: 44, display: 'list-item', boxSizing: 'border-box', padding: '12px 0', lineHeight: '20px', cursor: 'pointer' }}>{detailsSummary}</summary>
+        <div role="list" aria-label={listLabel} style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
+          {detailBoundary && <div role="listitem" data-activity-timeline-boundary="true" aria-label={`Previous generation settlement boundary: ${formatActivityTimelineMoment(detailBoundary)}`} style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2, padding: '5px 7px', borderLeft: '3px solid var(--muted)', background: 'color-mix(in srgb, var(--muted) 8%, transparent)', overflowWrap: 'anywhere' }}>
+            <span style={{ minWidth: 0, fontSize: 10, lineHeight: 1.3, color: 'var(--muted)' }}>Previous generation boundary · {formatActivityTimelineTime(detailBoundary)} · {activityTimelineCountLabel(detailBoundary)}</span>
+            <span style={{ minWidth: 0, fontSize: 11, lineHeight: 1.35 }}>{detailBoundary.summary}</span>
+            {hasActivityActors(detailBoundary) && (onShowIndividual || selectedIndividualId !== undefined) && (
+              <ActivityActorAffordances moment={detailBoundary} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual}/>
+            )}
+          </div>}
+          {detailGroups.map(group => <div key={`${group.day}-${group.tick}`} role="listitem" data-activity-timeline-group={`${group.day}-${group.tick}`} aria-label={`${formatActivityTimelineTime(group.moments[0])}; ${group.moments.length} ${group.moments.length === 1 ? 'key moment' : 'key moments'} recorded in stable sequence order`} style={{ minWidth: 0, paddingLeft: 9, borderLeft: '1px solid color-mix(in srgb, var(--muted) 45%, transparent)', overflowWrap: 'anywhere' }}>
+            {group.moments.map(moment => <ActivityTimelineEvent key={`${moment.sequence}-${moment.sourceIndex}`} moment={moment} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual}/>) }
+          </div>)}
+        </div>
+      </details>
+      : null}
+    {timeline.gapMessage && <small data-activity-timeline-gap="true" style={{ minWidth: 0, fontSize: 10, lineHeight: 1.35, color: 'var(--muted)', overflowWrap: 'anywhere' }}>{timeline.gapMessage}</small>}
+  </section>
+}
+
 export interface SimulationActivityProps {
   /** The complete snapshot is accepted as unknown so old saved worlds remain renderable. */
   world: unknown
@@ -480,9 +753,12 @@ export function SimulationActivity({ world, selectedIndividualId, onShowIndividu
   const activityPresent = hasWorldActivityTelemetry(world)
   const activity = field(world, 'activity')
   const activityDropped = field(world, 'activityDropped')
+  const generation = field(world, 'generation')
+  const dayTime = field(world, 'dayTime')
   const config = field(world, 'config')
   const currentCreatures = field(world, 'creatures')
   const feed = deriveSimulationActivity(activity, activityDropped)
+  const timeline = deriveActivityTimeline({ activity, activityDropped, generation, dayTime, config })
   const latestKey = activityKey(feed.latest)
   const previousKey = useRef<string | null | undefined>(undefined)
   const [announcement, setAnnouncement] = useState('')
@@ -507,9 +783,11 @@ export function SimulationActivity({ world, selectedIndividualId, onShowIndividu
   if (!activityPresent) return null
 
   const latest = feed.latest
-  const earlier = latest ? feed.entries.slice(1) : []
+  const timelineKeys = new Set([...timeline.moments, ...(timeline.previousSettlement ? [timeline.previousSettlement] : [])].map(activityKey))
+  const earlier = latest ? feed.entries.slice(1).filter(moment => !timelineKeys.has(activityKey(moment))) : []
   return <div className="interventions" role="group" aria-labelledby="simulation-activity-title">
     <span><strong id="simulation-activity-title" style={{ fontSize: 12 }}>What happened</strong><small style={{ fontSize: 10 }}>Retained moments across the run · not limited to the latest step</small></span>
+    <ActivityTimeline timeline={timeline} latest={latest} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual}/>
     {latest ? <div style={{ flex: '1 1 100%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <span className="journal-kicker" style={{ margin: 0, fontSize: 10, overflowWrap: 'anywhere' }}>{latest.kindLabel} · {formatActivityProvenance(latest)}</span>
