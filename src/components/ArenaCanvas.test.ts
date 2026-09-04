@@ -16,6 +16,7 @@ import {
   ARENA_PATCH_STOCK_KEY,
   ARENA_SELECTED_OVERLAY_KEY,
   ArenaActivitySpotlightKey,
+  arenaSelectedCreatureCalloutGeometry,
   arenaCanvasCanDraw,
   arenaCanvasPalette,
   arenaActivitySpotlightAlpha,
@@ -52,6 +53,7 @@ import {
   hitTestArenaPatch,
   hitTestArenaInspection,
   resolveArenaActivitySpotlight,
+  deriveArenaSelectedCreatureCallout,
   sortArenaPatches,
   showArenaQuickStart,
   type ArenaAccessibleDescriptionInput,
@@ -357,6 +359,172 @@ describe('arena activity spotlight', () => {
     expect(key).toBe('')
     expect(markup).not.toContain('data-arena-activity-spotlight="true"')
     expect(markup).not.toContain('Latest actor halo marks')
+  })
+})
+
+describe('selected creature callout', () => {
+  it('uses current action state rather than decisionSummary and covers every held target kind', () => {
+    const world = spotlightWorld()
+    const selected = world.creatures[0]
+    const foodId = world.food[0]?.id ?? 1
+    const prey = world.creatures[1]
+    const targetPoint = { targetX: .7, targetY: .8 }
+    const target = (overrides: Record<string, unknown>) => {
+      Object.assign(selected, { home: false, mode: 'foraging', targetType: null, targetId: null, ...targetPoint, ...overrides })
+      return deriveArenaSelectedCreatureCallout(world, selected.individualId)!
+    }
+
+    selected.decisionSummary = { chosen: 'prey', reason: 'stale decision', candidates: [] }
+    expect(target({ targetType: 'food', targetId: foodId }).title).toBe('Individual 1 · Finding food')
+    expect(target({ targetType: 'food', targetId: foodId }).detail).toBe('Held: food item')
+    expect(target({ targetType: 'food', targetId: 9999 }).detail).toBe('Held: food gone · last-known point')
+    expect(target({ targetType: 'prey', targetId: prey.id }).detail).toBe(`Held: prey · Individual ${prey.individualId}`)
+    expect(target({ targetType: 'prey', targetId: 9999 }).detail).toBe('Held: prey gone · last-known point')
+    expect(target({ targetType: 'threat', targetId: prey.id }).detail).toBe(`Held: escape waypoint · threat Individual ${prey.individualId}`)
+    expect(target({ targetType: 'threat', targetId: 9999 }).detail).toBe('Held: escape waypoint · threat gone')
+    expect(target({ targetType: 'threat', targetId: null }).detail).toBe('Held: escape waypoint · remembered threat')
+    expect(target({ targetType: 'home' }).detail).toBe('Held: home')
+    expect(target({ targetType: 'memory' }).detail).toBe('Held: remembered food')
+    expect(target({ targetType: 'explore' }).detail).toBe('Held: exploration waypoint')
+    expect(target({ targetType: null }).detail).toBe('Held: no target')
+    expect(target({ targetType: null }).description).toContain('no held target has been captured yet')
+    expect(target({ targetType: 'unknown' }).detail).toBe('Held: target unavailable')
+
+    expect(target({ targetType: 'food', targetId: 9999, targetX: 2 }).detail).toBe('Held: food target unavailable')
+
+    for (const [mode, label] of [['exploring', 'Exploring'], ['foraging', 'Finding food'], ['hunting', 'Hunting prey'], ['fleeing', 'Fleeing danger'], ['returning', 'Going home']] as const) {
+      expect(target({ mode, targetType: null }).title).toBe(`Individual 1 · ${label}`)
+    }
+    expect(target({ home: true, mode: 'exploring', targetType: 'home' }).title).toBe('Individual 1 · Safe at home')
+  })
+
+  it('rejects malformed, dead, and out-of-domain selected actors without fabricating a callout', () => {
+    const world = spotlightWorld()
+    const selected = world.creatures[0]
+    expect(deriveArenaSelectedCreatureCallout(world, selected.individualId)).not.toBeNull()
+    expect(deriveArenaSelectedCreatureCallout(world, '1')).toBeNull()
+    expect(deriveArenaSelectedCreatureCallout(world, 9999)).toBeNull()
+    selected.alive = false
+    expect(deriveArenaSelectedCreatureCallout(world, selected.individualId)).toBeNull()
+    selected.alive = true
+    selected.x = -0.01
+    expect(deriveArenaSelectedCreatureCallout(world, selected.individualId)).toBeNull()
+    selected.x = .5
+    selected.y = Number.NaN
+    expect(deriveArenaSelectedCreatureCallout(world, selected.individualId)).toBeNull()
+    selected.y = .5
+    selected.home = 'yes' as unknown as boolean
+    expect(deriveArenaSelectedCreatureCallout(world, selected.individualId)).toBeNull()
+    selected.home = false
+    selected.mode = 'invalid' as never
+    expect(deriveArenaSelectedCreatureCallout(world, selected.individualId)).toBeNull()
+    const throwing = new Proxy({}, { get() { throw new Error('malformed actor') } })
+    world.creatures = [throwing] as unknown as World['creatures']
+    expect(() => deriveArenaSelectedCreatureCallout(world, 1)).not.toThrow()
+    expect(deriveArenaSelectedCreatureCallout(world, 1)).toBeNull()
+  })
+
+  it('keeps compact and desktop callout boxes plus leader endpoints inside the padded field', () => {
+    const expectActorRingClear = (
+      geometry: ReturnType<typeof arenaSelectedCreatureCalloutGeometry>,
+      width: number,
+      height: number,
+      size: number,
+    ) => {
+      const base = Math.max(7, Math.min(width, height) * .017 * size)
+      const selectedRingRadius = base * 1.5
+      const nearestX = Math.max(geometry.x, Math.min(geometry.x + geometry.width, geometry.leaderStartX))
+      const nearestY = Math.max(geometry.y, Math.min(geometry.y + geometry.height, geometry.leaderStartY))
+      expect(Math.hypot(geometry.leaderStartX - nearestX, geometry.leaderStartY - nearestY)).toBeGreaterThanOrEqual(selectedRingRadius + 4)
+    }
+    const cases = [
+      { width: 300, height: 276, pad: 20, compact: true, expectedWidth: 148 },
+      { width: 900, height: 600, pad: 32, compact: false, expectedWidth: 190 },
+    ] as const
+    for (const geometryInput of cases) {
+      for (const [x, y] of [[0, 0], [1, 0], [0, 1], [1, 1], [.5, .5]] as const) {
+        const geometry = arenaSelectedCreatureCalloutGeometry({ ...geometryInput, x, y, size: 1 })
+        const right = geometryInput.width - geometryInput.pad
+        const bottom = geometryInput.height - geometryInput.pad
+        expect(geometry.width).toBe(geometryInput.expectedWidth)
+        expect(geometry.height).toBe(40)
+        expect(geometry.x).toBeGreaterThanOrEqual(geometryInput.pad)
+        expect(geometry.y).toBeGreaterThanOrEqual(geometryInput.pad)
+        expect(geometry.x + geometry.width).toBeLessThanOrEqual(right)
+        expect(geometry.y + geometry.height).toBeLessThanOrEqual(bottom)
+        for (const value of [geometry.leaderStartX, geometry.leaderStartY, geometry.leaderEndX, geometry.leaderEndY]) {
+          expect(Number.isFinite(value)).toBe(true)
+        }
+        expect(geometry.leaderStartX).toBeGreaterThanOrEqual(geometryInput.pad)
+        expect(geometry.leaderStartX).toBeLessThanOrEqual(right)
+        expect(geometry.leaderStartY).toBeGreaterThanOrEqual(geometryInput.pad)
+        expect(geometry.leaderStartY).toBeLessThanOrEqual(bottom)
+        expect(geometry.leaderEndX).toBeGreaterThanOrEqual(geometryInput.pad)
+        expect(geometry.leaderEndX).toBeLessThanOrEqual(right)
+        expect(geometry.leaderEndY).toBeGreaterThanOrEqual(geometryInput.pad)
+        expect(geometry.leaderEndY).toBeLessThanOrEqual(bottom)
+        const actorInsideBox = geometry.leaderStartX >= geometry.x && geometry.leaderStartX <= geometry.x + geometry.width
+          && geometry.leaderStartY >= geometry.y && geometry.leaderStartY <= geometry.y + geometry.height
+        expect(actorInsideBox).toBe(false)
+        expectActorRingClear(geometry, geometryInput.width, geometryInput.height, 1)
+        expect(Math.hypot(geometry.leaderEndX - geometry.leaderStartX, geometry.leaderEndY - geometry.leaderStartY)).toBeGreaterThan(0)
+      }
+    }
+    const maxSize = arenaSelectedCreatureCalloutGeometry({ width: 900, height: 600, pad: 32, compact: false, x: .5, y: .5, size: 2.8 })
+    expectActorRingClear(maxSize, 900, 600, 2.8)
+    expect(Math.hypot(maxSize.leaderEndX - maxSize.leaderStartX, maxSize.leaderEndY - maxSize.leaderStartY)).toBeGreaterThan(0)
+    const compactOverlayCase = arenaSelectedCreatureCalloutGeometry({ width: 300, height: 276, pad: 20, compact: true, x: .96, y: .5, size: 1 })
+    expect(compactOverlayCase.y).toBeGreaterThanOrEqual(132)
+    expect(compactOverlayCase.y + compactOverlayCase.height).toBeLessThanOrEqual(174)
+    const fallback = arenaSelectedCreatureCalloutGeometry({ width: Number.NaN, height: Number.POSITIVE_INFINITY, pad: Number.NaN, x: Number.NaN, y: Number.NaN })
+    expect(Object.values(fallback).every(value => typeof value !== 'number' || Number.isFinite(value))).toBe(true)
+  })
+
+  it('adds accessible active hooks and leaves the existing single live region unchanged', async () => {
+    const { ArenaCanvas } = await import('./ArenaCanvasRenderer')
+    const world = spotlightWorld()
+    const selected = world.creatures[0]
+    selected.home = false
+    selected.mode = 'foraging'
+    selected.targetType = 'food'
+    selected.targetId = world.food[0]?.id ?? null
+    selected.targetX = .7
+    selected.targetY = .8
+    const markup = renderToStaticMarkup(createElement(ArenaCanvas, {
+      world,
+      revision: 0,
+      selectedIndividualId: selected.individualId,
+      onSelect: () => {},
+      arenaFocus: 'all',
+      playbackStatus: 'Paused',
+      playbackDetail: 'Paused.',
+    }))
+    expect(markup).toContain('data-arena-selected-callout="true"')
+    expect(markup).toContain('data-arena-selected-callout-individual-id="1"')
+    expect(markup).toContain('data-arena-selected-callout-title="Individual 1 · Finding food"')
+    expect(markup).toContain('data-arena-selected-callout-detail="Held: food item"')
+    expect(markup).toContain('data-arena-selected-callout-copy="Selected Individual 1 is currently finding food; its held target from the last decision is a food item."')
+    expect(markup).toContain('Selected Individual 1 is currently finding food; its held target from the last decision is a food item.')
+    expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
+  })
+
+  it('omits callout hooks, copy, and canvas cues for an inactive selection', async () => {
+    const { ArenaCanvas } = await import('./ArenaCanvasRenderer')
+    const world = spotlightWorld()
+    world.activity = []
+    world.creatures[0].alive = false
+    const markup = renderToStaticMarkup(createElement(ArenaCanvas, {
+      world,
+      revision: 0,
+      selectedIndividualId: world.creatures[0].individualId,
+      onSelect: () => {},
+      arenaFocus: 'all',
+      playbackStatus: 'Paused',
+      playbackDetail: 'Paused.',
+    }))
+    expect(markup).not.toContain('data-arena-selected-callout="true"')
+    expect(markup).not.toContain('Selected Individual 1 is currently')
+    expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
   })
 })
 

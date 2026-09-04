@@ -254,6 +254,10 @@ function arenaActorRoleLabel(role: ArenaActivitySpotlightRole): string {
   return 'Involved individual'
 }
 
+function arenaActiveMode(value: unknown): value is Exclude<CreatureState, 'safe'> {
+  return value === 'exploring' || value === 'foraging' || value === 'hunting' || value === 'fleeing' || value === 'returning'
+}
+
 function arenaOrderedActorRefs(entry: unknown, kind: WorldActivityKind): { individualId: number; role: ArenaActivitySpotlightRole }[] {
   const refs: { individualId: number; role: ArenaActivitySpotlightRole }[] = []
   const seen = new Set<number>()
@@ -385,6 +389,240 @@ export function ArenaActivitySpotlightKey({ world }: { world: World }): React.Re
   return <strong data-arena-activity-spotlight-key="true">{ARENA_ACTIVITY_SPOTLIGHT_KEY_COPY}</strong>
 }
 
+export interface ArenaSelectedCreatureCallout {
+  individualId: number
+  state: CreatureState
+  title: string
+  detail: string
+  description: string
+  x: number
+  y: number
+  size: number
+}
+
+type ArenaCalloutTarget = { detail: string; accessible: string }
+
+function arenaTargetPointAvailable(value: unknown): boolean {
+  const x = arenaFinite(arenaField(value, 'targetX'))
+  const y = arenaFinite(arenaField(value, 'targetY'))
+  return x !== null && y !== null && x >= 0 && x <= 1 && y >= 0 && y <= 1
+}
+
+function arenaHasEntity(items: readonly unknown[], id: number, requireLiving = false): { entity: unknown; individualId?: number } | null {
+  for (let index = 0; index < arenaArrayLength(items); index++) {
+    let item: unknown
+    try {
+      item = items[index]
+    } catch {
+      continue
+    }
+    if (arenaSafeInteger(arenaField(item, 'id'), 1) !== id) continue
+    if (requireLiving && arenaField(item, 'alive') !== true) continue
+    const individualId = arenaSafeInteger(arenaField(item, 'individualId'), 1)
+    if (requireLiving && individualId === null) continue
+    return { entity: item, individualId: individualId ?? undefined }
+  }
+  return null
+}
+
+function arenaCalloutTarget(selected: unknown, world: unknown, targetType: unknown): ArenaCalloutTarget {
+  const targetId = arenaSafeInteger(arenaField(selected, 'targetId'), 1)
+  const targetPoint = arenaTargetPointAvailable(selected)
+  const food = arenaSafeArray(arenaField(world, 'food'))
+  const creatures = arenaSafeArray(arenaField(world, 'creatures'))
+  if (targetType === 'food') {
+    if (targetId !== null && arenaHasEntity(food, targetId)) return { detail: 'Held: food item', accessible: 'a food item' }
+    return targetPoint
+      ? { detail: 'Held: food gone · last-known point', accessible: 'food gone at its last-known point' }
+      : { detail: 'Held: food target unavailable', accessible: 'a food target with current status unavailable' }
+  }
+  if (targetType === 'prey') {
+    const prey = targetId === null ? null : arenaHasEntity(creatures, targetId, true)
+    if (prey?.individualId !== undefined) return { detail: `Held: prey · Individual ${prey.individualId}`, accessible: `prey Individual ${prey.individualId}` }
+    return targetPoint
+      ? { detail: 'Held: prey gone · last-known point', accessible: 'prey gone at its last-known point' }
+      : { detail: 'Held: prey target unavailable', accessible: 'a prey target with current status unavailable' }
+  }
+  if (targetType === 'threat') {
+    const threat = targetId === null ? null : arenaHasEntity(creatures, targetId, true)
+    if (threat?.individualId !== undefined) return targetPoint
+      ? { detail: `Held: escape waypoint · threat Individual ${threat.individualId}`, accessible: `an escape waypoint for threat Individual ${threat.individualId}` }
+      : { detail: `Held: threat · Individual ${threat.individualId}`, accessible: `threat Individual ${threat.individualId}` }
+    if (targetId === null) return targetPoint
+      ? { detail: 'Held: escape waypoint · remembered threat', accessible: 'an escape waypoint for a remembered threat' }
+      : { detail: 'Held: threat target unavailable', accessible: 'a threat target with current status unavailable' }
+    return targetPoint
+      ? { detail: 'Held: escape waypoint · threat gone', accessible: 'an escape waypoint for a threat that is gone' }
+      : { detail: 'Held: threat target unavailable', accessible: 'a threat target with current status unavailable' }
+  }
+  if (targetType === 'home') return { detail: 'Held: home', accessible: 'home' }
+  if (targetType === 'memory') return { detail: 'Held: remembered food', accessible: 'remembered food' }
+  if (targetType === 'explore') return { detail: 'Held: exploration waypoint', accessible: 'an exploration waypoint' }
+  if (targetType === null) return { detail: 'Held: no target', accessible: 'no target' }
+  return { detail: 'Held: target unavailable', accessible: 'a target whose type is unavailable' }
+}
+
+/** Derive a compact selected-actor callout from current state and held target fields only. */
+export function deriveArenaSelectedCreatureCallout(world: unknown, selectedIndividualId: unknown): ArenaSelectedCreatureCallout | null {
+  const id = arenaSafeInteger(selectedIndividualId, 1)
+  if (id === null) return null
+  const creatures = arenaSafeArray(arenaField(world, 'creatures'))
+  let selected: unknown = null
+  for (let index = 0; index < arenaArrayLength(creatures); index++) {
+    let creature: unknown
+    try {
+      creature = creatures[index]
+    } catch {
+      continue
+    }
+    if (arenaSafeInteger(arenaField(creature, 'individualId'), 1) === id && arenaField(creature, 'alive') === true) {
+      selected = creature
+      break
+    }
+  }
+  if (!selected) return null
+  const x = arenaFinite(arenaField(selected, 'x'))
+  const y = arenaFinite(arenaField(selected, 'y'))
+  const home = arenaField(selected, 'home')
+  const mode = arenaField(selected, 'mode')
+  if (x === null || y === null || x < 0 || x > 1 || y < 0 || y > 1 || typeof home !== 'boolean' || (!home && !arenaActiveMode(mode))) return null
+  const state = (home ? 'safe' : mode) as CreatureState
+  const targetType = arenaField(selected, 'targetType')
+  const target = arenaCalloutTarget(selected, world, targetType)
+  const action = CREATURE_STATE_METADATA[state].label
+  const sizeValue = arenaFinite(arenaField(selected, 'size'))
+  const size = sizeValue !== null && sizeValue > 0 ? Math.max(.3, Math.min(2.8, sizeValue)) : 1
+  return {
+    individualId: id,
+    state,
+    title: `Individual ${id} · ${action}`,
+    detail: target.detail,
+    description: targetType === null
+      ? `Selected Individual ${id} is currently ${action.toLowerCase()}; no held target has been captured yet.`
+      : `Selected Individual ${id} is currently ${action.toLowerCase()}; its held target from the last decision is ${target.accessible}.`,
+    x,
+    y,
+    size,
+  }
+}
+
+export interface ArenaSelectedCreatureCalloutGeometryInput {
+  width: number
+  height: number
+  pad: number
+  x: number
+  y: number
+  size?: number
+  compact?: boolean
+}
+
+export interface ArenaSelectedCreatureCalloutGeometry {
+  x: number
+  y: number
+  width: number
+  height: number
+  placement: 'above-right' | 'above-left' | 'below-right' | 'below-left' | 'above-clamped' | 'below-clamped' | 'left' | 'right' | 'overlay-band' | 'clamped'
+  leaderStartX: number
+  leaderStartY: number
+  leaderEndX: number
+  leaderEndY: number
+}
+
+function arenaClamp(value: number, minimum: number, maximum: number): number {
+  return Math.max(minimum, Math.min(maximum, value))
+}
+
+/** Place the callout near the actor while keeping its box and leader endpoints inside the padded field. */
+export function arenaSelectedCreatureCalloutGeometry(input: ArenaSelectedCreatureCalloutGeometryInput): ArenaSelectedCreatureCalloutGeometry {
+  const width = Number.isFinite(input.width) && input.width > 0 ? input.width : 300
+  const height = Number.isFinite(input.height) && input.height > 0 ? input.height : 276
+  const rawPad = Number.isFinite(input.pad) && input.pad >= 0 ? input.pad : 20
+  const pad = Math.min(Math.min(width, height) / 2, rawPad)
+  const left = pad
+  const right = Math.max(left, width - pad)
+  const top = pad
+  const bottom = Math.max(top, height - pad)
+  const fieldWidth = Math.max(1, right - left)
+  const fieldHeight = Math.max(1, bottom - top)
+  const normalizedX = Number.isFinite(input.x) ? arenaClamp(input.x, 0, 1) : .5
+  const normalizedY = Number.isFinite(input.y) ? arenaClamp(input.y, 0, 1) : .5
+  const safeSize = Number.isFinite(input.size) && input.size! > 0 ? Math.max(.3, Math.min(2.8, input.size!)) : 1
+  const base = Math.max(7, Math.min(width, height) * .017 * safeSize)
+  const selectedRingRadius = base * 1.5
+  const leaderStartX = arenaClamp(left + normalizedX * fieldWidth, left, right)
+  const leaderStartY = arenaClamp(top + normalizedY * fieldHeight - base * 1.55 * .35, top, bottom)
+  const requestedWidth = input.compact ? 148 : 190
+  const boxWidth = Math.min(fieldWidth, requestedWidth)
+  const boxHeight = Math.min(fieldHeight, 40)
+  const gap = 8
+  const actorOffset = selectedRingRadius + gap
+  const centeredX = arenaClamp(leaderStartX - boxWidth / 2, left, Math.max(left, right - boxWidth))
+  const centeredY = arenaClamp(leaderStartY - boxHeight / 2, top, Math.max(top, bottom - boxHeight))
+  const compactBandTop = Math.max(top, 132)
+  const compactBandBottom = Math.min(bottom, height - 102)
+  const compactBandFits = input.compact === true && compactBandBottom - compactBandTop >= boxHeight
+  const compactBandY = compactBandFits
+    ? arenaClamp(leaderStartY - boxHeight / 2, compactBandTop, compactBandBottom - boxHeight)
+    : centeredY
+  const candidates: Array<{ placement: ArenaSelectedCreatureCalloutGeometry['placement']; x: number; y: number }> = [
+    { placement: 'above-right', x: leaderStartX + actorOffset, y: leaderStartY - boxHeight - actorOffset },
+    { placement: 'above-left', x: leaderStartX - boxWidth - actorOffset, y: leaderStartY - boxHeight - actorOffset },
+    { placement: 'below-right', x: leaderStartX + actorOffset, y: leaderStartY + actorOffset },
+    { placement: 'below-left', x: leaderStartX - boxWidth - actorOffset, y: leaderStartY + actorOffset },
+    ...(compactBandFits ? [
+      { placement: 'left' as const, x: leaderStartX - boxWidth - actorOffset, y: compactBandY },
+      { placement: 'right' as const, x: leaderStartX + actorOffset, y: compactBandY },
+      { placement: 'overlay-band' as const, x: centeredX, y: compactBandY },
+    ] : []),
+    { placement: 'above-clamped', x: centeredX, y: leaderStartY - boxHeight - actorOffset },
+    { placement: 'below-clamped', x: centeredX, y: leaderStartY + actorOffset },
+    { placement: 'left', x: leaderStartX - boxWidth - actorOffset, y: centeredY },
+    { placement: 'right', x: leaderStartX + actorOffset, y: centeredY },
+  ]
+  const fits = (candidate: { x: number; y: number }) => candidate.x >= left && candidate.y >= top && candidate.x + boxWidth <= right && candidate.y + boxHeight <= bottom
+  const clearsActor = (candidate: { x: number; y: number }) => {
+    const nearestX = arenaClamp(leaderStartX, candidate.x, candidate.x + boxWidth)
+    const nearestY = arenaClamp(leaderStartY, candidate.y, candidate.y + boxHeight)
+    return Math.hypot(leaderStartX - nearestX, leaderStartY - nearestY) >= selectedRingRadius + gap / 2
+  }
+  // These canvas-space rectangles conservatively mirror the DOM badge, the
+  // closed key summary, and the inspection picker layered above the canvas.
+  const overlays = input.compact
+    ? [
+      { x: 12, y: 12, width: Math.max(0, width - 24), height: 120 },
+      { x: Math.max(0, width - 72), y: Math.max(0, height - 102), width: 62, height: 44 },
+      { x: 18, y: Math.max(0, height - 60), width: Math.max(0, Math.min(200, width - 36)), height: 44 },
+    ]
+    : [
+      { x: 20, y: 18, width: Math.max(0, Math.min(300, width - 40)), height: 106 },
+      { x: Math.max(0, width - 90), y: 18, width: 70, height: 36 },
+      { x: 18, y: Math.max(0, height - 60), width: Math.max(0, Math.min(245, width - 36)), height: 44 },
+    ]
+  const overlapArea = (candidate: { x: number; y: number }) => overlays.reduce((area, overlay) => {
+    const overlapWidth = Math.max(0, Math.min(candidate.x + boxWidth, overlay.x + overlay.width) - Math.max(candidate.x, overlay.x))
+    const overlapHeight = Math.max(0, Math.min(candidate.y + boxHeight, overlay.y + overlay.height) - Math.max(candidate.y, overlay.y))
+    return area + overlapWidth * overlapHeight
+  }, 0)
+  const safeCandidates = candidates.filter(candidate => fits(candidate) && clearsActor(candidate))
+  const chosen = safeCandidates.find(candidate => overlapArea(candidate) === 0)
+    ?? safeCandidates.reduce<(typeof safeCandidates)[number] | undefined>((best, candidate) => !best || overlapArea(candidate) < overlapArea(best) ? candidate : best, undefined)
+  const boxX = chosen ? chosen.x : centeredX
+  const boxY = chosen ? chosen.y : centeredY
+  const leaderEndX = arenaClamp(leaderStartX, boxX, boxX + boxWidth)
+  const leaderEndY = arenaClamp(leaderStartY, boxY, boxY + boxHeight)
+  return {
+    x: Number.isFinite(boxX) ? boxX : left,
+    y: Number.isFinite(boxY) ? boxY : top,
+    width: Number.isFinite(boxWidth) ? boxWidth : fieldWidth,
+    height: Number.isFinite(boxHeight) ? boxHeight : fieldHeight,
+    placement: chosen?.placement ?? 'clamped',
+    leaderStartX: Number.isFinite(leaderStartX) ? leaderStartX : left,
+    leaderStartY: Number.isFinite(leaderStartY) ? leaderStartY : top,
+    leaderEndX: Number.isFinite(leaderEndX) ? leaderEndX : left,
+    leaderEndY: Number.isFinite(leaderEndY) ? leaderEndY : top,
+  }
+}
+
 /** Color-scheme and canvas lifecycle helpers remain in the renderer chunk. */
 function readArenaDarkMode(): boolean {
   return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
@@ -454,6 +692,53 @@ function drawArenaActivitySpotlight(
     }
     ctx.restore()
   }
+}
+
+function truncateArenaCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
+  if (maxWidth <= 0) return ''
+  try {
+    if (ctx.measureText(text).width <= maxWidth) return text
+    const ellipsis = '…'
+    let candidate = text
+    while (candidate.length > 1 && ctx.measureText(`${candidate.trimEnd()}${ellipsis}`).width > maxWidth) candidate = candidate.slice(0, -1)
+    return `${candidate.trimEnd()}${ellipsis}`
+  } catch {
+    return text.length > 24 ? `${text.slice(0, 23)}…` : text
+  }
+}
+
+function drawArenaSelectedCreatureCallout(
+  ctx: CanvasRenderingContext2D,
+  callout: ArenaSelectedCreatureCallout,
+  width: number,
+  height: number,
+  pad: number,
+  gold: string,
+) {
+  const geometry = arenaSelectedCreatureCalloutGeometry({ width, height, pad, x: callout.x, y: callout.y, size: callout.size, compact: width <= 720 })
+  const textInset = 8
+  const maxTextWidth = Math.max(1, geometry.width - textInset * 2)
+  ctx.save()
+  ctx.lineCap = 'round'
+  ctx.strokeStyle = 'rgba(5, 16, 13, .92)'
+  ctx.lineWidth = 4
+  ctx.beginPath(); ctx.moveTo(geometry.leaderStartX, geometry.leaderStartY); ctx.lineTo(geometry.leaderEndX, geometry.leaderEndY); ctx.stroke()
+  ctx.strokeStyle = gold
+  ctx.lineWidth = 1.5
+  ctx.beginPath(); ctx.moveTo(geometry.leaderStartX, geometry.leaderStartY); ctx.lineTo(geometry.leaderEndX, geometry.leaderEndY); ctx.stroke()
+  ctx.fillStyle = 'rgba(7, 24, 18, .91)'
+  ctx.strokeStyle = gold
+  ctx.lineWidth = 1.4
+  ctx.beginPath(); ctx.roundRect(geometry.x, geometry.y, geometry.width, geometry.height, 7); ctx.fill(); ctx.stroke()
+  ctx.fillStyle = '#f8fafc'
+  ctx.font = '700 11px system-ui'
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(truncateArenaCanvasText(ctx, callout.title, maxTextWidth), geometry.x + textInset, geometry.y + 14)
+  ctx.fillStyle = 'rgba(231, 245, 238, .88)'
+  ctx.font = '10px system-ui'
+  ctx.fillText(truncateArenaCanvasText(ctx, callout.detail, maxTextWidth), geometry.x + textInset, geometry.y + 29)
+  ctx.restore()
 }
 
 function arenaQualityColor(multiplier: number, darkMode: boolean): string {
@@ -644,6 +929,7 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
   const darkModeRef = useRef<boolean | null>(null)
   if (darkModeRef.current === null) darkModeRef.current = readArenaDarkMode()
   const activitySpotlight = resolveArenaActivitySpotlight(world)
+  const selectedCallout = deriveArenaSelectedCreatureCallout(world, selectedIndividualId)
   useEffect(() => {
     const canvas = ref.current
     if (!canvas) return
@@ -758,6 +1044,7 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
       ctx.fillStyle = palette.progressTrack; ctx.fillRect(pad, pad - 9, w - pad * 2, 3)
       ctx.fillStyle = palette.progressFill; ctx.fillRect(pad, pad - 9, (w - pad * 2) * pct, 3)
       for (const marker of endpointMarkers) drawHeldPathEndpoint(ctx, marker.kind, marker.x, marker.y, marker.color, marker.size)
+      if (selectedCallout) drawArenaSelectedCreatureCallout(ctx, selectedCallout, w, h, pad, palette.selectedRing)
     }
     drawRef.current = draw; draw()
   }, [world, revision, selectedIndividualId, selectedPatchId, arenaFocus])
@@ -794,7 +1081,8 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
     ? `Resource patch ${selectedPatchOrdinal} is selected for inspection; its live food, capacity, energy, and regrowth details appear below the arena.`
     : ''
   const activitySpotlightDescription = activitySpotlight ? formatArenaActivitySpotlightDescription(activitySpotlight) : ''
-  const accessibleDescription = `${accessibleBaseDescription} ${patchSelectionDescription}${activitySpotlightDescription ? ` ${activitySpotlightDescription}` : ''} The combined selector includes living creatures and resource patches.`
+  const selectedCalloutDescription = selectedCallout?.description ?? ''
+  const accessibleDescription = `${accessibleBaseDescription} ${patchSelectionDescription}${activitySpotlightDescription ? ` ${activitySpotlightDescription}` : ''}${selectedCalloutDescription ? ` ${selectedCalloutDescription}` : ''} The combined selector includes living creatures and resource patches.`
   const patchOptions = sortArenaPatches(world.environment.patches).map((patch, index) => {
     const ordinal = index + 1
     const currentFood = world.food.filter(food => food.patchId === patch.id).length
@@ -828,7 +1116,7 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
     }
     dispatchArenaInspectionHit(null, onSelect, onSelectPatch)
   }
-  return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={accessibleDescription} data-arena-activity-spotlight={activitySpotlight ? 'true' : undefined} data-arena-activity-spotlight-sequence={activitySpotlight?.sequence} data-arena-activity-spotlight-kind={activitySpotlight?.kind} data-arena-activity-spotlight-tick={activitySpotlight?.tick} data-arena-activity-spotlight-age={activitySpotlight?.age} data-arena-activity-spotlight-actors={activitySpotlight?.actors.map(actor => actor.individualId).join(',')}>
+  return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={accessibleDescription} data-arena-activity-spotlight={activitySpotlight ? 'true' : undefined} data-arena-activity-spotlight-sequence={activitySpotlight?.sequence} data-arena-activity-spotlight-kind={activitySpotlight?.kind} data-arena-activity-spotlight-tick={activitySpotlight?.tick} data-arena-activity-spotlight-age={activitySpotlight?.age} data-arena-activity-spotlight-actors={activitySpotlight?.actors.map(actor => actor.individualId).join(',')} data-arena-selected-callout={selectedCallout ? 'true' : undefined} data-arena-selected-callout-individual-id={selectedCallout?.individualId} data-arena-selected-callout-title={selectedCallout?.title} data-arena-selected-callout-detail={selectedCallout?.detail} data-arena-selected-callout-copy={selectedCallout?.description}>
     Natural selection simulation arena. Live counts are available in the statistics region.
   </canvas><label className="creature-picker" htmlFor="arena-creature-picker">Inspect <select id="arena-creature-picker" aria-label="Inspect creatures or resource patches" aria-describedby="arena-creature-picker-help" value={selectedValue} onChange={e => selectInspection(e.target.value)} style={{ background: 'var(--paper)', color: 'var(--ink)', colorScheme: 'light dark', minHeight: 32, touchAction: 'manipulation' }}><option value="">Nothing selected</option><optgroup label="Creatures">{livingCreatures.slice().sort((a, b) => a.individualId - b.individualId).map(c => <option key={`creature:${c.individualId}`} value={`creature:${c.individualId}`}>Individual {c.individualId}, lineage {c.lineageId}, {CREATURE_STATE_METADATA[c.home ? 'safe' : c.mode].label}</option>)}</optgroup>{patchOptions.length > 0 && <optgroup label="Resource patches">{patchOptions.map(({ patch, ordinal, currentFood, quality }) => <option key={`patch:${ordinal}`} value={`patch:${ordinal}`}>Patch {ordinal} · {quality} · {currentFood} food</option>)}</optgroup>}</select></label><span id="arena-creature-picker-help" className="sr-only">Choose a living creature or resource patch to inspect. Creature options reveal behavior; patch options reveal live food, capacity, energy, and regrowth. Choose Nothing selected to clear inspection.</span><span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{formatArenaInspectionStatus(selectedIndividualId, selectedPatchId, selectedPatchOrdinal)}</span></>
 }
