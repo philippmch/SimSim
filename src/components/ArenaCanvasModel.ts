@@ -328,6 +328,7 @@ export interface ArenaAccessibleDescriptionInput {
   patchQualityVariation?: number
   patchQualityRange?: readonly [number, number]
   hasSelectedCreature: boolean
+  hasSelectedPatch?: boolean
   selectedIsHunting?: boolean
   focus?: ArenaFocus
   focusCount?: number
@@ -402,12 +403,12 @@ export function formatArenaAccessibleDescription(input: ArenaAccessibleDescripti
   const qualityDescription = formatArenaPatchQualityDescription(input.ecologyMode, input.patchQualityVariation, input.patchQualityRange)
   const focusDescription = formatArenaFocusDescription(input.focus ?? 'all',input.focusCount,input.livingCreatures,input.selectedOutsideFocus)
   const allFocusPathDescription = input.focus === 'all' ? ' Choose an action focus to reveal dashed held destinations captured at the last decision for active matches; decisions can persist between reaction windows.' : ''
-  const selectionHint = input.hasSelectedCreature
+  const selectionHint = input.hasSelectedCreature || input.hasSelectedPatch
     ? ''
-    : 'Select a creature to reveal its focus, sight, target, memory, and same-lineage overlays.'
+    : 'Select a creature to reveal its focus, sight, target, memory, and same-lineage overlays, or select a resource patch to inspect its live food and production.'
   const playbackDescription = input.playbackDetail
     || (input.playbackStatus ? `Playback status: ${input.playbackStatus}.` : '')
-  return `Simulation arena, generation ${input.generation}, ${input.livingCreatures} living creatures: ${input.stateSummary}. ${playbackDescription ? `${playbackDescription} ` : ''}${resourceLabel}. ${qualityDescription ? `${qualityDescription} ` : ''}${input.obstacleCount} obstacles. ${overlayDescription ? `${overlayDescription} ` : ''}${focusDescription}${allFocusPathDescription} ${selectionHint} Creature body color shows speed and the bright body outline shows its current action. Click a creature or use the Inspect creature selector to select it.`
+  return `Simulation arena, generation ${input.generation}, ${input.livingCreatures} living creatures: ${input.stateSummary}. ${playbackDescription ? `${playbackDescription} ` : ''}${resourceLabel}. ${qualityDescription ? `${qualityDescription} ` : ''}${input.obstacleCount} obstacles. ${overlayDescription ? `${overlayDescription} ` : ''}${focusDescription}${allFocusPathDescription} ${selectionHint} Creature body color shows speed and the bright body outline shows its current action. Click a creature or resource patch, or use the Inspect selector.`
 }
 
 export function formatArenaSelectionStatus(selectedIndividualId: number | null): string {

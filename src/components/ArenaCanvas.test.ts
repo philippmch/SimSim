@@ -12,6 +12,7 @@ import {
   ARENA_LIGHT_PALETTE,
   ARENA_HUNT_CONTACT_KEY,
   ARENA_PATCH_QUALITY_KEY,
+  ARENA_PATCH_MIN_HIT_RADIUS,
   ARENA_PATCH_STOCK_KEY,
   ARENA_QUICK_START,
   ARENA_SELECTED_OVERLAY_KEY,
@@ -19,12 +20,17 @@ import {
   arenaCanvasPalette,
   arenaPatchQualityGeometry,
   classifyArenaHeldPathEndpoint,
+  dispatchArenaInspectionHit,
   arenaTargetPathEligible,
   listenToArenaColorScheme,
   type ArenaColorSchemeQuery,
   arenaPlaybackStatus,
   arenaCreatureAlpha,
   arenaLineageRingAlpha,
+  arenaPatchCentralRingRadius,
+  arenaPatchHitRadius,
+  arenaPatchHaloRadius,
+  arenaPatchOrdinal,
   arenaPatchQualityMultiplier,
   arenaPatchQualityRange,
   CREATURE_STATE_METADATA,
@@ -32,6 +38,7 @@ import {
   formatArenaDayProgress,
   formatArenaFocusDescription,
   formatArenaFocusOption,
+  formatArenaInspectionStatus,
   formatArenaOverlayDescription,
   formatArenaPlaybackDetail,
   formatArenaPatchQualityDescription,
@@ -39,6 +46,9 @@ import {
   formatObservedPath,
   formatObservedDecisionMetadata,
   formatSelectedTarget,
+  hitTestArenaPatch,
+  hitTestArenaInspection,
+  sortArenaPatches,
   showArenaQuickStart,
   type ArenaAccessibleDescriptionInput,
   type ArenaTargetPathCreature,
@@ -66,6 +76,29 @@ describe('arena renderer boundary', () => {
     expect(markup).toContain('id="arena-creature-picker"')
     expect(markup).toContain('Individual 1')
     expect(markup).toContain('Individual 2')
+  })
+
+  it('renders one namespaced inspection selector for creatures and resource patches', async () => {
+    const { ArenaCanvas } = await import('./ArenaCanvasRenderer')
+    const world = createWorld({ ...defaultConfig, initialPopulation: 1, foodPatchCount: 2 })
+    const markup = renderToStaticMarkup(createElement(ArenaCanvas, {
+      world,
+      revision: 0,
+      selectedIndividualId: null,
+      selectedPatchId: world.environment.patches[0]?.id ?? null,
+      onSelect: () => {},
+      onSelectPatch: () => {},
+      arenaFocus: 'all',
+      playbackStatus: 'Paused',
+      playbackDetail: 'Paused. Resume playback to continue active creature actions.',
+    }))
+
+    expect(markup).toContain('>Inspect <select')
+    expect(markup).toContain('aria-label="Inspect creatures or resource patches"')
+    expect(markup).toContain('<optgroup label="Creatures">')
+    expect(markup).toContain('<optgroup label="Resource patches">')
+    expect(markup).toContain('Patch 1')
+    expect(markup).toContain('combined selector includes living creatures and resource patches')
   })
 })
 
@@ -171,6 +204,57 @@ describe('arena clarity helpers', () => {
     expect(arenaCanvasCanDraw(0, 0)).toBe(false)
     expect(arenaCanvasCanDraw(Number.NaN, 600)).toBe(false)
     expect(arenaCanvasCanDraw(390, Number.POSITIVE_INFINITY)).toBe(false)
+  })
+
+  it('hit-tests an accessible patch target with nearest and stable-id precedence', () => {
+    const geometry = { width: 320, height: 320, pad: 20, foodPatchSpread: .12 }
+    const radius = arenaPatchCentralRingRadius(geometry.width, geometry.height, geometry.foodPatchSpread)
+    expect(arenaPatchHaloRadius(320, 320, .12)).toBeGreaterThan(radius)
+    expect(arenaPatchHitRadius(320, 320, .12)).toBe(ARENA_PATCH_MIN_HIT_RADIUS)
+    const patches = [
+      { id: 8, x: .5, y: .5 },
+      { id: 4, x: .5, y: .5 },
+      { id: 2, x: .57, y: .5 },
+    ]
+    expect(hitTestArenaPatch(patches, { x: .5, y: .5 }, geometry)?.id).toBe(4)
+    expect(hitTestArenaPatch(patches, { x: .545, y: .5 }, geometry)?.id).toBe(2)
+    expect(hitTestArenaPatch(patches, { x: 1.01, y: .5 }, geometry)).toBeUndefined()
+    expect(hitTestArenaPatch([...patches, { id: Number.NaN, x: .5, y: .5 }], { x: .5, y: .5 }, geometry)?.id).toBe(4)
+    expect(hitTestArenaPatch([{ id: 99, x: 1.04, y: .5 }], { x: 1, y: .5 }, geometry)).toBeUndefined()
+    expect(hitTestArenaPatch([{ id: 1, x: .5, y: .5 }], { x: .575, y: .5 }, geometry)?.id).toBe(1)
+    expect(hitTestArenaPatch([{ id: 1, x: .5, y: .5 }], { x: .58, y: .5 }, geometry)).toBeUndefined()
+  })
+
+  it('gives living creatures precedence over overlapping resource patches', () => {
+    const geometry = { width: 320, height: 320, pad: 20, foodPatchSpread: .12 }
+    const patches = [{ id: 9, x: .5, y: .5 }]
+    expect(hitTestArenaInspection([
+      { individualId: 7, x: .5, y: .5, alive: true },
+      { individualId: 8, x: .5, y: .5, alive: true },
+    ], patches, { x: .5, y: .5 }, geometry)).toEqual({ kind: 'creature', individualId: 7 })
+    expect(hitTestArenaInspection([
+      { individualId: 7, x: .5, y: .5, alive: false },
+    ], patches, { x: .5, y: .5 }, geometry)).toEqual({ kind: 'patch', patchId: 9 })
+    expect(hitTestArenaInspection([], patches, { x: .1, y: .1 }, geometry)).toBeNull()
+  })
+
+  it('dispatches exactly one mutually exclusive callback for each arena hit', () => {
+    const calls: string[] = []
+    const selectCreature = (id: number | null) => calls.push(`creature:${id}`)
+    const selectPatch = (id: number | null) => calls.push(`patch:${id}`)
+    dispatchArenaInspectionHit({ kind: 'creature', individualId: 7 }, selectCreature, selectPatch)
+    expect(calls.splice(0)).toEqual(['creature:7'])
+    dispatchArenaInspectionHit({ kind: 'patch', patchId: 23 }, selectCreature, selectPatch)
+    expect(calls.splice(0)).toEqual(['patch:23'])
+    dispatchArenaInspectionHit(null, selectCreature, selectPatch)
+    expect(calls.splice(0)).toEqual(['creature:null'])
+  })
+
+  it('derives user-facing patch ordinals from sorted ids without exposing ids', () => {
+    const patches = [{ id: 42, x: .2, y: .2 }, { id: 7, x: .8, y: .8 }, { id: 19, x: .5, y: .5 }]
+    expect(sortArenaPatches(patches).map(patch => patch.id)).toEqual([7, 19, 42])
+    expect(arenaPatchOrdinal(patches, 19)).toBe(2)
+    expect(arenaPatchOrdinal(patches, 9001)).toBeNull()
   })
 
   it('keeps the light canvas palette stable and provides a legible dark palette', () => {
@@ -352,8 +436,8 @@ describe('arena clarity helpers', () => {
   it('describes ecological patch stock and unselected overlay affordance', () => {
     const description = formatArenaAccessibleDescription(descriptionInput())
     expect(description).toContain(ARENA_PATCH_STOCK_KEY)
-    expect(description).toContain('Select a creature to reveal its focus, sight, target, memory, and same-lineage overlays.')
-    expect(description).toContain('use the Inspect creature selector')
+    expect(description).toContain('select a resource patch to inspect its live food and production')
+    expect(description).toContain('use the Inspect selector')
     expect(description).not.toContain(ARENA_SELECTED_OVERLAY_KEY)
   })
 
@@ -379,12 +463,18 @@ describe('arena clarity helpers', () => {
   it('announces creature inspection selection and clearing without live state details', () => {
     expect(formatArenaSelectionStatus(7)).toBe('Individual 7 selected for inspection.')
     expect(formatArenaSelectionStatus(null)).toBe('Creature inspection cleared. No creature selected.')
+    expect(formatArenaInspectionStatus(7, null, null)).toBe('Individual 7 selected for inspection. Resource-patch inspection cleared.')
+    expect(formatArenaInspectionStatus(null, 42, 2)).toBe('Resource patch 2 selected for inspection. Creature inspection cleared.')
+    expect(formatArenaInspectionStatus(null, null, null)).toBe('Creature and resource-patch inspection cleared. Nothing is selected.')
   })
 
   it('describes selected overlays while keeping classic mode free of patch-ring claims', () => {
     const selectedEcological = formatArenaAccessibleDescription(descriptionInput({ hasSelectedCreature: true }))
     expect(selectedEcological).toContain(ARENA_PATCH_STOCK_KEY)
     expect(selectedEcological).toContain(ARENA_SELECTED_OVERLAY_KEY)
+
+    const selectedPatch = formatArenaAccessibleDescription(descriptionInput({ hasSelectedPatch: true }))
+    expect(selectedPatch).not.toContain('Select a creature to reveal')
 
     const selectedClassic = formatArenaAccessibleDescription(descriptionInput({ ecologyMode: 'classic', hasSelectedCreature: true }))
     expect(selectedClassic).toContain(ARENA_SELECTED_OVERLAY_KEY)

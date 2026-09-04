@@ -11,19 +11,22 @@ import {
   arenaTargetPathEligible,
   classifyArenaHeldPathEndpoint,
   formatArenaAccessibleDescription,
-  formatArenaSelectionStatus,
   speedColor,
   type ArenaFocus,
   type ArenaHeldPathEndpointKind,
   type ArenaPlaybackStatus,
   type CreatureState,
 } from './ArenaCanvasModel'
+import { resourcePatchOrdinal, sortResourcePatchRecords } from './ResourcePatchPresentation'
 
 interface Props {
   world: World
   revision: number
   selectedIndividualId: number | null
   onSelect: (individualId: number | null) => void
+  /** Patch selection stays outside worker inspect telemetry. */
+  selectedPatchId?: number | null
+  onSelectPatch?: (patchId: number | null) => void
   arenaFocus: ArenaFocus
   playbackStatus: ArenaPlaybackStatus
   playbackDetail: string
@@ -197,6 +200,124 @@ function arenaQualityColor(multiplier: number, darkMode: boolean): string {
   return `hsl(${hue} 72% ${darkMode ? 68 : 36}%)`
 }
 
+export type ArenaPatchPosition = Pick<World['environment']['patches'][number], 'id' | 'x' | 'y'>
+
+/** Backward-compatible arena names use the shared user-facing patch contract. */
+export const sortArenaPatches = sortResourcePatchRecords
+export const arenaPatchOrdinal = resourcePatchOrdinal
+
+/** Shared visual radius calculations keep canvas hit testing aligned with the central stock ring. */
+export function arenaPatchHaloRadius(width: number, height: number, foodPatchSpread: number): number {
+  const extent = Math.min(width, height)
+  const spread = Number.isFinite(foodPatchSpread) ? Math.max(0, foodPatchSpread) : 0
+  return Math.max(24, extent * spread * .72)
+}
+
+export function arenaPatchCentralRingRadius(width: number, height: number, foodPatchSpread: number): number {
+  return Math.max(8, arenaPatchHaloRadius(width, height, foodPatchSpread) * .32)
+}
+
+export const ARENA_PATCH_MIN_HIT_RADIUS = 22
+
+/** Keep a patch comfortably tappable even when its visual stock ring is small. */
+export function arenaPatchHitRadius(width: number, height: number, foodPatchSpread: number): number {
+  return Math.max(ARENA_PATCH_MIN_HIT_RADIUS, arenaPatchCentralRingRadius(width, height, foodPatchSpread))
+}
+
+export interface ArenaPatchHitTestPoint {
+  /** Normalized field coordinates, where 0–1 is the drawable simulation field. */
+  x: number
+  y: number
+}
+
+export interface ArenaPatchHitTestGeometry {
+  width: number
+  height: number
+  pad: number
+  foodPatchSpread: number
+}
+
+/**
+ * Choose the nearest patch whose accessible target contains a pointer. The
+ * test is pure, finite-data guarded, and uses patch id as the deterministic
+ * tie-breaker when overlapping patches are equally close.
+ */
+export function hitTestArenaPatch<T extends ArenaPatchPosition>(
+  patches: ReadonlyArray<T>,
+  point: ArenaPatchHitTestPoint,
+  geometry: ArenaPatchHitTestGeometry,
+): T | undefined {
+  const { width, height, pad, foodPatchSpread } = geometry
+  if (![width, height, pad, point.x, point.y].every(Number.isFinite)) return undefined
+  if (width <= 0 || height <= 0 || width - pad * 2 <= 0 || height - pad * 2 <= 0) return undefined
+  if (point.x < 0 || point.x > 1 || point.y < 0 || point.y > 1) return undefined
+  const fieldWidth = width - pad * 2
+  const fieldHeight = height - pad * 2
+  const radius = arenaPatchHitRadius(width, height, foodPatchSpread)
+  let best: T | undefined
+  let bestDistance = Number.POSITIVE_INFINITY
+  let bestIndex = Number.POSITIVE_INFINITY
+  for (let index = 0; index < patches.length; index++) {
+    const patch = patches[index]
+    if (!patch || !Number.isFinite(patch.id) || !Number.isFinite(patch.x) || !Number.isFinite(patch.y)
+      || patch.x < 0 || patch.x > 1 || patch.y < 0 || patch.y > 1) continue
+    const distance = Math.hypot((patch.x - point.x) * fieldWidth, (patch.y - point.y) * fieldHeight)
+    if (!Number.isFinite(distance) || distance > radius) continue
+    const closer = distance < bestDistance
+    const sameDistance = distance === bestDistance
+    const lowerId = best !== undefined && patch.id < best.id
+    const earlierRecord = best !== undefined && patch.id === best.id && index < bestIndex
+    if (closer || (sameDistance && (lowerId || earlierRecord))) {
+      best = patch
+      bestDistance = distance
+      bestIndex = index
+    }
+  }
+  return best
+}
+
+type ArenaSelectableCreature = Pick<World['creatures'][number], 'individualId' | 'x' | 'y' | 'alive'>
+export type ArenaInspectionHit = { kind: 'creature'; individualId: number } | { kind: 'patch'; patchId: number } | null
+
+/** Preserve legacy creature hit precedence, then consider a resource patch. */
+export function hitTestArenaInspection(
+  creatures: ReadonlyArray<ArenaSelectableCreature>,
+  patches: ReadonlyArray<ArenaPatchPosition>,
+  point: ArenaPatchHitTestPoint,
+  geometry: ArenaPatchHitTestGeometry,
+): ArenaInspectionHit {
+  let bestCreature: ArenaSelectableCreature | undefined
+  let bestDistance = .05
+  for (const creature of creatures) {
+    if (!creature.alive) continue
+    const distance = Math.hypot(creature.x - point.x, creature.y - point.y)
+    if (distance < bestDistance) { bestCreature = creature; bestDistance = distance }
+  }
+  if (bestCreature) return { kind: 'creature', individualId: bestCreature.individualId }
+  const patch = hitTestArenaPatch(patches, point, geometry)
+  return patch ? { kind: 'patch', patchId: patch.id } : null
+}
+
+export function formatArenaInspectionStatus(selectedIndividualId: number | null, selectedPatchId: number | null, selectedPatchOrdinal: number | null): string {
+  if (selectedPatchId !== null) {
+    const label = selectedPatchOrdinal !== null ? `Resource patch ${selectedPatchOrdinal}` : 'Resource patch'
+    return `${label} selected for inspection. Creature inspection cleared.`
+  }
+  if (selectedIndividualId !== null) return `Individual ${selectedIndividualId} selected for inspection. Resource-patch inspection cleared.`
+  return 'Creature and resource-patch inspection cleared. Nothing is selected.'
+}
+
+/** Dispatch exactly one callback for one resolved arena hit. */
+export function dispatchArenaInspectionHit(
+  hit: ArenaInspectionHit,
+  onSelectCreature: (individualId: number | null) => void,
+  onSelectPatch: (patchId: number | null) => void,
+): void {
+  if (hit?.kind === 'creature') onSelectCreature(hit.individualId)
+  else if (hit?.kind === 'patch') onSelectPatch(hit.patchId)
+  else onSelectCreature(null)
+}
+
 export interface ArenaPatchQualityGeometryInput {
   width: number
   height: number
@@ -255,7 +376,7 @@ export function arenaCanvasCanDraw(width: number, height: number) {
   return Number.isFinite(width) && Number.isFinite(height) && width > 40 && height > 40
 }
 
-export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, arenaFocus, playbackStatus, playbackDetail }: Props) {
+export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, selectedPatchId = null, onSelectPatch = () => {}, arenaFocus, playbackStatus, playbackDetail }: Props) {
   const ref = useRef<HTMLCanvasElement>(null)
   const drawRef = useRef<() => void>(() => {})
   const darkModeRef = useRef<boolean | null>(null)
@@ -301,7 +422,7 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, a
         for (const memory of [{ x: selected.memory.foodX, y: selected.memory.foodY, color: palette.memoryFood }, { x: selected.memory.threatX, y: selected.memory.threatY, color: palette.memoryThreat }]) if (memory.x !== null && memory.y !== null) { ctx.save(); ctx.strokeStyle = memory.color; ctx.lineWidth = 1.5; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.arc(sx(memory.x), sy(memory.y), 7, 0, Math.PI * 2); ctx.stroke(); ctx.restore() }
       }
       for (const patch of world.environment.patches) {
-        const x = sx(patch.x), y = sy(patch.y), r = Math.max(24, Math.min(w, h) * world.config.foodPatchSpread * .72)
+        const x = sx(patch.x), y = sy(patch.y), r = arenaPatchHaloRadius(w, h, world.config.foodPatchSpread)
         const advanced = world.config.ecologyMode === 'energy-regrowth'
         const multiplier = advanced ? arenaPatchQualityMultiplier(patch.qualityBias, world.config.patchQualityVariation) : 1
         const qualityColor = arenaQualityColor(multiplier, darkModeRef.current ?? false)
@@ -315,9 +436,19 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, a
           // The outer dashed ring and compact label communicate quality; the
           // inner complete track plus arc communicate stock independently.
           ctx.save(); ctx.globalAlpha = .72; ctx.strokeStyle = qualityColor; ctx.lineWidth = Math.max(1.5, Math.min(3.5, r * .045)); ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.arc(qualityGeometry.ringX, qualityGeometry.ringY, qualityGeometry.ringRadius, 0, Math.PI * 2); ctx.stroke(); ctx.restore()
-          const stock = Math.max(0, Math.min(1, patch.stock / Math.max(1, world.config.patchCapacity)))
+          const stockCapacity = Number.isFinite(world.config.patchCapacity) ? Math.max(1, world.config.patchCapacity) : 1
+          const stockValue = Number.isFinite(patch.stock) ? Math.max(0, patch.stock) : 0
+          const stock = Math.max(0, Math.min(1, stockValue / stockCapacity))
           ctx.save(); ctx.strokeStyle = palette.patchStockTrack; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y, stockRadius, 0, Math.PI * 2); ctx.stroke(); ctx.strokeStyle = palette.patchRing; ctx.beginPath(); ctx.arc(x, y, stockRadius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * stock); ctx.stroke(); ctx.restore()
           ctx.save(); ctx.fillStyle = qualityColor; ctx.font = `700 ${Math.max(8, Math.min(11, r * .19))}px system-ui`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(`${multiplier.toFixed(1)}×`, qualityGeometry.labelX, qualityGeometry.labelY); ctx.restore()
+        }
+        if (patch.id === selectedPatchId) {
+          const selectedRadius = Math.max(arenaPatchCentralRingRadius(w, h, world.config.foodPatchSpread) + 7, r * .92)
+          const ordinal = arenaPatchOrdinal(world.environment.patches, patch.id)
+          const label = ordinal === null ? 'Selected patch' : `Patch ${ordinal}`
+          const selectedGeometry = arenaPatchQualityGeometry({ width: w, height: h, pad, x, y, radius: selectedRadius, labelHalfWidth: Math.max(18, label.length * 3.2), labelHalfHeight: 7, labelGap: 18 })
+          ctx.save(); ctx.strokeStyle = palette.selectedRing; ctx.globalAlpha = .98; ctx.lineWidth = Math.max(2.4, Math.min(4, r * .055)); ctx.setLineDash([7, 3]); ctx.beginPath(); ctx.arc(selectedGeometry.ringX, selectedGeometry.ringY, selectedGeometry.ringRadius, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1; ctx.globalAlpha = .95; ctx.beginPath(); ctx.arc(selectedGeometry.ringX, selectedGeometry.ringY, selectedGeometry.ringRadius + 3, 0, Math.PI * 2); ctx.stroke(); ctx.restore()
+          ctx.save(); ctx.fillStyle = palette.selectedRing; ctx.font = `700 ${Math.max(8, Math.min(11, r * .2))}px system-ui`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.shadowColor = 'rgba(12, 26, 19, .8)'; ctx.shadowBlur = 3; ctx.fillText(label, selectedGeometry.labelX, selectedGeometry.labelY); ctx.restore()
         }
       }
       for (const obstacle of world.environment.obstacles) {
@@ -365,7 +496,7 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, a
       for (const marker of endpointMarkers) drawHeldPathEndpoint(ctx, marker.kind, marker.x, marker.y, marker.color, marker.size)
     }
     drawRef.current = draw; draw()
-  }, [world, revision, selectedIndividualId, arenaFocus])
+  }, [world, revision, selectedIndividualId, selectedPatchId, arenaFocus])
   useEffect(() => {
     const query = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia(ARENA_COLOR_SCHEME_QUERY) : null
     if (!query) return
@@ -376,15 +507,63 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, a
     })
   }, [])
   useEffect(() => { const canvas = ref.current; if (!canvas || typeof ResizeObserver === 'undefined') return; const observer = new ResizeObserver(() => drawRef.current()); observer.observe(canvas); return () => observer.disconnect() }, [])
-  const chooseAt = (event: React.MouseEvent<HTMLCanvasElement>) => { const canvas = ref.current; if (!canvas) return; const rect = canvas.getBoundingClientRect(); if (!arenaCanvasCanDraw(rect.width, rect.height)) return; const pad = Math.max(20, Math.min(rect.width, rect.height) * .055), x = (event.clientX - rect.left - pad) / (rect.width - pad * 2), y = (event.clientY - rect.top - pad) / (rect.height - pad * 2); let best: World['creatures'][number] | undefined, bestD = .05; for (const c of world.creatures.filter(c => c.alive)) { const d = Math.hypot(c.x - x, c.y - y); if (d < bestD) { best = c; bestD = d } } onSelect(best?.individualId ?? null) }
+  const chooseAt = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = ref.current
+    if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
+    if (!arenaCanvasCanDraw(rect.width, rect.height)) return
+    const pad = Math.max(20, Math.min(rect.width, rect.height) * .055)
+    const x = (event.clientX - rect.left - pad) / (rect.width - pad * 2)
+    const y = (event.clientY - rect.top - pad) / (rect.height - pad * 2)
+    const hit = hitTestArenaInspection(world.creatures, world.environment.patches, { x, y }, { width: rect.width, height: rect.height, pad, foodPatchSpread: world.config.foodPatchSpread })
+    dispatchArenaInspectionHit(hit, onSelect, onSelectPatch)
+  }
   const livingCreatures = world.creatures.filter(c => c.alive)
   const selected = world.creatures.find(creature => creature.individualId === selectedIndividualId && creature.alive)
   const stateCounts: Record<CreatureState, number> = { safe: 0, exploring: 0, foraging: 0, hunting: 0, fleeing: 0, returning: 0 }
   for (const creature of livingCreatures) stateCounts[creature.home ? 'safe' : creature.mode]++
   const stateSummary = (Object.entries(CREATURE_STATE_METADATA) as [CreatureState, (typeof CREATURE_STATE_METADATA)[CreatureState]][]).map(([state, metadata]) => `${stateCounts[state]} ${metadata.label.toLowerCase()}`).join(', ')
   const selectedState = selected ? (selected.home ? 'safe' : selected.mode) : null
-  const accessibleDescription = formatArenaAccessibleDescription({ generation: world.generation, livingCreatures: livingCreatures.length, stateSummary, foodCount: world.food.length, patchCount: world.environment.patches.length, foodBudget: world.environment.foodBudget, obstacleCount: world.environment.obstacles.length, ecologyMode: world.config.ecologyMode, patchQualityVariation: world.config.ecologyMode === 'energy-regrowth' ? world.config.patchQualityVariation : undefined, patchQualityRange: world.config.ecologyMode === 'energy-regrowth' ? arenaPatchQualityRange(world.environment.patches, world.config.patchQualityVariation) : undefined, hasSelectedCreature: Boolean(selected), selectedIsHunting: selected?.mode === 'hunting', focus: arenaFocus, focusCount: arenaFocus === 'all' ? livingCreatures.length : stateCounts[arenaFocus], selectedOutsideFocus: arenaFocus !== 'all' && selectedState !== null && selectedState !== arenaFocus, playbackStatus, playbackDetail })
+  const selectedPatchOrdinal = arenaPatchOrdinal(world.environment.patches, selectedPatchId)
+  const accessibleBaseDescription = formatArenaAccessibleDescription({ generation: world.generation, livingCreatures: livingCreatures.length, stateSummary, foodCount: world.food.length, patchCount: world.environment.patches.length, foodBudget: world.environment.foodBudget, obstacleCount: world.environment.obstacles.length, ecologyMode: world.config.ecologyMode, patchQualityVariation: world.config.ecologyMode === 'energy-regrowth' ? world.config.patchQualityVariation : undefined, patchQualityRange: world.config.ecologyMode === 'energy-regrowth' ? arenaPatchQualityRange(world.environment.patches, world.config.patchQualityVariation) : undefined, hasSelectedCreature: Boolean(selected), hasSelectedPatch: selectedPatchId !== null && selectedPatchOrdinal !== null, selectedIsHunting: selected?.mode === 'hunting', focus: arenaFocus, focusCount: arenaFocus === 'all' ? livingCreatures.length : stateCounts[arenaFocus], selectedOutsideFocus: arenaFocus !== 'all' && selectedState !== null && selectedState !== arenaFocus, playbackStatus, playbackDetail })
+  const patchSelectionDescription = selectedPatchId !== null && selectedPatchOrdinal !== null
+    ? `Resource patch ${selectedPatchOrdinal} is selected for inspection; its live food, capacity, energy, and regrowth details appear below the arena.`
+    : ''
+  const accessibleDescription = `${accessibleBaseDescription} ${patchSelectionDescription} The combined selector includes living creatures and resource patches.`
+  const patchOptions = sortArenaPatches(world.environment.patches).map((patch, index) => {
+    const ordinal = index + 1
+    const currentFood = world.food.filter(food => food.patchId === patch.id).length
+    const multiplier = world.config.ecologyMode === 'energy-regrowth' ? arenaPatchQualityMultiplier(patch.qualityBias, world.config.patchQualityVariation) : 1
+    const quality = world.config.ecologyMode === 'energy-regrowth'
+      ? `${multiplier.toFixed(1)}×`
+      : 'classic'
+    return { patch, ordinal, currentFood, quality }
+  })
+  const selectedValue = selectedIndividualId !== null
+    ? `creature:${selectedIndividualId}`
+    : selectedPatchOrdinal !== null
+      ? `patch:${selectedPatchOrdinal}`
+      : ''
+  const selectInspection = (value: string) => {
+    if (!value) {
+      dispatchArenaInspectionHit(null, onSelect, onSelectPatch)
+      return
+    }
+    if (value.startsWith('creature:')) {
+      const individualId = Number(value.slice('creature:'.length))
+      dispatchArenaInspectionHit(Number.isSafeInteger(individualId) ? { kind: 'creature', individualId } : null, onSelect, onSelectPatch)
+      return
+    }
+    if (value.startsWith('patch:')) {
+      const ordinal = Number(value.slice('patch:'.length))
+      const option = Number.isSafeInteger(ordinal) && ordinal > 0 ? patchOptions[ordinal - 1] : undefined
+      if (option) dispatchArenaInspectionHit({ kind: 'patch', patchId: option.patch.id }, onSelect, onSelectPatch)
+      else onSelectPatch(null)
+      return
+    }
+    dispatchArenaInspectionHit(null, onSelect, onSelectPatch)
+  }
   return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={accessibleDescription}>
     Natural selection simulation arena. Live counts are available in the statistics region.
-  </canvas><label className="creature-picker" htmlFor="arena-creature-picker">Inspect creature <select id="arena-creature-picker" aria-describedby="arena-creature-picker-help" value={selectedIndividualId ?? ''} onChange={e => onSelect(e.target.value ? Number(e.target.value) : null)} style={{ background: 'var(--paper)', color: 'var(--ink)', colorScheme: 'light dark' }}><option value="">No creature selected</option>{livingCreatures.sort((a, b) => a.individualId - b.individualId).map(c => <option key={c.individualId} value={c.individualId}>Individual {c.individualId}, lineage {c.lineageId}, {CREATURE_STATE_METADATA[c.home ? 'safe' : c.mode].label}</option>)}</select></label><span id="arena-creature-picker-help" className="sr-only">Choose a living creature to inspect its current behavior. Choose No creature selected to clear inspection.</span><span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{formatArenaSelectionStatus(selectedIndividualId)}</span></>
+  </canvas><label className="creature-picker" htmlFor="arena-creature-picker">Inspect <select id="arena-creature-picker" aria-label="Inspect creatures or resource patches" aria-describedby="arena-creature-picker-help" value={selectedValue} onChange={e => selectInspection(e.target.value)} style={{ background: 'var(--paper)', color: 'var(--ink)', colorScheme: 'light dark', minHeight: 32, touchAction: 'manipulation' }}><option value="">Nothing selected</option><optgroup label="Creatures">{livingCreatures.slice().sort((a, b) => a.individualId - b.individualId).map(c => <option key={`creature:${c.individualId}`} value={`creature:${c.individualId}`}>Individual {c.individualId}, lineage {c.lineageId}, {CREATURE_STATE_METADATA[c.home ? 'safe' : c.mode].label}</option>)}</optgroup>{patchOptions.length > 0 && <optgroup label="Resource patches">{patchOptions.map(({ patch, ordinal, currentFood, quality }) => <option key={`patch:${ordinal}`} value={`patch:${ordinal}`}>Patch {ordinal} · {quality} · {currentFood} food</option>)}</optgroup>}</select></label><span id="arena-creature-picker-help" className="sr-only">Choose a living creature or resource patch to inspect. Creature options reveal behavior; patch options reveal live food, capacity, energy, and regrowth. Choose Nothing selected to clear inspection.</span><span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{formatArenaInspectionStatus(selectedIndividualId, selectedPatchId, selectedPatchOrdinal)}</span></>
 }
