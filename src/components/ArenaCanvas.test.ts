@@ -23,6 +23,7 @@ import {
   arenaActivitySpotlightAlpha,
   arenaActivitySpotlightHaloRect,
   arenaActivitySpotlightSiteGeometry,
+  arenaActivitySpotlightOverlayAnchors,
   arenaActivitySpotlightTagGeometry,
   arenaActivitySpotlightWindowTicks,
   arenaPatchQualityGeometry,
@@ -428,6 +429,38 @@ describe('arena activity spotlight', () => {
         expect(label.x + label.width + 6 <= obstacle.x || label.x >= obstacle.x + obstacle.width + 6 || label.y + label.height + 6 <= obstacle.y || label.y >= obstacle.y + obstacle.height + 6).toBe(true)
       }
     }
+  })
+
+  it('uses freed arena space when explanations move outside independently of canvas typography', () => {
+    for (const width of [300, 900]) {
+      for (const compact of [true, false]) {
+        const dimensions = { width, height: 276, pad: 20, compact }
+        const anchors = arenaActivitySpotlightOverlayAnchors(width, 276, compact, true)
+        expect(anchors).toEqual(arenaActivitySpotlightOverlayAnchors(width, 276, !compact, true))
+        expect(arenaActivitySpotlightOverlayAnchors(width, 276, compact)).toEqual(arenaActivitySpotlightOverlayAnchors(width, 276, compact, false))
+        const site = arenaActivitySpotlightSiteGeometry({ ...dimensions, x: .85, y: .6, anchors })!
+        const selected = arenaSelectedCreatureCalloutGeometry({ ...dimensions, x: .96, y: .5, explanationsOutside: true })
+        expect(site).not.toBeNull()
+        for (const label of [site, selected]) {
+          expect(label.y).toBeGreaterThanOrEqual(72)
+          expect(label.x).toBeGreaterThanOrEqual(20)
+          expect(label.x + label.width).toBeLessThanOrEqual(width - 20)
+          expect(label.y + label.height).toBeLessThanOrEqual(256)
+          for (const obstacle of anchors) {
+            expect(label.x + label.width <= obstacle.x || label.x >= obstacle.x + obstacle.width || label.y + label.height <= obstacle.y || label.y >= obstacle.y + obstacle.height).toBe(true)
+          }
+        }
+        // The taller former badge occupied this entire horizontal band.
+        expect(selected.y).toBeLessThan(132)
+        expect(selected.width).toBe(compact ? 148 : 190)
+      }
+    }
+    const lowerSite = arenaActivitySpotlightSiteGeometry({ width: 300, height: 276, pad: 20, compact: true, x: .9, y: .9, anchors: arenaActivitySpotlightOverlayAnchors(300, 276, true, true) })!
+    expect(lowerSite).not.toBeNull()
+    // The former lower key occupied y=154..224; its removal frees a slot
+    // immediately above the retained picker, close to this bottom event.
+    expect(lowerSite.y).toBeGreaterThanOrEqual(154)
+    expect(lowerSite.y + lowerSite.height).toBeLessThanOrEqual(214)
   })
 
   it('preserves founder actor order while capping the rendered batch at eight', () => {
