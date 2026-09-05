@@ -19,6 +19,7 @@ import {
   type CreatureState,
 } from './ArenaCanvasModel'
 import { resourcePatchOrdinal, sortResourcePatchRecords } from './ResourcePatchPresentation'
+import { isSameActivityReview } from './ActivityReviewModel'
 import {
   formatActivityContext,
   formatActivityMoment,
@@ -27,6 +28,7 @@ import {
 } from './SimulationActivity'
 
 interface Props {
+  reviewedMoment?: SimulationActivityMoment | null
   explanationsOutside?: boolean
   /** DOM controls follow the viewport breakpoint, independently of canvas width. */
   compactControls?: boolean
@@ -194,6 +196,7 @@ export interface ArenaActivitySpotlightActor {
 }
 
 export interface ArenaActivitySpotlight {
+  reviewed?: boolean
   /** Source-array index keeps duplicate sequence records aligned with their exact event copy. */
   sourceIndex: number
   sequence: number
@@ -345,7 +348,8 @@ export function arenaActivitySpotlightAlpha(age: unknown, windowTicks: unknown):
  * against the live cohort.  Every field is treated as untrusted so retained
  * legacy snapshots cannot make the renderer throw or point at a stale actor.
  */
-export function resolveArenaActivitySpotlight(world: unknown): ArenaActivitySpotlight | null {
+export function resolveArenaActivitySpotlight(world: unknown, reviewedMoment?: SimulationActivityMoment | null): ArenaActivitySpotlight | null {
+  const reviewing = reviewedMoment != null
   const generation = arenaSafeGeneration(arenaField(world, 'generation'))
   const currentTick = arenaSafeInteger(arenaField(world, 'tickIndex'), 0)
   const creatures = arenaSafeArray(arenaField(world, 'creatures'))
@@ -386,9 +390,11 @@ export function resolveArenaActivitySpotlight(world: unknown): ArenaActivitySpot
     const eventGeneration = normalizedMoment?.generation ?? arenaSafeGeneration(arenaField(entry, 'generation'))
     const tick = normalizedMoment?.tick ?? arenaSafeInteger(arenaField(entry, 'tick'), 0)
     const kind = normalizedMoment?.kind ?? arenaField(entry, 'kind')
-    if (sequence === null || eventGeneration === null || eventGeneration !== generation || tick === null || tick > currentTick || !arenaActivityKind(kind) || ARENA_ACTIVITY_AGGREGATE_KINDS.has(kind)) continue
-    const age = currentTick - tick
-    if (age > windowTicks) continue
+    if (reviewing && (!normalizedMoment || !isSameActivityReview(entry, reviewedMoment))) continue
+    if (sequence === null || eventGeneration === null || tick === null || !arenaActivityKind(kind)) continue
+    if (!reviewing && (eventGeneration !== generation || tick > currentTick || ARENA_ACTIVITY_AGGREGATE_KINDS.has(kind))) continue
+    const age = Math.max(0, currentTick - tick)
+    if (!reviewing && age > windowTicks) continue
     const refs = arenaOrderedActorRefs(normalizedMoment ?? entry, kind)
     const location = arenaActivityLocation(arenaField(normalizedMoment ?? entry, 'location'))
     const actors: ArenaActivitySpotlightActor[] = []
@@ -399,7 +405,7 @@ export function resolveArenaActivitySpotlight(world: unknown): ArenaActivitySpot
     }
     const cappedActors = actors.slice(0, MAX_FOUNDER_MIGRATION_BATCH)
     if (!cappedActors.length && !location) continue
-    const candidate: ArenaActivitySpotlight = { sourceIndex, sequence, generation, kind, tick, age, alpha: arenaActivitySpotlightAlpha(age, windowTicks), location, actors: cappedActors, activityMoment: normalizedMoment }
+    const candidate: ArenaActivitySpotlight = { sourceIndex, sequence, generation: eventGeneration, kind, tick, age, alpha: reviewing ? 1 : arenaActivitySpotlightAlpha(age, windowTicks), location, actors: cappedActors, activityMoment: normalizedMoment, ...(reviewing ? { reviewed: true } : {}) }
     if (best === null || sequence > best.sequence || (sequence === best.sequence && sourceIndex > bestSourceIndex)) {
       best = candidate
       bestSourceIndex = sourceIndex
@@ -418,7 +424,7 @@ export function formatArenaActivitySpotlightDescription(spotlight: ArenaActivity
   }
   const actors = spotlight.actors.map(actor => `Individual ${actor.individualId} (${actor.roleLabel.toLowerCase()})`).join(', ')
   const position = spotlight.actors.length === 1 ? 'position' : 'positions'
-  return `Latest actor halo marks ${actors} at their current arena ${position}; it does not show the historical event location.`
+  return `${spotlight.reviewed ? 'Reviewed event actor' : 'Latest actor'} halo marks ${actors} at their current arena ${position}; it does not show the historical event location.`
 }
 
 export function formatArenaActivitySpotlightKey(spotlight: Pick<ArenaActivitySpotlight, 'location' | 'actors'>): string {
@@ -667,10 +673,10 @@ function formatArenaActivitySpotlightCue(spotlight: ArenaActivitySpotlight, conf
   return {
     sequence: spotlight.sequence,
     kind: spotlight.kind,
-    compact: formatArenaActivitySpotlightCompact(moment),
+    compact: spotlight.reviewed ? formatArenaActivitySpotlightCompact(moment).replace('Highlighted ·', 'Reviewed ·') : formatArenaActivitySpotlightCompact(moment),
     event,
     context,
-    description: `Highlighted event: ${event} ${context}`,
+    description: `${spotlight.reviewed ? 'Reviewed retained' : 'Highlighted'} event: ${event} ${context}`,
   }
 }
 
@@ -679,8 +685,8 @@ export function deriveArenaActivitySpotlightCue(world: unknown): ArenaActivitySp
   return spotlight ? formatArenaActivitySpotlightCue(spotlight, arenaField(world, 'config')) : null
 }
 
-export function ArenaActivitySpotlightKey({ world, compact = false }: { world: World; compact?: boolean }): React.ReactElement | null {
-  const spotlight = resolveArenaActivitySpotlight(world)
+export function ArenaActivitySpotlightKey({ world, compact = false, reviewedMoment }: { world: World; compact?: boolean; reviewedMoment?: SimulationActivityMoment | null }): React.ReactElement | null {
+  const spotlight = resolveArenaActivitySpotlight(world, reviewedMoment)
   if (!spotlight) return null
   const cue = formatArenaActivitySpotlightCue(spotlight, world.config)
   if (compact) return cue
@@ -1398,12 +1404,12 @@ export function arenaCanvasCanDraw(width: number, height: number) {
   return Number.isFinite(width) && Number.isFinite(height) && width > 40 && height > 40
 }
 
-export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, selectedPatchId = null, onSelectPatch = () => {}, arenaFocus, playbackStatus, playbackDetail, explanationsOutside = false, compactControls = false }: Props) {
+export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, selectedPatchId = null, onSelectPatch = () => {}, arenaFocus, playbackStatus, playbackDetail, explanationsOutside = false, compactControls = false, reviewedMoment }: Props) {
   const ref = useRef<HTMLCanvasElement>(null)
   const drawRef = useRef<() => void>(() => {})
   const darkModeRef = useRef<boolean | null>(null)
   if (darkModeRef.current === null) darkModeRef.current = readArenaDarkMode()
-  const activitySpotlight = resolveArenaActivitySpotlight(world)
+  const activitySpotlight = resolveArenaActivitySpotlight(world, reviewedMoment)
   const activitySpotlightCue = activitySpotlight ? formatArenaActivitySpotlightCue(activitySpotlight, world.config) : null
   const allActivitySpotlightTags = activitySpotlight ? deriveArenaActivitySpotlightTags(activitySpotlight) : []
   const activitySpotlightTags = allActivitySpotlightTags.filter(tag => tag.individualId !== selectedIndividualId)
@@ -1533,7 +1539,7 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
       if (selectedCallout && selectedCalloutGeometry) drawArenaSelectedCreatureCallout(ctx, selectedCallout, selectedCalloutGeometry, palette.selectedRing)
     }
     drawRef.current = draw; draw()
-  }, [world, revision, selectedIndividualId, selectedPatchId, arenaFocus, explanationsOutside, compactControls])
+  }, [world, revision, selectedIndividualId, selectedPatchId, arenaFocus, explanationsOutside, compactControls, reviewedMoment])
   useEffect(() => {
     const query = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia(ARENA_COLOR_SCHEME_QUERY) : null
     if (!query) return

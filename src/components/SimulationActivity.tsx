@@ -1,3 +1,4 @@
+import { isActivityReviewRetained, isSameActivityReview } from './ActivityReviewModel'
 import { useEffect, useRef, useState } from 'react'
 import { MAX_ACTIVITY_ENTRIES } from '../simulation/engine'
 import type { Config, WorldActivityKind } from '../simulation/types'
@@ -619,9 +620,22 @@ export function suppressesActivityAnnouncement(moment:SimulationActivityMoment|n
   return typeof sequence==='number'&&Number.isSafeInteger(sequence)&&sequence>=0&&moment?.sequence===sequence
 }
 
-type ActivityActorCallback = (individualId: number) => void
+type ActivityActorCallback = (individualId: number, moment?: SimulationActivityMoment) => void
 
-interface ActivityActorAffordancesProps {
+interface ActivityReviewProps {
+  onReviewMoment?: (moment: SimulationActivityMoment) => void
+  reviewedMoment?: SimulationActivityMoment | null
+}
+
+function ActivityReviewButton({ moment, rawActivity, onReviewMoment, reviewedMoment }: ActivityReviewProps & { moment: SimulationActivityMoment; rawActivity: unknown }) {
+  if (!onReviewMoment) return null
+  if (!isActivityReviewRetained({ activity: rawActivity }, moment)) return <small>Event review unavailable: this legacy record has no stable identity. Living actors can still be inspected.</small>
+  const chosen = isSameActivityReview(moment, reviewedMoment)
+  return <button type="button" aria-pressed={chosen} aria-label={`Pause and review retained event in arena: ${formatActivityProvenance(moment)} · tick ${moment.tick} · record ${moment.sequence} · ${moment.summary}`} onClick={() => onReviewMoment(moment)} style={{ minHeight: 44, whiteSpace: 'normal', lineHeight: 1.35 }}>{chosen ? 'Reviewing event in arena' : 'Review event in arena'}</button>
+}
+
+interface ActivityActorAffordancesProps extends ActivityReviewProps {
+  rawActivity?: unknown
   moment: SimulationActivityMoment
   currentCreatures: unknown
   selectedIndividualId?: number | null
@@ -654,7 +668,7 @@ function ActivityActorAffordances({ moment, currentCreatures, selectedIndividual
         <select aria-label="Choose an event actor to pause and inspect its current arena state" value={targets.some(target => target.status === 'living' && target.individualId === selectedIndividualId) ? String(selectedIndividualId) : ''} onChange={event => {
           const individualId = Number(event.target.value)
           const target = targets.find(candidate => candidate.individualId === individualId && candidate.status === 'living')
-          if (target) onShowIndividual(target.individualId)
+          if (target) onShowIndividual(target.individualId, moment)
         }} style={{ minWidth: 0, maxWidth: '100%', minHeight: 44, padding: '5px 7px', background: 'var(--paper)', color: 'var(--ink)', colorScheme: 'light dark' }}>
           <option value="">Select a living actor</option>
           {targets.map(target => <option key={`${target.role}-${target.individualId}`} value={target.individualId} disabled={target.status !== 'living'}>{`${target.roleLabel} · Individual ${target.individualId} · ${formatActivityActorStatus(target.status)}`}</option>)}
@@ -662,13 +676,14 @@ function ActivityActorAffordances({ moment, currentCreatures, selectedIndividual
       </label>
       : <div style={{ flex: '1 1 100%', minWidth: 0, display: 'flex', flexWrap: 'wrap', gap: 5 }}>
         {targets.map(target => target.status === 'living' && onShowIndividual
-          ? <button key={`${target.role}-${target.individualId}`} type="button" onClick={() => onShowIndividual(target.individualId)} aria-label={activityActorControlLabel(target)} style={{ flex: '1 1 150px', minWidth: 0, whiteSpace: 'normal', lineHeight: 1.3 }}>{`${target.roleLabel} · Individual ${target.individualId} · pause to inspect`}</button>
+          ? <button key={`${target.role}-${target.individualId}`} type="button" onClick={() => onShowIndividual(target.individualId, moment)} aria-label={activityActorControlLabel(target)} style={{ flex: '1 1 150px', minWidth: 0, whiteSpace: 'normal', lineHeight: 1.3 }}>{`${target.roleLabel} · Individual ${target.individualId} · pause to inspect`}</button>
           : <span key={`${target.role}-${target.individualId}`} style={{ flex: '1 1 150px', minWidth: 0, whiteSpace: 'normal', fontSize: 10, lineHeight: 1.35 }}>{`${target.roleLabel} · Individual ${target.individualId} · ${formatActivityActorStatus(target.status)}`}</span>)}
       </div>}
   </div>
 }
 
-interface ActivityTimelineProps {
+interface ActivityTimelineProps extends ActivityReviewProps {
+  rawActivity: unknown
   timeline: SimulationActivityTimeline
   latest: SimulationActivityMoment | null
   currentCreatures: unknown
@@ -684,15 +699,16 @@ function hasActivityActors(moment: SimulationActivityMoment): boolean {
   return moment.actorIds.length > 0 || moment.attackerId !== null || moment.preyId !== null
 }
 
-function ActivityTimelineEvent({ moment, currentCreatures, selectedIndividualId, onShowIndividual }: ActivityActorAffordancesProps) {
+function ActivityTimelineEvent({ moment, rawActivity, currentCreatures, selectedIndividualId, onShowIndividual, onReviewMoment, reviewedMoment }: ActivityActorAffordancesProps) {
   return <div data-activity-timeline-event={`${moment.sequence}-${moment.sourceIndex}`} style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2, padding: '4px 0', overflowWrap: 'anywhere' }}>
     <span style={{ minWidth: 0, fontSize: 10, lineHeight: 1.3, color: 'var(--muted)' }}>{moment.kindLabel} · {formatActivityTimelineTime(moment)} · {activityTimelineCountLabel(moment)}</span>
     <span style={{ minWidth: 0, fontSize: 11, lineHeight: 1.35 }}>{moment.summary}</span>
-    {hasActivityActors(moment) && (onShowIndividual || selectedIndividualId !== undefined) && <ActivityActorAffordances moment={moment} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual}/>}
+    <ActivityReviewButton rawActivity={rawActivity} moment={moment} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>
+    {hasActivityActors(moment) && (onShowIndividual || selectedIndividualId !== undefined) && <ActivityActorAffordances moment={moment} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>}
   </div>
 }
 
-function ActivityTimeline({ timeline, latest, currentCreatures, selectedIndividualId, onShowIndividual }: ActivityTimelineProps) {
+function ActivityTimeline({ timeline, latest, rawActivity, currentCreatures, selectedIndividualId, onShowIndividual, onReviewMoment, reviewedMoment }: ActivityTimelineProps) {
   if (timeline.generation === null) return null
   const hasTimelineContent = timeline.groups.length > 0 || timeline.previousSettlement !== null
   const chronologicalLatest = timeline.moments.at(-1) ?? null
@@ -741,12 +757,13 @@ function ActivityTimeline({ timeline, latest, currentCreatures, selectedIndividu
           {detailBoundary && <div role="listitem" data-activity-timeline-boundary="true" aria-label={`Previous generation settlement boundary: ${formatActivityTimelineMoment(detailBoundary)}`} style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2, padding: '5px 7px', borderLeft: '3px solid var(--muted)', background: 'color-mix(in srgb, var(--muted) 8%, transparent)', overflowWrap: 'anywhere' }}>
             <span style={{ minWidth: 0, fontSize: 10, lineHeight: 1.3, color: 'var(--muted)' }}>Previous generation boundary · {formatActivityTimelineTime(detailBoundary)} · {activityTimelineCountLabel(detailBoundary)}</span>
             <span style={{ minWidth: 0, fontSize: 11, lineHeight: 1.35 }}>{detailBoundary.summary}</span>
+            <ActivityReviewButton rawActivity={rawActivity} moment={detailBoundary} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>
             {hasActivityActors(detailBoundary) && (onShowIndividual || selectedIndividualId !== undefined) && (
-              <ActivityActorAffordances moment={detailBoundary} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual}/>
+              <ActivityActorAffordances moment={detailBoundary} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>
             )}
           </div>}
           {detailGroups.map(group => <div key={`${group.day}-${group.tick}`} role="listitem" data-activity-timeline-group={`${group.day}-${group.tick}`} aria-label={`${formatActivityTimelineTime(group.moments[0])}; ${group.moments.length} ${group.moments.length === 1 ? 'key moment' : 'key moments'} recorded in stable sequence order`} style={{ minWidth: 0, paddingLeft: 9, borderLeft: '1px solid color-mix(in srgb, var(--muted) 45%, transparent)', overflowWrap: 'anywhere' }}>
-            {group.moments.map(moment => <ActivityTimelineEvent key={`${moment.sequence}-${moment.sourceIndex}`} moment={moment} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual}/>) }
+            {group.moments.map(moment => <ActivityTimelineEvent rawActivity={rawActivity} key={`${moment.sequence}-${moment.sourceIndex}`} moment={moment} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>) }
           </div>)}
         </div>
       </details>
@@ -755,7 +772,7 @@ function ActivityTimeline({ timeline, latest, currentCreatures, selectedIndividu
   </section>
 }
 
-export interface SimulationActivityProps {
+export interface SimulationActivityProps extends ActivityReviewProps {
   /** The complete snapshot is accepted as unknown so old saved worlds remain renderable. */
   world: unknown
   selectedIndividualId?: number | null
@@ -765,7 +782,7 @@ export interface SimulationActivityProps {
   suppressAnnouncementSequence?:number|null
 }
 
-export function SimulationActivity({ world, selectedIndividualId, onShowIndividual, suppressAnnouncementSequence }: SimulationActivityProps) {
+export function SimulationActivity({ world, selectedIndividualId, onShowIndividual, suppressAnnouncementSequence, onReviewMoment, reviewedMoment }: SimulationActivityProps) {
   const activityPresent = hasWorldActivityTelemetry(world)
   const activity = field(world, 'activity')
   const activityDropped = field(world, 'activityDropped')
@@ -803,13 +820,14 @@ export function SimulationActivity({ world, selectedIndividualId, onShowIndividu
   const earlier = latest ? feed.entries.slice(1).filter(moment => !timelineKeys.has(activityKey(moment))) : []
   return <div className="interventions" role="group" aria-labelledby="simulation-activity-title">
     <span><strong id="simulation-activity-title" style={{ fontSize: 12 }}>What happened</strong><small style={{ fontSize: 10 }}>Retained moments across the run · not limited to the latest step</small></span>
-    <ActivityTimeline timeline={timeline} latest={latest} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual}/>
+    <ActivityTimeline rawActivity={activity} timeline={timeline} latest={latest} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>
     {latest ? <div style={{ flex: '1 1 100%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <span className="journal-kicker" style={{ margin: 0, fontSize: 10, overflowWrap: 'anywhere' }}>{latest.kindLabel} · {formatActivityProvenance(latest)}</span>
         <strong style={{ fontSize: 12, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{latest.summary}</strong>
         <span style={{ fontSize: 11, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{formatActivityContext(latest, config)}</span>
-        {(onShowIndividual || selectedIndividualId !== undefined) && <ActivityActorAffordances moment={latest} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual}/>}
+        <ActivityReviewButton rawActivity={activity} moment={latest} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>
+        {(onShowIndividual || selectedIndividualId !== undefined) && <ActivityActorAffordances moment={latest} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>}
       </div>
       {earlier.length > 0 && <details>
         <summary style={{ fontSize: 11, minHeight: 44, display: 'list-item', boxSizing: 'border-box', padding: '12px 0', lineHeight: '20px', cursor: 'pointer' }}>Show {earlier.length} earlier retained {earlier.length === 1 ? 'key moment' : 'key moments'}</summary>
@@ -818,7 +836,8 @@ export function SimulationActivity({ world, selectedIndividualId, onShowIndividu
             <span className="journal-kicker" style={{ margin: 0, fontSize: 10, overflowWrap: 'anywhere' }}>{moment.kindLabel} · {formatActivityProvenance(moment)}</span>
             <strong style={{ display: 'block', fontSize: 12, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{moment.summary}</strong>
             <span style={{ display: 'block', fontSize: 11, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{formatActivityContext(moment, config)}</span>
-            {(onShowIndividual || selectedIndividualId !== undefined) && <ActivityActorAffordances moment={moment} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual}/>}
+            <ActivityReviewButton rawActivity={activity} moment={moment} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>
+            {(onShowIndividual || selectedIndividualId !== undefined) && <ActivityActorAffordances moment={moment} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>}
           </li>)}
         </ol>
       </details>}

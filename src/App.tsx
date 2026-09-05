@@ -9,11 +9,14 @@ import { experimentUrl,loadInitialConfig,persistExperiment } from './simulation/
 import type { Config,InterventionKind,LastInspectedOutcome, World } from './simulation/types'
 import type {StepActivityEvidence} from './components/ObservedStepStory'
 import type {CreatureInspectorActionControls} from './components/CreatureInspector'
+import type {SimulationActivityMoment} from './components/SimulationActivity'
+import {isActivityReviewRetained} from './components/ActivityReviewModel'
 import DashboardNavigation, { DASHBOARD_SECTION_IDS, DASHBOARD_SECTION_SCROLL_STYLE, openDashboardSection } from './components/DashboardNavigation'
 
 const ExperimentPanel=lazy(()=>import('./components/ExperimentPanel').then(module=>({default:module.ExperimentPanel})))
 const ArenaCanvas=lazy(()=>import('./components/ArenaCanvasRenderer').then(module=>({default:module.ArenaCanvas})))
 const ArenaActivitySpotlightKey=lazy(()=>import('./components/ArenaCanvasRenderer').then(module=>({default:module.ArenaActivitySpotlightKey})))
+const ActivityReviewNotice=lazy(()=>import('./components/ActivityReviewNotice'))
 const GenerationJournal=lazy(()=>import('./components/GenerationJournal'))
 const InsightsPanel=lazy(()=>import('./components/InsightsPanel'))
 const LivePulse=lazy(()=>import('./components/LivePulse'))
@@ -160,13 +163,15 @@ export function ArenaCanvasFallback(){
 export interface SimulationEventStoryProps {
   world: World
   selectedIndividualId?: number | null
-  onShowIndividual?: (individualId:number)=>void
+  onShowIndividual?: (individualId:number,moment?:SimulationActivityMoment)=>void
+  onReviewMoment?: (moment:SimulationActivityMoment)=>void
+  reviewedMoment?:SimulationActivityMoment|null
   suppressAnnouncementSequence?:number|null
 }
 
-export function SimulationEventStory({world,selectedIndividualId,onShowIndividual,suppressAnnouncementSequence}:SimulationEventStoryProps){
+export function SimulationEventStory({world,selectedIndividualId,onShowIndividual,onReviewMoment,reviewedMoment,suppressAnnouncementSequence}:SimulationEventStoryProps){
   return hasOwnActivityField(world)
-    ? <Suspense fallback={<SimulationActivityFallback/>}><SimulationActivity world={world} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual} suppressAnnouncementSequence={suppressAnnouncementSequence}/></Suspense>
+    ? <Suspense fallback={<SimulationActivityFallback/>}><SimulationActivity world={world} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment} suppressAnnouncementSequence={suppressAnnouncementSequence}/></Suspense>
     : <Suspense fallback={<InterventionFeedFallback/>}><InterventionFeed events={world.events}/></Suspense>
 }
 
@@ -462,6 +467,8 @@ function App(){
   const [isNarrow,setIsNarrow]=useState(()=>window.matchMedia('(max-width: 1050px)').matches)
   const [compactTransport,setCompactTransport]=useState(()=>window.matchMedia(COMPACT_TRANSPORT_QUERY).matches)
   const [arenaKeysOpen,setArenaKeysOpen]=useState(false)
+  const [reviewedMoment,setReviewedMoment]=useState<SimulationActivityMoment|null>(null)
+  const reviewFocusSourceRef=useRef<Element|null>(null)
   const settingsToggleRef=useRef<HTMLButtonElement>(null)
   const experimentToggleRef=useRef<HTMLButtonElement>(null)
   const settingsRef=useRef<HTMLElement>(null)
@@ -518,6 +525,8 @@ function App(){
   const arenaDetail=formatArenaPlaybackDetail({status:arenaStatus,populationCount:world.creatures.length,livingCount:living})
   const nextActionInput:NextActionCopyInput={extinct,hasActiveCreatures,pending:pendingCommand!==null,pendingCommand:pendingCommand?.kind,selectedIndividualId,selectedIsActive:Boolean(selected&&!selected.home),livingCreatures:living},nextActionCopy=formatNextActionCopy(nextActionInput)
   const stepAnnouncementSequence=stepActivityAnnouncementSequence(stepActivityEvidence)
+  const activeReviewedMoment=!playing&&isActivityReviewRetained(world,reviewedMoment)?reviewedMoment:null
+  useEffect(()=>{if(reviewedMoment&&!activeReviewedMoment)setReviewedMoment(null)},[reviewedMoment,activeReviewedMoment])
   const arenaDayLabel=formatArenaDayProgress(world.dayTime,world.config.dayLength,arenaStatus)
   const dayProgress=Math.max(0,Math.min(100,Math.round(world.dayTime/world.config.dayLength*100)))
   const founderMigrationCopy=formatFounderMigrationCopy({livingCreatures:living,liveConfig:world.config})
@@ -525,18 +534,21 @@ function App(){
   const closeExperiment=useCallback(()=>{setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
   const replayExperiment=useCallback((config:Config)=>{setDraft(sanitizeConfig(config));setActionStatus('Control seed staged. Choose Apply & restart to replay it live.');setExperimentOpen(false);requestAnimationFrame(()=>experimentToggleRef.current?.focus())},[])
   const [terminalOutcome,setTerminalOutcome]=useState<LastInspectedOutcome|null>(null)
-  const reset=useCallback(()=>{suppressPlaybackAnnouncementRef.current=false;pendingCommandRef.current=null;setPendingCommand(null);selectedInspectorFocusRequestRef.current=null;selectedPatchInspectorFocusRequestRef.current=null;terminalOutcomeFocusRequestRef.current=null;activityFocusRequestRef.current++;const clean=sanitizeConfig(draft);deliveredGenerationRef.current=1;setDraft(clean);setSelectedIndividualId(null);setSelectedPatchId(null);setTerminalOutcome(null);setRequestedGeneration(null);setGenerationRevealRequest(null);setManualStepStory(()=>initialManualStepStoryState());persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}const controller=controllerRef.current;if(controller){pendingPulseResetRef.current=true;controller.send({type:'reset',config:clean})}setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
+  const reset=useCallback(()=>{setReviewedMoment(null);suppressPlaybackAnnouncementRef.current=false;pendingCommandRef.current=null;setPendingCommand(null);selectedInspectorFocusRequestRef.current=null;selectedPatchInspectorFocusRequestRef.current=null;terminalOutcomeFocusRequestRef.current=null;activityFocusRequestRef.current++;const clean=sanitizeConfig(draft);deliveredGenerationRef.current=1;setDraft(clean);setSelectedIndividualId(null);setSelectedPatchId(null);setTerminalOutcome(null);setRequestedGeneration(null);setGenerationRevealRequest(null);setManualStepStory(()=>initialManualStepStoryState());persistExperiment(clean,(()=>{try{return localStorage}catch{return null}})());try{history.replaceState(null,'',experimentUrl(clean,location.href))}catch{/* URL unavailable */}const controller=controllerRef.current;if(controller){pendingPulseResetRef.current=true;controller.send({type:'reset',config:clean})}setPlaying(false);setActionStatus('Experiment applied and restarted.')},[draft])
   const applyParameters=useCallback(()=>{reset();closeSettings()},[reset,closeSettings])
   const rememberSelectedInspectorFocus=()=>{const individualId=selectedIndividualIdRef.current;terminalOutcomeFocusRequestRef.current=individualId!==null&&Boolean(selectedInspectorRef.current?.contains(document.activeElement))?individualId:null}
-  const finishGeneration=()=>{const controller=controllerRef.current;if(!controller||extinct||!canStartSimulationCommand(pendingCommandRef.current))return;rememberSelectedInspectorFocus();suppressPlaybackAnnouncementRef.current=false;const finishId=++nextFinishIdRef.current;const pending:{kind:'finish';id:number}={kind:'finish',id:finishId};pendingCommandRef.current=pending;setPendingCommand(pending);setPlaying(false);controller.send({type:'finish',finishId})}
-  const nextAction=()=>{const controller=controllerRef.current;if(!controller||extinct||nextActionUnavailable||!canStartSimulationCommand(pendingCommandRef.current))return;rememberSelectedInspectorFocus();suppressPlaybackAnnouncementRef.current=false;const stepId=++nextStepIdRef.current;const pending:{kind:'step';id:number}={kind:'step',id:stepId};pendingCommandRef.current=pending;setPendingCommand(pending);setManualStepStory(state=>transitionManualStepStoryState(state,{type:'next-action'}));setPlaying(false);controller.send({type:'step',stepId})}
+  const finishGeneration=()=>{const controller=controllerRef.current;if(!controller||extinct||!canStartSimulationCommand(pendingCommandRef.current))return;setReviewedMoment(null);rememberSelectedInspectorFocus();suppressPlaybackAnnouncementRef.current=false;const finishId=++nextFinishIdRef.current;const pending:{kind:'finish';id:number}={kind:'finish',id:finishId};pendingCommandRef.current=pending;setPendingCommand(pending);setPlaying(false);controller.send({type:'finish',finishId})}
+  const nextAction=()=>{const controller=controllerRef.current;if(!controller||extinct||nextActionUnavailable||!canStartSimulationCommand(pendingCommandRef.current))return;setReviewedMoment(null);rememberSelectedInspectorFocus();suppressPlaybackAnnouncementRef.current=false;const stepId=++nextStepIdRef.current;const pending:{kind:'step';id:number}={kind:'step',id:stepId};pendingCommandRef.current=pending;setPendingCommand(pending);setManualStepStory(state=>transitionManualStepStoryState(state,{type:'next-action'}));setPlaying(false);controller.send({type:'step',stepId})}
   const selectIndividual=(individualId:number|null)=>{const transition=resolveArenaInspectionTransition({request:{kind:'creature',individualId},validPatchIds:world.environment.patches.map(patch=>patch.id),currentSelectedIndividualId:selectedIndividualId,workerInspectedIndividualId:world.inspectedIndividualId});activityFocusRequestRef.current++;selectedInspectorFocusRequestRef.current=transition.selectedIndividualId;selectedPatchInspectorFocusRequestRef.current=null;terminalOutcomeFocusRequestRef.current=null;setTerminalOutcome(null);setSelectedPatchId(transition.selectedPatchId);setSelectedIndividualId(transition.selectedIndividualId);if(transition.workerCommand)controllerRef.current?.send(transition.workerCommand)}
   const selectPatch=(patchId:number|null)=>{const transition=resolveArenaInspectionTransition({request:{kind:'patch',patchId},validPatchIds:world.environment.patches.map(patch=>patch.id),currentSelectedIndividualId:selectedIndividualId,workerInspectedIndividualId:world.inspectedIndividualId});activityFocusRequestRef.current++;selectedInspectorFocusRequestRef.current=null;selectedPatchInspectorFocusRequestRef.current=transition.selectedPatchId;terminalOutcomeFocusRequestRef.current=null;setTerminalOutcome(null);setSelectedIndividualId(transition.selectedIndividualId);setSelectedPatchId(transition.selectedPatchId);if(transition.workerCommand)controllerRef.current?.send(transition.workerCommand)}
   const focusArenaInspectionControl=()=>{const target=document.getElementById('arena-creature-picker') as HTMLSelectElement|null;if(!target)return;try{target.closest('.arena-wrap')?.scrollIntoView({block:'center',inline:'nearest'})}catch{/* A legacy browser may not support options. */}try{target.focus({preventScroll:true})}catch{target.focus()}}
   const restoreArenaInspectionFocus=()=>typeof window.requestAnimationFrame==='function'?window.requestAnimationFrame(focusArenaInspectionControl):focusArenaInspectionControl()
   const closeSelectedPatch=()=>{selectPatch(null);restoreArenaInspectionFocus()}
-  const showActivityIndividual=(individualId:number)=>{if(!Number.isSafeInteger(individualId)||individualId<1||!world.creatures.some(creature=>creature.alive&&creature.individualId===individualId))return;suppressPlaybackAnnouncementRef.current=false;setPlaying(false);controllerRef.current?.send({type:'pause'});selectedInspectorFocusRequestRef.current=null;selectedPatchInspectorFocusRequestRef.current=null;activityFocusRequestRef.current++;const request=activityFocusRequestRef.current;setTerminalOutcome(null);setSelectedPatchId(null);setSelectedIndividualId(individualId);setArenaFocus('all');controllerRef.current?.send({type:'inspect',individualId});const focusArena=()=>{if(activityFocusRequestRef.current!==request)return;focusArenaInspectionControl()};if(typeof window.requestAnimationFrame==='function')window.requestAnimationFrame(focusArena);else focusArena()}
-  const intervene=(kind:InterventionKind)=>{suppressPlaybackAnnouncementRef.current=false;controllerRef.current?.send({type:'intervene',kind});setActionStatus(kind==='resource-bloom'?'Resource bloom released.':kind==='drought'?'Drought applied.':'Founder migration released.')}
+  const focusActivityArena=()=>{activityFocusRequestRef.current++;const request=activityFocusRequestRef.current;const focusArena=()=>{if(activityFocusRequestRef.current===request)focusArenaInspectionControl()};if(typeof window.requestAnimationFrame==='function')window.requestAnimationFrame(focusArena);else focusArena()}
+  const reviewActivity=(moment:SimulationActivityMoment|null,individualId:number|null=null)=>{if(moment&&!isActivityReviewRetained(world,moment))return;reviewFocusSourceRef.current=individualId===null?document.activeElement:null;setReviewedMoment(moment);suppressPlaybackAnnouncementRef.current=false;setPlaying(false);controllerRef.current?.send({type:'pause'});selectedInspectorFocusRequestRef.current=null;selectedPatchInspectorFocusRequestRef.current=null;terminalOutcomeFocusRequestRef.current=null;setTerminalOutcome(null);setSelectedPatchId(null);setSelectedIndividualId(individualId);setArenaFocus('all');controllerRef.current?.send({type:'inspect',individualId});if(individualId!==null)focusActivityArena();else activityFocusRequestRef.current++}
+  const showActivityIndividual=(individualId:number,moment?:SimulationActivityMoment)=>{if(!Number.isSafeInteger(individualId)||individualId<1||!world.creatures.some(creature=>creature.alive&&creature.individualId===individualId))return;reviewActivity(moment&&isActivityReviewRetained(world,moment)?moment:null,individualId)}
+  const endActivityReview=()=>{setReviewedMoment(null);focusActivityArena()}
+  const intervene=(kind:InterventionKind)=>{setReviewedMoment(null);suppressPlaybackAnnouncementRef.current=false;controllerRef.current?.send({type:'intervene',kind});setActionStatus(kind==='resource-bloom'?'Resource bloom released.':kind==='drought'?'Drought applied.':'Founder migration released.')}
   const reviewSettlement=useCallback((generation:number)=>{void reviewSettlementAndNavigate(generation,{onSelectGeneration:setRequestedGeneration})},[])
   const clearGenerationReveal=useCallback((generation:number)=>setGenerationRevealRequest(current=>current===generation?null:current),[])
   const closeSelected=()=>{selectIndividual(null);restoreArenaInspectionFocus()}
@@ -577,7 +589,7 @@ function App(){
     }
     if(pendingPulseResetRef.current){pendingPulseResetRef.current=false;setLivePulseRun(n=>n+1)}
   },[])
-  const handleFallback=useCallback(()=>{suppressPlaybackAnnouncementRef.current=false;const interrupted=pendingCommandRef.current;pendingCommandRef.current=null;setPendingCommand(null);if(interrupted?.kind==='step'){setManualStepStory(state=>transitionManualStepStoryState(state,{type:'step-interrupted'}));setActionStatus('Step interrupted; retry Next action.')}else if(interrupted?.kind==='finish'){setActionStatus('Finish generation interrupted; retry Finish generation.')}setRuntimeMode('fallback')},[])
+  const handleFallback=useCallback(()=>{setReviewedMoment(null);suppressPlaybackAnnouncementRef.current=false;const interrupted=pendingCommandRef.current;pendingCommandRef.current=null;setPendingCommand(null);if(interrupted?.kind==='step'){setManualStepStory(state=>transitionManualStepStoryState(state,{type:'step-interrupted'}));setActionStatus('Step interrupted; retry Next action.')}else if(interrupted?.kind==='finish'){setActionStatus('Finish generation interrupted; retry Finish generation.')}setRuntimeMode('fallback')},[])
 
   useEffect(()=>{const controller=createController(initialRef.current,handleSnapshot,handleFallback);controllerRef.current=controller;setRuntimeMode(controller.mode);return()=>{controller.dispose();controllerRef.current=null}},[handleSnapshot,handleFallback])
 
@@ -652,8 +664,8 @@ function App(){
 <label style={{display:'flex',alignItems:'center',gap:8,marginTop:8,fontWeight:700}} htmlFor="arena-focus">Focus <select style={{minHeight:44,maxWidth:'100%',background:'var(--paper)',color:'var(--ink)',border:'1px solid var(--line)',borderRadius:6,padding:'4px 8px',fontSize:12,colorScheme:'light dark'}} id="arena-focus" aria-label="Focus creatures by current action" aria-describedby="arena-focus-description" value={arenaFocus} onChange={event=>setArenaFocus(event.target.value as 'all'|CreatureState)}>{ARENA_FOCUS_OPTIONS.map(option=><option key={option.value} value={option.value}>{formatArenaFocusOption(option.value,option.value==='all'?living:stateCounts[option.value])}</option>)}</select></label>
     <p id="arena-focus-description">{formatArenaFocusDescription(arenaFocus,arenaFocusCount,living,selectedOutsideArenaFocus)}</p>
     <details className="arena-keys" open={arenaKeysOpen} onToggle={event=>setArenaKeysOpen(event.currentTarget.open)}>
-      <summary>{arenaKeysOpen?'Hide arena key':'Show arena key'}<Suspense fallback={null}><ArenaActivitySpotlightKey world={world} compact/></Suspense></summary>
-      <div className="arena-meanings" role="group" aria-label="Creature action and overlay key"><Suspense fallback={null}><ArenaActivitySpotlightKey world={world}/></Suspense>{world.config.ecologyMode==='energy-regrowth'&&<><strong>{ARENA_PATCH_STOCK_KEY}</strong><strong>{ARENA_PATCH_QUALITY_KEY}</strong></>}{selected&&<strong>{ARENA_SELECTED_OVERLAY_KEY}</strong>}{selected?.mode==='hunting'&&<strong>{ARENA_HUNT_CONTACT_KEY}</strong>}</div>
+      <summary>{arenaKeysOpen?'Hide arena key':'Show arena key'}<Suspense fallback={null}><ArenaActivitySpotlightKey world={world} reviewedMoment={activeReviewedMoment} compact/></Suspense></summary>
+      <div className="arena-meanings" role="group" aria-label="Creature action and overlay key"><Suspense fallback={null}><ArenaActivitySpotlightKey world={world} reviewedMoment={activeReviewedMoment}/></Suspense>{world.config.ecologyMode==='energy-regrowth'&&<><strong>{ARENA_PATCH_STOCK_KEY}</strong><strong>{ARENA_PATCH_QUALITY_KEY}</strong></>}{selected&&<strong>{ARENA_SELECTED_OVERLAY_KEY}</strong>}{selected?.mode==='hunting'&&<strong>{ARENA_HUNT_CONTACT_KEY}</strong>}</div>
       <div className="legend"><span>Body color = speed</span><i/><small>slower</small><small>faster</small></div>
     </details>
     <div className="arena-guidance">{arenaGuide}</div>
@@ -669,7 +681,7 @@ function App(){
     <main aria-hidden={experimentOpen||undefined}>
       <section className="simulation-panel" aria-label="Simulation" aria-hidden={settingsOpen&&isNarrow||undefined}>
         <ArenaViewport compact={compactTransport}>
-<Suspense fallback={<ArenaCanvasFallback/>}><ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual} selectedPatchId={selectedPatchId} onSelectPatch={selectPatch} arenaFocus={arenaFocus} playbackStatus={arenaStatus} playbackDetail={arenaDetail} explanationsOutside compactControls={compactTransport}/></Suspense>
+          <Suspense fallback={<ArenaCanvasFallback/>}><ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual} selectedPatchId={selectedPatchId} onSelectPatch={selectPatch} arenaFocus={arenaFocus} playbackStatus={arenaStatus} playbackDetail={arenaDetail} explanationsOutside compactControls={compactTransport} reviewedMoment={activeReviewedMoment}/></Suspense>
           <div className="arena-badge" style={{pointerEvents:'none'}}><strong>{arenaDayLabel}</strong><small>Generation {world.generation}</small></div>
           <PlaybackPhaseStatus status={arenaStatus} detail={arenaDetail} playing={playing} suppressed={suppressPlaybackAnnouncementRef.current}/>
           {extinct&&<div className="extinct" role="status"><strong>Population extinct</strong><span>Use Founder migration to rescue this run, or adjust the parameters and restart.</span></div>}
@@ -682,10 +694,11 @@ function App(){
           <label className="speed-select">Playback speed <select value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value={.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option><option value={4}>4×</option></select></label>
           <button className="reset" onClick={reset}>{dirty?'Apply & restart':'Restart run'}</button>
         </div>
+        {activeReviewedMoment&&<Suspense fallback={null}><ActivityReviewNotice moment={activeReviewedMoment} creatures={world.creatures} focusFrom={reviewFocusSourceRef.current} onReturnToLatest={endActivityReview}/></Suspense>}
         {arenaKeys}
         {selectedPatch&&<div ref={selectedPatchInspectorRef} className="inspector-focus-target" tabIndex={-1} aria-label="Selected resource patch details" style={{scrollMarginTop:'84px'}}><Suspense fallback={<ResourcePatchInspectorFallback/>}><ResourcePatchInspector world={world} selectedPatchId={selectedPatchId} onClose={closeSelectedPatch}/></Suspense></div>}
         {manualStepStory.visible&&<Suspense fallback={<ObservedStepStoryFallback observedPath={observedPath}/>}><ObservedStepStory observedPath={observedPath} evidence={stepActivityEvidence}/></Suspense>}
-        <SimulationEventStory world={world} selectedIndividualId={selectedIndividualId} onShowIndividual={showActivityIndividual} suppressAnnouncementSequence={stepAnnouncementSequence}/>
+        <SimulationEventStory world={world} selectedIndividualId={selectedIndividualId} onShowIndividual={showActivityIndividual} onReviewMoment={reviewActivity} reviewedMoment={activeReviewedMoment} suppressAnnouncementSequence={stepAnnouncementSequence}/>
         {selected&&<div ref={selectedInspectorRef} className="inspector-focus-target" tabIndex={-1} aria-label={`Selected individual ${selected.individualId} details`} style={{scrollMarginTop:'84px'}}><SelectedInspectorShell selected={selected} actionControls={actionControls} onClose={closeSelected}><CreatureInspector embedded selected={selected} world={world} ecologyMode={world.config.ecologyMode} dayTime={world.dayTime} stateLabel={CREATURE_STATE_METADATA[selected.home?'safe':selected.mode].label} targetLabel={formatSelectedTarget(selected,world.creatures,world.food)} decisionTargetLabel={decisionTargetLabel} huntContactRule={ARENA_HUNT_CONTACT_KEY} onClose={closeSelected}/></SelectedInspectorShell></div>}
         {terminalOutcome&&!selected&&<div ref={terminalOutcomeRef} className="inspector-focus-target" tabIndex={-1} aria-label={`Individual ${terminalOutcome.individualId} terminal outcome focus target`} style={{scrollMarginTop:'84px'}}><Suspense fallback={null}><TerminalOutcome outcome={terminalOutcome} onDismiss={()=>selectIndividual(null)}/></Suspense></div>}
         <Suspense fallback={<GenerationHandoffFallback/>}><GenerationHandoff world={world} playbackStatus={arenaStatus} playing={playing} onReviewGeneration={reviewSettlement} revealGeneration={generationRevealRequest} onRevealComplete={clearGenerationReveal}/></Suspense>

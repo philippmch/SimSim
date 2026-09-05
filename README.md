@@ -53,6 +53,13 @@ playback and inspects its current state. An orange “Then” marker shows a rec
 event site when available; guides connect it to actors' current positions, not
 to reconstructed movement paths.
 
+**Review event in arena** pins a retained record, including earlier generations,
+instead of highlighting an unrelated newer event. Actor inspection also reviews
+its associated record when a stable event identity is available. Review explains
+when no site or living actor position exists. **Return to latest event** ends
+review without resuming playback; Play, Next action, Finish generation, live
+shocks, and restart also leave review mode.
+
 The seeded environment persists across generations. Food patches have visible
 stock, bounded capacity, and deterministic within-generation regrowth. Each patch
 also receives a persistent seeded quality: richer patches replenish faster and

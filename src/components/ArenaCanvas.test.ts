@@ -73,6 +73,8 @@ import { createWorld, defaultConfig } from '../simulation/engine'
 import { advanceToNextAction } from '../simulation/scheduler'
 import type { NextActionContext } from '../simulation/scheduler'
 import type { World, WorldActivityEntry } from '../simulation/types'
+import { normalizeActivityMoment } from './SimulationActivity'
+import { isActivityReviewRetained, isSameActivityReview } from './ActivityReviewModel'
 
 describe('arena renderer boundary', () => {
   it('resolves the split renderer with both the canvas and creature picker', async () => {
@@ -234,6 +236,65 @@ describe('arena color scheme lifecycle', () => {
 })
 
 describe('arena activity spotlight', () => {
+  it('reviews an older retained record at full opacity and restores the latest when released', () => {
+    const world = spotlightWorld()
+    const earlier = spotlightMoment({ sequence: 1, tick: 1 })
+    world.activity = [earlier, spotlightMoment({ sequence: 5, actorIds: [2] })]
+    const review = normalizeActivityMoment(earlier, 0)!
+    expect(resolveArenaActivitySpotlight(world, review)).toMatchObject({ sequence: 1, alpha: 1, reviewed: true, actors: [{ individualId: 1 }] })
+    world.tickIndex += 500
+    expect(resolveArenaActivitySpotlight(world, review)?.alpha).toBe(1)
+    world.tickIndex = 200
+    expect(resolveArenaActivitySpotlight(world, null)?.sequence).toBe(5)
+    expect(renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world, reviewedMoment: review, compact: true }))).toContain('Reviewed ·')
+  })
+
+  it('retains identity after array movement but rejects eviction and duplicate-sequence impostors', () => {
+    const world = spotlightWorld()
+    const entry = spotlightMoment()
+    const review = normalizeActivityMoment(entry, 4)!
+    world.activity = [spotlightMoment({ sequence: 5 }), entry]
+    expect(isActivityReviewRetained(world, review)).toBe(true)
+    expect(resolveArenaActivitySpotlight(world, review)).toMatchObject({ sourceIndex: 1, sequence: 1 })
+    world.activity = [entry]
+    expect(resolveArenaActivitySpotlight(world, review)?.sourceIndex).toBe(0)
+    expect(isSameActivityReview(review, { ...review, sourceIndex: 99, summary: ` ${review.summary} ` })).toBe(true)
+    for (const impostor of [{ ...entry, summary: 'Another event.' }, { ...entry, kind: 'reached-home' as const }, { ...entry, tick: 199 }, { ...entry, generation: 2 }]) {
+      world.activity = [impostor, spotlightMoment({ sequence: 5 })]
+      expect(isActivityReviewRetained(world, review)).toBe(false)
+      expect(resolveArenaActivitySpotlight(world, review)).toBeNull()
+    }
+  })
+
+  it('reviews previous-generation sites without inventing dead or absent current actor halos', () => {
+    const world = spotlightWorld()
+    world.creatures[0].alive = false
+    const entry = spotlightMoment({ generation: 2, tick: 900, actorIds: [1, 9999] })
+    world.activity = [entry, spotlightMoment({ sequence: 5, actorIds: [2] })]
+    const review = normalizeActivityMoment(entry, 0)!
+    const spotlight = resolveArenaActivitySpotlight(world, review)!
+    expect(spotlight).toMatchObject({ generation: 2, alpha: 1, location: { x: .4, y: .5 }, actors: [] })
+    expect(formatArenaActivitySpotlightDescription(spotlight)).toContain('no involved actor has a current live arena position')
+    delete entry.location
+    expect(resolveArenaActivitySpotlight(world, review)).toBeNull()
+    entry.actorIds = [2]
+    expect(resolveArenaActivitySpotlight(world, review)).toMatchObject({ location: null, actors: [{ individualId: 2 }] })
+    expect(formatArenaActivitySpotlightDescription(resolveArenaActivitySpotlight(world, review)!)).toContain('Reviewed event actor halo')
+  })
+
+  it('tolerates hostile retention data and refuses unstable missing-sequence legacy identity', () => {
+    const entry = spotlightMoment()
+    const review = normalizeActivityMoment(entry, 0)!
+    const hostile = new Proxy({}, { get() { throw new Error('hostile') } })
+    expect(isSameActivityReview(hostile, review)).toBe(false)
+    expect(isActivityReviewRetained(hostile, review)).toBe(false)
+    expect(isActivityReviewRetained({ activity: [hostile, entry] }, review)).toBe(true)
+    expect(isActivityReviewRetained({ activity: new Proxy([], { get() { return Infinity } }) }, review)).toBe(false)
+    const legacy = { ...entry, sequence: undefined }
+    expect(isActivityReviewRetained({ activity: [legacy] }, review)).toBe(false)
+    expect(resolveArenaActivitySpotlight({ ...spotlightWorld(), activity: [legacy] }, review)).toBeNull()
+  })
+
   it('chooses the newest eligible actor record even when a newer aggregate and array order disagree', () => {
     const world = spotlightWorld()
     world.activity = [

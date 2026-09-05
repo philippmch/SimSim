@@ -25,6 +25,55 @@ const contextConfig: Partial<Config> = {
   patchCapacity: 60,
 }
 
+describe('retained event review controls', () => {
+  const records = [
+    moment({ sequence: 1, generation: 1, summary: 'Archived food event.' }),
+    moment({ sequence: 2, generation: 1, kind: 'generation-settlement', summary: 'Previous settlement.', actorIds: [] }),
+    moment({ sequence: 3, generation: 2, day: .1, tick: 4, summary: 'Earlier current event.', actorIds: [] }),
+    moment({ sequence: 4, generation: 2, day: .2, tick: 8, kind: 'energy-death', summary: 'Site-only death event.', actorIds: [], location: [.2, .3] }),
+  ]
+  const world = { generation: 2, dayTime: .3, config: contextConfig, activity: records, activityDropped: 0, creatures: [] }
+
+  it('offers exactly one review control for latest, timeline, boundary and archive even without living actors', () => {
+    const markup = renderToStaticMarkup(createElement(SimulationActivity, { world, onReviewMoment: () => undefined }))
+    expect(markup.match(/>Review event in arena<\/button>/g)).toHaveLength(4)
+    for (const record of records) expect(markup).toContain(`record ${record.sequence} · ${record.summary}`)
+    expect(markup).toContain('aria-label="Pause and review retained event in arena: Generation 2')
+    expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
+    expect(markup.match(/aria-pressed="false"/g)).toHaveLength(4)
+  })
+
+  it('marks the reviewed record despite a different retained-array position', () => {
+    const reviewedMoment = normalizeActivityMoment(records[0], 99)!
+    const markup = renderToStaticMarkup(createElement(SimulationActivity, { world, onReviewMoment: () => undefined, reviewedMoment }))
+    expect(markup.match(/aria-pressed="true"/g)).toHaveLength(1)
+    expect(markup).toContain('>Reviewing event in arena</button>')
+    const changed = renderToStaticMarkup(createElement(SimulationActivity, { world, onReviewMoment: () => undefined, reviewedMoment: { ...reviewedMoment, summary: 'Different record.' } }))
+    expect(changed).not.toContain('aria-pressed="true"')
+  })
+
+  it('keeps callback-less and single-argument actor callback rendering compatible', () => {
+    for (const onShowIndividual of [undefined, (_individualId: number) => undefined]) {
+      const markup = renderToStaticMarkup(createElement(SimulationActivity, { world, onShowIndividual }))
+      expect(markup).not.toContain('Review event in arena')
+      expect(markup).not.toContain('aria-pressed=')
+    }
+  })
+
+  it('explains unavailable legacy review while retaining living actor inspection', () => {
+    const legacy = { ...moment(), sequence: undefined }
+    const markup = renderToStaticMarkup(createElement(SimulationActivity, {
+      world: { ...world, activity: [legacy], creatures: [{ individualId: 1, alive: true }] },
+      onReviewMoment: () => undefined,
+      onShowIndividual: () => undefined,
+    }))
+    expect(markup).toContain('Event review unavailable: this legacy record has no stable identity.')
+    expect(markup).toContain('Living actors can still be inspected.')
+    expect(markup).not.toContain('>Review event in arena</button>')
+    expect(markup).toContain('aria-label="Pause and inspect current arena state for Collector Individual 1;')
+  })
+})
+
 describe('simulation activity helpers', () => {
   it('normalizes legacy missing sequence and keeps optional actor metadata safe', () => {
     const legacy = { ...moment({ actorIds: ['1', 2, Number.NaN] as unknown as number[], location: [.2, .3] }), sequence: undefined }
