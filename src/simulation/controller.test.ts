@@ -1,5 +1,6 @@
 import{afterEach,describe,expect,it,vi}from'vitest'
-import{controllerEventIsCurrent,createController,fallbackController}from'./controller'
+import{controllerEventIsCurrent,createController,fallbackController as lazyFallbackController}from'./controller'
+import{fallbackController}from'./fallbackController'
 import{applyIntervention,createWorld,defaultConfig,finishGeneration,setInspectedIndividual}from'./engine'
 import type{WorkerCommand,WorkerEvent}from'./protocol'
 
@@ -10,11 +11,133 @@ class FakeWorker{
   emit(data:WorkerEvent){this.onmessage?.({data}as MessageEvent<WorkerEvent>)}fail(){this.onerror?.()}
 }
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();FakeWorker.instances=[]})
+const settleLazyFallback=()=>vi.dynamicImportSettled()
 
 describe('controller failover and ordering',()=>{
   it('starts fallback from the latest world snapshot without resetting progress',()=>{const world=createWorld({...defaultConfig,seed:78});world.generation=7;world.dayTime=4.25;world.creatures[0].food=1;let observed=world;const controller=fallbackController(world,value=>{observed=value});expect(observed.generation).toBe(7);expect(observed.dayTime).toBe(4.25);expect(observed.creatures[0].food).toBe(1);expect(observed).not.toBe(world);controller.dispose()})
+  it('lazily starts fallback and queues every command issued before it is ready',async()=>{
+    vi.stubGlobal('Worker',undefined)
+    const initial={...defaultConfig,seed:401,initialPopulation:2,foodPerDay:0},reset={...initial,seed:402}
+    const snapshots:ReturnType<typeof createWorld>[]=[],metas:unknown[]=[],fallbacks:number[]=[]
+    const controller=createController(initial, (world,meta)=>{snapshots.push(world);metas.push(meta)},()=>fallbacks.push(1))
+    expect(controller.mode).toBe('fallback')
+    expect(fallbacks).toHaveLength(1)
+    expect(snapshots).toHaveLength(0)
+    controller.send({type:'speed',speed:2})
+    controller.send({type:'play'})
+    controller.send({type:'pause'})
+    controller.send({type:'reset',config:reset})
+    controller.send({type:'inspect',individualId:null})
+    controller.send({type:'intervene',kind:'resource-bloom'})
+    controller.send({type:'step',stepId:401})
+    controller.send({type:'finish',finishId:402})
+    expect(snapshots).toHaveLength(0)
+    await settleLazyFallback()
+    expect(snapshots.length).toBeGreaterThan(0)
+    expect(snapshots.at(-1)?.config.seed).toBe(reset.seed)
+    expect(metas.some(meta=>meta&&typeof meta==='object'&&'stepId'in meta&&(meta as {stepId?:number}).stepId===401)).toBe(true)
+    expect(metas.some(meta=>meta&&typeof meta==='object'&&'finishId'in meta&&(meta as {finishId?:number}).finishId===402)).toBe(true)
+    expect(snapshots.at(-1)?.events.filter(event=>event.kind==='resource-bloom')).toHaveLength(1)
+    controller.dispose()
+  })
+  it('keeps direct fallback compatibility as a lazy synchronous facade',async()=>{
+    const snapshots:ReturnType<typeof createWorld>[]=[]
+    const controller=lazyFallbackController({...defaultConfig,seed:403},world=>snapshots.push(world))
+    expect(controller.mode).toBe('fallback')
+    expect(snapshots).toHaveLength(0)
+    controller.send({type:'intervene',kind:'resource-bloom'})
+    await settleLazyFallback()
+    expect(snapshots.at(-1)?.events.at(-1)?.kind).toBe('resource-bloom')
+    controller.dispose()
+  })
+  it('cleans the fallback interval when initial snapshot delivery fails',()=>{
+    vi.useFakeTimers()
+    const failure=new Error('snapshot consumer failed')
+    expect(()=>fallbackController(defaultConfig,()=>{throw failure})).toThrow(failure)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+  it('enters a terminal no-op state when the lazy fallback module cannot load',async()=>{
+    vi.resetModules()
+    vi.doMock('./fallbackController',()=>{throw new Error('fallback chunk unavailable')})
+    const error=vi.spyOn(console,'error').mockImplementation(()=>{})
+    vi.stubGlobal('Worker',undefined)
+    try {
+      const {createController:isolatedCreateController}=await import('./controller')
+      const snapshots:ReturnType<typeof createWorld>[]=[],fallbacks:number[]=[]
+      const controller=isolatedCreateController(defaultConfig,world=>snapshots.push(world),()=>fallbacks.push(1))
+      controller.send({type:'intervene',kind:'resource-bloom'})
+      await settleLazyFallback()
+      controller.send({type:'step',stepId:999})
+      controller.send({type:'intervene',kind:'drought'})
+      expect(error).toHaveBeenCalledWith('[simulation] fallback module load failed',expect.any(Error))
+      expect(fallbacks).toHaveLength(1)
+      expect(snapshots).toHaveLength(0)
+      controller.dispose()
+    } finally {
+      error.mockRestore()
+      vi.doUnmock('./fallbackController')
+      vi.resetModules()
+    }
+  })
+  it('cleans up and terminally stops when fallback replay throws',async()=>{
+    vi.resetModules()
+    const replayFailure=new Error('replay failed'),send=vi.fn((command:WorkerCommand)=>{
+      if(command.type==='intervene') throw replayFailure
+    }),dispose=vi.fn()
+    vi.doMock('./fallbackController',()=>({fallbackController:vi.fn(()=>({mode:'fallback',send,dispose}))}))
+    const error=vi.spyOn(console,'error').mockImplementation(()=>{})
+    vi.stubGlobal('Worker',FakeWorker as unknown as typeof Worker)
+    try {
+      const {createController:isolatedCreateController}=await import('./controller')
+      const controller=isolatedCreateController(defaultConfig,()=>{},()=>{}),worker=FakeWorker.instances.at(-1)!
+      worker.emit({type:'snapshot',world:createWorld(defaultConfig),epoch:1,lastCommandId:0})
+      controller.send({type:'intervene',kind:'resource-bloom'})
+      worker.fail()
+      await settleLazyFallback()
+      expect(send).toHaveBeenCalledWith({type:'speed',speed:1})
+      expect(send).toHaveBeenCalledWith({type:'intervene',kind:'resource-bloom'})
+      expect(dispose).toHaveBeenCalledTimes(1)
+      expect(error).toHaveBeenCalledWith('[simulation] fallback initialization failed',replayFailure)
+      const calls=send.mock.calls.length
+      controller.send({type:'step',stepId:1000})
+      controller.send({type:'intervene',kind:'drought'})
+      expect(send).toHaveBeenCalledTimes(calls)
+      controller.dispose()
+    } finally {
+      error.mockRestore()
+      vi.doUnmock('./fallbackController')
+      vi.resetModules()
+    }
+  })
   it('requires both current worker session and run epoch',()=>{expect(controllerEventIsCurrent(2,2,4,4,false)).toBe(true);expect(controllerEventIsCurrent(1,2,4,4,false)).toBe(false);expect(controllerEventIsCurrent(2,2,3,4,false)).toBe(false);expect(controllerEventIsCurrent(2,2,4,4,true)).toBe(false)})
-  it('ignores a queued pre-reset snapshot and preserves only the new epoch on failover',()=>{
+  it('enters fallback once for a worker error event and replays post-error commands in order',async()=>{
+    vi.stubGlobal('Worker',FakeWorker as unknown as typeof Worker)
+    const snapshots:ReturnType<typeof createWorld>[]=[],fallbacks:number[]=[]
+    const controller=createController({...defaultConfig,seed:404},world=>snapshots.push(structuredClone(world)),()=>fallbacks.push(1)),worker=FakeWorker.instances[0]
+    const latest=createWorld({...defaultConfig,seed:404})
+    worker.emit({type:'snapshot',world:latest,epoch:1,lastCommandId:0})
+    controller.send({type:'intervene',kind:'resource-bloom'})
+    worker.emit({type:'error',message:'worker failed',epoch:1})
+    controller.send({type:'intervene',kind:'drought'})
+    worker.fail()
+    expect(controller.mode).toBe('fallback')
+    expect(fallbacks).toHaveLength(1)
+    await settleLazyFallback()
+    const events=snapshots.at(-1)?.events.slice(-2).map(event=>event.kind)
+    expect(events).toEqual(['resource-bloom','drought'])
+    expect(snapshots.filter(world=>world.events.length>0)).toHaveLength(2)
+    controller.dispose()
+  })
+  it('ignores a disposed lazy fallback completion',async()=>{
+    vi.stubGlobal('Worker',undefined)
+    const snapshots:ReturnType<typeof createWorld>[]=[],fallbacks:number[]=[]
+    const controller=createController(defaultConfig,world=>snapshots.push(world),()=>fallbacks.push(1))
+    controller.dispose()
+    await settleLazyFallback()
+    expect(fallbacks).toHaveLength(1)
+    expect(snapshots).toHaveLength(0)
+  })
+  it('ignores a queued pre-reset snapshot and preserves only the new epoch on failover',async()=>{
     vi.stubGlobal('Worker',FakeWorker as unknown as typeof Worker);const config={...defaultConfig,seed:101};let observed=createWorld(config),fallbacks=0
     const controller=createController(config,world=>{observed=world},()=>fallbacks++),worker=FakeWorker.instances[0]
     expect(worker.sent[0]).toMatchObject({type:'init',epoch:1})
@@ -22,10 +145,10 @@ describe('controller failover and ordering',()=>{
     const resetConfig={...config,seed:202};controller.send({type:'reset',config:resetConfig});expect(worker.sent.at(-1)).toMatchObject({type:'reset',epoch:2})
     const stale=createWorld(config);stale.generation=99;worker.emit({type:'snapshot',world:stale,epoch:1});expect(observed.generation).not.toBe(99)
     const current=createWorld(resetConfig);current.generation=4;worker.emit({type:'snapshot',world:current,epoch:2});expect(observed.generation).toBe(4)
-    worker.fail();expect(fallbacks).toBe(1);expect(observed.generation).toBe(4);expect(observed.config.seed).toBe(202)
+    worker.fail();expect(fallbacks).toBe(1);await settleLazyFallback();expect(observed.generation).toBe(4);expect(observed.config.seed).toBe(202)
     worker.emit({type:'snapshot',world:stale,epoch:1});expect(observed.generation).toBe(4);controller.dispose()
   })
-  it('keeps failover paused after resetting a previously playing worker',()=>{
+  it('keeps failover paused after resetting a previously playing worker',async()=>{
     vi.useFakeTimers();vi.stubGlobal('Worker',FakeWorker as unknown as typeof Worker)
     const config={...defaultConfig,seed:404};let observed=createWorld(config)
     const controller=createController(config,world=>{observed=world},()=>{}),worker=FakeWorker.instances[0]
@@ -33,6 +156,7 @@ describe('controller failover and ordering',()=>{
     const resetConfig={...config,seed:505};controller.send({type:'reset',config:resetConfig})
     worker.fail()
     expect(controller.mode).toBe('fallback')
+    await settleLazyFallback()
     vi.advanceTimersByTime(250)
     expect(observed.dayTime).toBe(0)
     controller.dispose()
@@ -43,23 +167,25 @@ describe('controller failover and ordering',()=>{
     expect(worker.sent.at(-1)).toEqual({type:'intervene',kind:'resource-bloom',commandId:1})
     controller.dispose()
   })
-  it('replays only unacknowledged interventions during worker failover',()=>{
+  it('replays only unacknowledged interventions during worker failover',async()=>{
     vi.stubGlobal('Worker',FakeWorker as unknown as typeof Worker);let observed=createWorld(defaultConfig)
     const controller=createController(defaultConfig,world=>{observed=structuredClone(world)},()=>{}),worker=FakeWorker.instances[0]
     const baseline=createWorld(defaultConfig);worker.emit({type:'snapshot',world:baseline,epoch:1,lastCommandId:0})
     controller.send({type:'intervene',kind:'resource-bloom'})
     worker.fail()
+    await settleLazyFallback()
     expect(observed.events).toHaveLength(1)
     expect(observed.events[0].kind).toBe('resource-bloom')
     controller.dispose()
   })
-  it('does not replay an intervention acknowledged by the latest worker snapshot',()=>{
+  it('does not replay an intervention acknowledged by the latest worker snapshot',async()=>{
     vi.stubGlobal('Worker',FakeWorker as unknown as typeof Worker);let observed=createWorld(defaultConfig)
     const controller=createController(defaultConfig,world=>{observed=structuredClone(world)},()=>{}),worker=FakeWorker.instances[0]
     const applied=createWorld(defaultConfig);applyIntervention(applied,'resource-bloom')
     controller.send({type:'intervene',kind:'resource-bloom'})
     worker.emit({type:'snapshot',world:applied,epoch:1,lastCommandId:1})
     worker.fail()
+    await settleLazyFallback()
     expect(observed.events).toHaveLength(1)
     controller.dispose()
   })
@@ -203,7 +329,7 @@ describe('controller failover and ordering',()=>{
     subject.dispose()
     control.dispose()
   })
-  it('forwards next action to the worker and keeps failover paused',()=>{
+  it('forwards next action to the worker and keeps failover paused',async()=>{
     vi.useFakeTimers();vi.stubGlobal('Worker',FakeWorker as unknown as typeof Worker)
     let observed=createWorld({...defaultConfig,seed:305,initialPopulation:1,foodPerDay:0}),receivedStepId:number|undefined,receivedActivity:unknown
     const controller=createController(observed.config,(world,meta)=>{observed=world;receivedStepId=meta?.stepId;receivedActivity=meta?.stepResult?.activity},()=>{}),worker=FakeWorker.instances[0]
@@ -218,6 +344,7 @@ describe('controller failover and ordering',()=>{
     expect(receivedActivity).toEqual(activity)
     worker.fail()
     expect(controller.mode).toBe('fallback')
+    await settleLazyFallback()
     const before=observed.dayTime
     vi.advanceTimersByTime(250)
     expect(observed.dayTime).toBe(before)
