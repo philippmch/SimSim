@@ -89,6 +89,8 @@ export interface WorldActivityEntry{
   sequence:number;generation:number;day:number;tick:number;kind:WorldActivityKind;summary:string
   /** Event units; for generation-settlement this is the exact next-population size. */
   count:number
+  /** Producer-selected normalized arena site where this historical event occurred. */
+  location?:[x:number,y:number]
   /** Individual IDs, in deterministic event order, when the event names actors. */
   actorIds?:number[]
   /** Individual IDs for an admitted attack; retained explicitly for consumers that need role labels. */

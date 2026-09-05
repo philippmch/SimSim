@@ -37,12 +37,19 @@ export function snapStandardizedEffect(effect:number){
 const selectionDescriptions:Record<BiologicalTrait,readonly [string,string]>={speed:['slower speed','faster speed'],size:['smaller size','larger size'],sense:['narrower sensing','broader sensing'],aggression:['lower aggression','higher aggression'],caution:['lower caution','higher caution'],exploration:['lower exploration tendency','higher exploration tendency']}
 
 type ActivityCursor={generation?:unknown;day?:unknown;tick?:unknown}
-type ActivityOptions={actorIds?:readonly unknown[];attackerId?:unknown;preyId?:unknown;contestChance?:unknown;cursor?:ActivityCursor}
+type ActivityOptions={actorIds?:readonly unknown[];attackerId?:unknown;preyId?:unknown;contestChance?:unknown;location?:unknown;cursor?:ActivityCursor}
 const safeActivityInteger=(value:unknown,min=0):number|null=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=min?value:null
 const safeActivityCount=(value:unknown)=>{if(typeof value!=='number'||!Number.isFinite(value)||value<0)return 0;return Math.min(Number.MAX_SAFE_INTEGER,Math.floor(value))}
 const safeActivityDay=(value:unknown)=>{if(typeof value!=='number'||!Number.isFinite(value)||value<0)return 0;const rounded=Math.round(value*1000)/1000;return Number.isFinite(rounded)?rounded:Number.MAX_SAFE_INTEGER}
 const safeActivitySummary=(value:unknown)=>typeof value==='string'&&value.trim().length?value:'Activity update unavailable.'
 const safeActivityChance=(value:unknown)=>typeof value==='number'&&Number.isFinite(value)?Math.max(0,Math.min(1,value)):null
+const safeActivityLocation=(value:unknown):[number,number]|null=>{
+  if(value===null||typeof value!=='object')return null
+  try{
+    const candidate=value as readonly unknown[],x=candidate[0],y=candidate[1]
+    return candidate.length===2&&typeof x==='number'&&Number.isFinite(x)&&x>=0&&x<=1&&typeof y==='number'&&Number.isFinite(y)&&y>=0&&y<=1?[x,y]:null
+  }catch{return null}
+}
 const formatActivityPercent=(chance:number)=>{const percent=chance*100;if(percent>0&&percent<.01)return'<0.01';return percent<.1?percent.toFixed(2):percent<10?percent.toFixed(1):percent.toFixed(0)}
 
 /**
@@ -76,6 +83,8 @@ function recordActivity(world:World,kind:WorldActivityKind,summary:string,count:
   const generation=safeActivityInteger(options.cursor?.generation??world.generation,0)??0
   const tick=safeActivityInteger(options.cursor?.tick??world.tickIndex,0)??0
   const entry:WorldActivityEntry={sequence,generation,day:safeActivityDay(options.cursor?.day??world.dayTime),tick,kind,summary:safeActivitySummary(summary),count:safeActivityCount(count)}
+  const location=safeActivityLocation(options.location)
+  if(location)entry.location=location
   const actorIds=(options.actorIds??[]).map(value=>safeActivityInteger(value)).filter((id):id is number=>id!==null)
   if(actorIds.length)entry.actorIds=[...actorIds]
   const attackerId=safeActivityInteger(options.attackerId)
@@ -281,7 +290,7 @@ export function tick(world:World,dt:number,boundaryConfig?:Config){
   const advanced=world.config.ecologyMode==='energy-regrowth'
   let homeArrivals:Creature[]|undefined
   for(const c of world.creatures){const wasHome=c.home;if(c.alive&&!c.home&&(advanced?(c.returning||c.mode==='returning'):c.food>=1)&&distance(c,{x:c.homeX,y:c.homeY})<.025){c.home=true;c.mode='returning';c.vx=0;c.vy=0}if(c.alive&&!wasHome&&c.home)(homeArrivals??=[]).push(c)}
-  if(homeArrivals)for(const c of homeArrivals.sort((a,b)=>a.id-b.id||a.individualId-b.individualId))recordActivity(world,'reached-home',`${activityActorLabel(c.individualId)} reached home.`,1,{actorIds:activityActorIds(c.individualId)})
+  if(homeArrivals)for(const c of homeArrivals.sort((a,b)=>a.id-b.id||a.individualId-b.individualId))recordActivity(world,'reached-home',`${activityActorLabel(c.individualId)} reached home.`,1,{actorIds:activityActorIds(c.individualId),location:[c.x,c.y]})
   const snapshots=world.creatures.filter(c=>c.alive&&!c.home).map(c=>({...c,memory:{...c.memory}})).sort((a,b)=>a.id-b.id)
   const canonicalFood=snapshots.length?[...world.food].sort((a,b)=>a.id-b.id):[]
   const decisions=new Map<number,Decision>()
@@ -303,8 +312,8 @@ export function tick(world:World,dt:number,boundaryConfig?:Config){
     const wasAlive=c.alive,wasHome=c.home
     Object.assign(c,{x:m.x,y:m.y,vx:m.vx,vy:m.vy,angle:m.angle,energy:m.energy,home:m.home||c.home,alive:m.energy>0,
       mode:m.home?'returning':d.mode,returning:c.returning||d.mode==='returning',memory:d.memory,targetType:d.targetType,targetId:d.targetId,targetX:d.targetX,targetY:d.targetY,commitUntil:d.commitUntil,wanderAngle:d.wanderAngle,wanderTurn:d.wanderTurn,reactionWindow:reactionWindows.get(c.id)!,decisionSummary:d.summary,perceptionDiagnostics:diagnostics.get(c.id)})
-    if(m.energy<=0){c.deathCause='energy';if(wasAlive&&c.alive===false)recordActivity(world,'energy-death',`${activityActorLabel(c.individualId)} died from energy loss.`,1,{actorIds:activityActorIds(c.individualId)})}
-    if(c.alive&&!wasHome&&c.home)recordActivity(world,'reached-home',`${activityActorLabel(c.individualId)} reached home.`,1,{actorIds:activityActorIds(c.individualId)})
+    if(m.energy<=0){c.deathCause='energy';if(wasAlive&&c.alive===false)recordActivity(world,'energy-death',`${activityActorLabel(c.individualId)} died from energy loss.`,1,{actorIds:activityActorIds(c.individualId),location:[c.x,c.y]})}
+    if(c.alive&&!wasHome&&c.home)recordActivity(world,'reached-home',`${activityActorLabel(c.individualId)} reached home.`,1,{actorIds:activityActorIds(c.individualId),location:[c.x,c.y]})
   }
   const claimants=snapshots.map(s=>byId.get(s.id)!).filter(c=>c.alive&&!c.home&&(advanced||c.food<2))
   const preyTargets=snapshots.map(s=>byId.get(s.id)!).filter(c=>c.alive&&!c.home)
@@ -321,10 +330,10 @@ export function tick(world:World,dt:number,boundaryConfig?:Config){
   const winners=<T extends {actor:number;resource:number;d:number}>(claims:T[])=>{const won=new Map<number,T>();for(const q of claims.sort((a,b)=>a.resource-b.resource||a.d-b.d||a.actor-b.actor))if(!won.has(q.resource))won.set(q.resource,q);return[...won.values()]}
   const foodWins=winners(foodClaims),foodById=new Map(world.food.map(food=>[food.id,food]))
   const eatenFood=new Set<number>()
-  for(const q of foodWins){const actor=byId.get(q.actor),food=foodById.get(q.resource);if(actor&&food&&(advanced||actor.food<2)){const reward=advanced?safeFoodEnergy(food,world.config):22;actor.food++;actor.energy+=reward;eatenFood.add(q.resource);world.dayFoodConsumed++;recordActivity(world,'food-collected',advanced?`${activityActorLabel(actor.individualId)} collected ${reward.toFixed(1)}-energy food.`:`${activityActorLabel(actor.individualId)} collected food.`,1,{actorIds:activityActorIds(actor.individualId)});if(advanced&&food.patchId!==null)world.environment.patches=consumeResourceStock({patches:world.environment.patches},food.patchId).patches}}
+  for(const q of foodWins){const actor=byId.get(q.actor),food=foodById.get(q.resource);if(actor&&food&&(advanced||actor.food<2)){const reward=advanced?safeFoodEnergy(food,world.config):22;actor.food++;actor.energy+=reward;eatenFood.add(q.resource);world.dayFoodConsumed++;recordActivity(world,'food-collected',advanced?`${activityActorLabel(actor.individualId)} collected ${reward.toFixed(1)}-energy food.`:`${activityActorLabel(actor.individualId)} collected food.`,1,{actorIds:activityActorIds(actor.individualId),location:[food.x,food.y]});if(advanced&&food.patchId!==null)world.environment.patches=consumeResourceStock({patches:world.environment.patches},food.patchId).patches}}
   world.food=world.food.filter(f=>!eatenFood.has(f.id))
   const attackClaims=collectAttackClaims(attackers,preyTargets,world.config),resolution=resolveAttackClaims(attackClaims,world.config,{seed:world.config.seed,generation:world.generation,tick:world.tickIndex})
-  for(const outcome of resolution.admitted){const attacker=activityActorLabel(outcome.attacker.individualId),prey=activityActorLabel(outcome.prey.individualId),chance=safeActivityChance(outcome.probability),chanceText=world.config.predationMode==='contest'&&chance!==null?` (contest chance ${formatActivityPercent(chance)}%)`:'';recordActivity(world,outcome.success?'attack-success':'attack-failure',`${outcome.success?`${attacker} caught ${prey}`:`${attacker}'s attack on ${prey} failed`}${chanceText}.`,1,{actorIds:activityActorIds(outcome.attacker.individualId,outcome.prey.individualId),attackerId:outcome.attacker.individualId,preyId:outcome.prey.individualId,contestChance:world.config.predationMode==='contest'?outcome.probability:undefined})}
+  for(const outcome of resolution.admitted){const attacker=activityActorLabel(outcome.attacker.individualId),prey=activityActorLabel(outcome.prey.individualId),chance=safeActivityChance(outcome.probability),chanceText=world.config.predationMode==='contest'&&chance!==null?` (contest chance ${formatActivityPercent(chance)}%)`:'';recordActivity(world,outcome.success?'attack-success':'attack-failure',`${outcome.success?`${attacker} caught ${prey}`:`${attacker}'s attack on ${prey} failed`}${chanceText}.`,1,{actorIds:activityActorIds(outcome.attacker.individualId,outcome.prey.individualId),attackerId:outcome.attacker.individualId,preyId:outcome.prey.individualId,contestChance:world.config.predationMode==='contest'?outcome.probability:undefined,location:[(outcome.attacker.x+outcome.prey.x)/2,(outcome.attacker.y+outcome.prey.y)/2]})}
   world.dayAttackAttempts+=world.config.predationMode==='threshold'?attackClaims.length:resolution.admitted.length;world.dayAttackSuccesses+=resolution.successes.length;world.dayAttackFailures+=resolution.failures.length;world.dayAttackContested+=resolution.rejected.filter(item=>item.reason==='prey-contested').length
   const attackEnergyDeaths:Creature[]=[]
   for(const delta of resolution.energyDeltas){const actor=byId.get(delta.id);if(actor){const wasAlive=actor.alive;actor.energy+=delta.delta;if(actor.energy<=0){actor.alive=false;actor.deathCause='energy';if(wasAlive)attackEnergyDeaths.push(actor)}}}
@@ -332,7 +341,7 @@ export function tick(world:World,dt:number,boundaryConfig?:Config){
   for(const outcome of resolution.successes){const actor=byId.get(outcome.attacker.id);if(actor)actor.food++}
   const killed=new Set(resolution.killedPreyIds);world.dayPreyConsumed+=resolution.successes.length
   for(const id of killed){const prey=byId.get(id);if(prey&&!prey.home){prey.alive=false;prey.deathCause='hunted'}}
-  for(const actor of attackEnergyDeaths.sort((a,b)=>a.id-b.id||a.individualId-b.individualId))if(actor.deathCause==='energy')recordActivity(world,'energy-death',`${activityActorLabel(actor.individualId)} died from energy loss.`,1,{actorIds:activityActorIds(actor.individualId)})
+  for(const actor of attackEnergyDeaths.sort((a,b)=>a.id-b.id||a.individualId-b.individualId))if(actor.deathCause==='energy')recordActivity(world,'energy-death',`${activityActorLabel(actor.individualId)} died from energy loss.`,1,{actorIds:activityActorIds(actor.individualId),location:[actor.x,actor.y]})
   world.dayHunted+=killed.size
   if(advanced){const step=advanceResourceDynamics({patches:world.environment.patches},{ecologyMode:'energy-regrowth',patchCapacity:world.config.patchCapacity,foodRegrowthRate:effectiveFoodRegrowthRate(world.environment,world.config),foodPatchSpread:world.config.foodPatchSpread,maxFood:180,patchQualityVariation:world.config.patchQualityVariation},{seed:world.config.seed,generation:world.generation,dt,generationDuration:world.config.dayLength,currentFoodCount:world.food.length});world.environment.patches=step.state.patches;const produced=spawnRegrownFood(world,step.placements);world.food.push(...produced);world.dayFoodProduced+=produced.length;if(produced.length)recordActivity(world,'natural-regrowth',`Natural regrowth added ${produced.length} food.`,produced.length)}
   if(world.inspectedIndividualId!==null){

@@ -27,16 +27,31 @@ describe('bounded world activity telemetry',()=>{
 
     const collecting=classic(),collector=collecting.creatures[0]
     Object.assign(collector,{x:.5,y:.5,homeX:.05,homeY:.05,angle:0,sense:.4})
-    collecting.food=[{id:900,x:.5,y:.5,patchId:null,energy:22}]
+    const food={id:900,x:.5,y:.5,patchId:null,energy:22}
+    collecting.food=[food]
     tick(collecting,SIMULATION_TIMESTEP)
     const collected=collecting.activity.find(entry=>entry.kind==='food-collected')
     expect(collected).toMatchObject({generation:1,tick:0,kind:'food-collected',count:1,actorIds:[collector.individualId]})
+    expect(collected?.location).toEqual([.5,.5])
+    food.x=.25
+    food.y=.75
+    expect(collected?.location).toEqual([.5,.5])
     expect(collected?.summary).toContain(`Individual ${collector.individualId}`)
 
     const arriving=classic(),traveller=arriving.creatures[0]
     Object.assign(traveller,{x:traveller.homeX,y:traveller.homeY,food:1,returning:true,mode:'returning'})
+    const homePosition=[traveller.x,traveller.y]
     tick(arriving,SIMULATION_TIMESTEP)
-    expect(arriving.activity).toContainEqual(expect.objectContaining({kind:'reached-home',count:1,actorIds:[traveller.individualId]}))
+    expect(arriving.activity).toContainEqual(expect.objectContaining({kind:'reached-home',count:1,actorIds:[traveller.individualId],location:homePosition}))
+
+    const crossing=classic(),returner=crossing.creatures[0]
+    Object.assign(returner,{x:.526,y:.5,homeX:.5,homeY:.5,food:1,returning:true,mode:'returning',targetType:'home',targetId:null,targetX:.5,targetY:.5,angle:Math.PI,vx:-.038*2.8,vy:0,speed:2.8,reactionWindow:0})
+    expect(Math.hypot(returner.x-returner.homeX,returner.y-returner.homeY)).toBeGreaterThanOrEqual(.025)
+    tick(crossing,SIMULATION_TIMESTEP)
+    const crossedArrivals=crossing.activity.filter(entry=>entry.kind==='reached-home')
+    expect(returner.home).toBe(true)
+    expect(crossedArrivals).toHaveLength(1)
+    expect(crossedArrivals[0]?.location).toEqual([returner.x,returner.y])
   })
 
   it('records the actual variable food reward in ecological activity',()=>{
@@ -52,13 +67,23 @@ describe('bounded world activity telemetry',()=>{
     creature.energy=0
     tick(doomed,SIMULATION_TIMESTEP)
     expect(doomed.rngState).toBe(rngBefore)
-    expect(doomed.activity).toContainEqual(expect.objectContaining({kind:'energy-death',actorIds:[creature.individualId],count:1}))
+    const movementDeath=doomed.activity.find(entry=>entry.kind==='energy-death')
+    expect(movementDeath).toMatchObject({kind:'energy-death',actorIds:[creature.individualId],count:1,location:[creature.x,creature.y]})
 
     const hunted=classic({initialPopulation:2,predatorRatio:1.2}),[attacker,prey]=hunted.creatures
     Object.assign(attacker,{x:.5,y:.5,size:2,speed:1,energy:100,aggression:1,mode:'hunting',targetType:'prey',targetId:prey.id,targetX:prey.x,targetY:prey.y,reactionWindow:0,attackCooldownUntil:0})
     Object.assign(prey,{x:.5,y:.5,size:1,speed:.4,energy:30,caution:0,reactionWindow:0})
     tick(hunted,SIMULATION_TIMESTEP)
-    expect(hunted.activity).toContainEqual(expect.objectContaining({kind:'attack-success',attackerId:attacker.individualId,preyId:prey.individualId,actorIds:[attacker.individualId,prey.individualId],count:1}))
+    const attack=hunted.activity.find(entry=>entry.kind==='attack-success')
+    expect(attack).toMatchObject({kind:'attack-success',attackerId:attacker.individualId,preyId:prey.individualId,actorIds:[attacker.individualId,prey.individualId],count:1,location:[(attacker.x+prey.x)/2,(attacker.y+prey.y)/2]})
+
+    const attackDoomed=createWorld({...defaultConfig,initialPopulation:2,foodPerDay:0,obstacleCount:0,dayLength:60,predationMode:'contest',perceptionMode:'realistic',reactionTime:1,predatorRatio:1.01,contestSharpness:20,attackCost:50,preyEnergy:0})
+    const[energyHunter,energyPrey]=attackDoomed.creatures
+    Object.assign(energyHunter,{x:.5,y:.5,size:1,speed:.3,energy:10,aggression:0,mode:'hunting',targetType:'prey',targetId:energyPrey.id,targetX:energyPrey.x,targetY:energyPrey.y,reactionWindow:0,attackCooldownUntil:0})
+    Object.assign(energyPrey,{x:.5,y:.5,size:1,speed:2.8,energy:300,caution:1,reactionWindow:0})
+    tick(attackDoomed,SIMULATION_TIMESTEP)
+    const attackDeath=attackDoomed.activity.find(entry=>entry.kind==='energy-death')
+    expect(attackDeath).toMatchObject({kind:'energy-death',actorIds:[energyHunter.individualId],location:[energyHunter.x,energyHunter.y]})
   })
 
   it('records contest failures with a finite contest chance',()=>{
@@ -81,6 +106,7 @@ describe('bounded world activity telemetry',()=>{
     expect(observed).toBeDefined()
     expect(observed?.world.activity).toContainEqual(expect.objectContaining({kind:'attack-failure',attackerId:observed?.attacker.individualId,preyId:observed?.prey.individualId,actorIds:[observed?.attacker.individualId,observed?.prey.individualId],contestChance:expect.any(Number)}))
     const attack=observed?.world.activity.find(entry=>entry.kind==='attack-failure')
+    expect(attack?.location).toEqual([(observed!.attacker.x+observed!.prey.x)/2,(observed!.attacker.y+observed!.prey.y)/2])
     expect(attack?.contestChance).toBeGreaterThan(0)
     expect(attack?.contestChance).toBeLessThan(1)
     expect(attack?.summary).toMatch(/contest chance (?:<0\.01|\d+(?:\.\d+)?)%\)\.$/)
@@ -109,11 +135,30 @@ describe('bounded world activity telemetry',()=>{
     expect(regrowth).toMatchObject({kind:'natural-regrowth',count:expect.any(Number)})
     expect(regrowth?.count).toBeGreaterThan(0)
     expect(regrowth?.actorIds).toBeUndefined()
+    expect(regrowth?.location).toBeUndefined()
 
     const migrated=classic()
     const count=applyIntervention(migrated,'founder-migration')
     const intervention=migrated.activity.at(-1)
     expect(intervention).toMatchObject({kind:'intervention',count,actorIds:migrated.creatures.slice(1).map(creature=>creature.individualId)})
+    expect(intervention?.location).toBeUndefined()
+  })
+
+  it('omits malformed, partial, and out-of-range producer locations without throwing',()=>{
+    const malformed=classic(),malformedActor=malformed.creatures[0]
+    Object.assign(malformedActor,{x:Number.NaN,y:.5,energy:0})
+    expect(()=>tick(malformed,SIMULATION_TIMESTEP)).not.toThrow()
+    expect(malformed.activity.find(entry=>entry.kind==='energy-death')?.location).toBeUndefined()
+
+    const partial=classic(),partialActor=partial.creatures[0]
+    Object.assign(partialActor,{x:undefined as unknown as number,y:.5,energy:0})
+    expect(()=>tick(partial,SIMULATION_TIMESTEP)).not.toThrow()
+    expect(partial.activity.find(entry=>entry.kind==='energy-death')?.location).toBeUndefined()
+
+    const outOfRange=classic(),outOfRangeActor=outOfRange.creatures[0]
+    Object.assign(outOfRangeActor,{x:1.2,y:.5,homeX:1.2,homeY:.5,food:1,returning:true,mode:'returning'})
+    expect(()=>tick(outOfRange,SIMULATION_TIMESTEP)).not.toThrow()
+    expect(outOfRange.activity.find(entry=>entry.kind==='reached-home')?.location).toBeUndefined()
   })
 
   it('retains the newest entries, increments exact drops, and keeps deterministic order',()=>{
@@ -142,6 +187,7 @@ describe('bounded world activity telemetry',()=>{
     finishGeneration(world)
     const settlement=world.activity.at(-1)
     expect(settlement).toMatchObject({generation:1,kind:'generation-settlement',count:world.creatures.length})
+    expect(settlement?.location).toBeUndefined()
     expect(settlement?.summary).toBe('Generation 1 settled: 1 survivor + 1 admitted birth → generation 2 starts with 2 creatures.')
     expect(world.generation).toBe(2)
     expect(before.activity).toEqual([])
