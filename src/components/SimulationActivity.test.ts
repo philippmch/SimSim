@@ -418,9 +418,10 @@ describe('SimulationActivity SSR markup', () => {
       onShowIndividual: () => undefined,
     }))
 
-    expect(markup).toContain('Attacker · Individual 2 · current arena state')
+    expect(markup).toContain('Attacker · Individual 2 · pause to inspect')
     expect(markup).toContain('Prey · Individual 1 · dead in current cohort')
-    expect(markup).toContain('Show current arena state for Attacker Individual 2')
+    expect(markup).toContain('Pause and inspect current arena state for Attacker Individual 2')
+    expect(markup).toContain('Controls pause playback to show each actor’s current arena state')
     expect(markup).toContain('Selected Individual 2 was involved in this moment.')
     expect(markup.match(/<button/g)).toHaveLength(1)
     expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
@@ -435,7 +436,7 @@ describe('SimulationActivity SSR markup', () => {
       onShowIndividual: () => undefined,
     }))
 
-    expect(markup).toContain('aria-label="Choose an event actor to show its current arena state"')
+    expect(markup).toContain('aria-label="Choose an event actor to pause and inspect its current arena state"')
     expect(markup.match(/<select/g)).toHaveLength(1)
     expect(markup.match(/<option/g)).toHaveLength(4)
     expect(markup.match(/<option[^>]*disabled=""/g)).toHaveLength(2)
@@ -484,7 +485,7 @@ describe('SimulationActivity SSR markup', () => {
     expect(markup).toContain('Previous generation boundary')
     expect(markup.indexOf('day 1.00 · tick 4')).toBeLessThan(markup.indexOf('day 3.00 · tick 12'))
     expect(markup).toContain('count 1')
-    expect(markup).toContain('Show current arena state for Attacker Individual 2')
+    expect(markup).toContain('Pause and inspect current arena state for Attacker Individual 2')
     expect(markup).toContain('Run-wide activity diagnostic: 1 older record was dropped')
     expect(markup).toContain('These signals do not establish that visible Generation 2 lane is incomplete')
     expect(markup).toContain('Show chronological details · 2 current-generation key moments')

@@ -633,7 +633,7 @@ function activityActorDescription(target: ActivityActorTarget): string {
 }
 
 function activityActorControlLabel(target: ActivityActorTarget): string {
-  return `Show current arena state for ${activityActorDescription(target)}; this is not the historical event position.`
+  return `Pause and inspect current arena state for ${activityActorDescription(target)}; this is not the historical event position.`
 }
 
 function ActivityActorAffordances({ moment, currentCreatures, selectedIndividualId, onShowIndividual }: ActivityActorAffordancesProps) {
@@ -645,13 +645,13 @@ function ActivityActorAffordances({ moment, currentCreatures, selectedIndividual
   return <div role="group" aria-label="Individuals involved in this moment" style={{ flex: '1 1 100%', minWidth: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5 }}>
     <span style={{ flexBasis: '100%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1, whiteSpace: 'normal' }}>
       <strong>Event actors</strong>
-      <small>Controls show each actor’s current state in the arena, not a historical event position.</small>
+      <small>Controls pause playback to show each actor’s current arena state. Event records describe the earlier moment.</small>
     </span>
     <span style={{ flexBasis: '100%', minWidth: 0, whiteSpace: 'normal', fontSize: 11, lineHeight: 1.35 }}>{formatActivityActorRelation(selectedIndividualId, targets)}</span>
     {onShowIndividual && targets.length > 2 && targets.some(target => target.status === 'living')
       ? <label style={{ flex: '1 1 190px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3, fontSize: 10, color: 'var(--muted)' }}>
-        <span>Choose a living actor to show its current arena state</span>
-        <select aria-label="Choose an event actor to show its current arena state" value={targets.some(target => target.status === 'living' && target.individualId === selectedIndividualId) ? String(selectedIndividualId) : ''} onChange={event => {
+        <span>Pause and inspect a living actor’s current arena state</span>
+        <select aria-label="Choose an event actor to pause and inspect its current arena state" value={targets.some(target => target.status === 'living' && target.individualId === selectedIndividualId) ? String(selectedIndividualId) : ''} onChange={event => {
           const individualId = Number(event.target.value)
           const target = targets.find(candidate => candidate.individualId === individualId && candidate.status === 'living')
           if (target) onShowIndividual(target.individualId)
@@ -662,7 +662,7 @@ function ActivityActorAffordances({ moment, currentCreatures, selectedIndividual
       </label>
       : <div style={{ flex: '1 1 100%', minWidth: 0, display: 'flex', flexWrap: 'wrap', gap: 5 }}>
         {targets.map(target => target.status === 'living' && onShowIndividual
-          ? <button key={`${target.role}-${target.individualId}`} type="button" onClick={() => onShowIndividual(target.individualId)} aria-label={activityActorControlLabel(target)} style={{ flex: '1 1 150px', minWidth: 0, whiteSpace: 'normal', lineHeight: 1.3 }}>{`${target.roleLabel} · Individual ${target.individualId} · current arena state`}</button>
+          ? <button key={`${target.role}-${target.individualId}`} type="button" onClick={() => onShowIndividual(target.individualId)} aria-label={activityActorControlLabel(target)} style={{ flex: '1 1 150px', minWidth: 0, whiteSpace: 'normal', lineHeight: 1.3 }}>{`${target.roleLabel} · Individual ${target.individualId} · pause to inspect`}</button>
           : <span key={`${target.role}-${target.individualId}`} style={{ flex: '1 1 150px', minWidth: 0, whiteSpace: 'normal', fontSize: 10, lineHeight: 1.35 }}>{`${target.roleLabel} · Individual ${target.individualId} · ${formatActivityActorStatus(target.status)}`}</span>)}
       </div>}
   </div>
