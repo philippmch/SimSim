@@ -46,6 +46,13 @@ generation settlement—with generation/day provenance and a short model-context
 line. Movement-only ticks are omitted, so this is not a long per-tick trace or
 replay. Clicking a creature still opens its bounded inspection telemetry.
 
+The arena guide sits below playback controls so its explanations never cover
+the field. Live action counts and the Focus filter remain visible when the
+detailed key is closed. Selecting a living actor in an event record pauses
+playback and inspects its current state. An orange “Then” marker shows a recorded
+event site when available; guides connect it to actors' current positions, not
+to reconstructed movement paths.
+
 The seeded environment persists across generations. Food patches have visible
 stock, bounded capacity, and deterministic within-generation regrowth. Each patch
 also receives a persistent seeded quality: richer patches replenish faster and

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ARENA_FOCUS_OPTIONS, ARENA_HUNT_CONTACT_KEY, ARENA_PATCH_QUALITY_KEY, ARENA_PATCH_STOCK_KEY, ARENA_SELECTED_OVERLAY_KEY, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress, formatArenaFocusDescription, formatArenaFocusOption, formatArenaPlaybackDetail, formatObservedPath, formatSelectedTarget, showArenaQuickStart } from './components/ArenaCanvasModel'
 import type { ArenaPlaybackStatus, CreatureState } from './components/ArenaCanvasModel'
 import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
@@ -461,9 +461,7 @@ function App(){
   const [experimentOpen,setExperimentOpen]=useState(false)
   const [isNarrow,setIsNarrow]=useState(()=>window.matchMedia('(max-width: 1050px)').matches)
   const [compactTransport,setCompactTransport]=useState(()=>window.matchMedia(COMPACT_TRANSPORT_QUERY).matches)
-  const [arenaKeysOpen,setArenaKeysOpen]=useState(()=>!window.matchMedia('(max-width: 1050px)').matches)
-  const arenaKeysRef=useRef<HTMLDetailsElement>(null)
-  const arenaKeyFocusRef=useRef<{source:Element;select:boolean}|null>(null)
+  const [arenaKeysOpen,setArenaKeysOpen]=useState(false)
   const settingsToggleRef=useRef<HTMLButtonElement>(null)
   const experimentToggleRef=useRef<HTMLButtonElement>(null)
   const settingsRef=useRef<HTMLElement>(null)
@@ -587,19 +585,12 @@ function App(){
     const query=window.matchMedia('(max-width: 1050px)')
     const compactQuery=window.matchMedia(COMPACT_TRANSPORT_QUERY)
     const change=()=>setIsNarrow(query.matches)
-    const compactChange=()=>{const source=document.activeElement,key=arenaKeysRef.current;arenaKeyFocusRef.current=source&&key?.contains(source)?{source,select:source.id==='arena-focus'}:null;if(key)setArenaKeysOpen(key.open);setCompactTransport(compactQuery.matches)}
-    const cancelKeyFocus=(event:FocusEvent)=>{if(event.target!==arenaKeyFocusRef.current?.source)arenaKeyFocusRef.current=null}
-    document.addEventListener('focusin',cancelKeyFocus)
+    const compactChange=()=>setCompactTransport(compactQuery.matches)
     query.addEventListener('change',change)
     compactQuery.addEventListener('change',compactChange)
-    return()=>{query.removeEventListener('change',change);compactQuery.removeEventListener('change',compactChange);document.removeEventListener('focusin',cancelKeyFocus)}
+    return()=>{query.removeEventListener('change',change);compactQuery.removeEventListener('change',compactChange)}
   },[])
 
-  useLayoutEffect(()=>{
-    const request=arenaKeyFocusRef.current
-    arenaKeyFocusRef.current=null
-    if(request&&(document.activeElement===document.body||document.activeElement===request.source))arenaKeysRef.current?.querySelector<HTMLElement>(request.select&&arenaKeysOpen?'#arena-focus':'summary')?.focus({preventScroll:true})
-  },[compactTransport,arenaKeysOpen])
 
   useEffect(()=>{
     if(!settingsOpen)return
@@ -656,11 +647,17 @@ function App(){
   },[terminalOutcome])
 
   const arenaGuide=<><small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} current food across ${world.environment.patches.length} resource patches`:`${world.food.length} current food`}</small>{showArenaQuickStart(world.ledger.length)&&<Suspense fallback={null}><FirstGenerationGuide playbackStatus={arenaStatus} selection={selectedPatchId!==null?'patch':selectedIndividualId!==null?'creature':'none'} stepState={pendingCommand?.kind==='finish'?'finishing':pendingCommand?.kind==='step'?'pending':stepActivityEvidence?'observed':'ready'}/></Suspense>}</>
-const arenaKeys=<details ref={arenaKeysRef} className="arena-keys" style={{border:0,paddingTop:0,marginTop:0,flexDirection:isNarrow&&!compactTransport?'column-reverse':'column',...(compactTransport?{position:'static',maxWidth:'none',marginBottom:8}: {})}} open={arenaKeysOpen} onToggle={event=>setArenaKeysOpen(event.currentTarget.open)}>
-            <summary className="state-key" style={{display:'flex',pointerEvents:'auto',touchAction:'manipulation',cursor:'pointer',listStyle:'none'}}>{arenaKeysOpen?'Hide key ':'Show key '}<Suspense fallback={null}><ArenaActivitySpotlightKey world={world} compact/></Suspense></summary>
-            <div className="state-key" role="group" aria-label="Creature action and overlay key" tabIndex={isNarrow&&!compactTransport?0:undefined} style={{maxHeight:isNarrow&&!compactTransport?'calc(min(max(58svh,390px),calc(100svh - 204px)) - 184px)':undefined,overflowY:isNarrow&&!compactTransport?'auto':undefined,pointerEvents:'auto'}}><strong>Outline = action · number = current count · body color = speed</strong><Suspense fallback={null}><ArenaActivitySpotlightKey world={world}/></Suspense>{world.config.ecologyMode==='energy-regrowth'&&<><strong>{ARENA_PATCH_STOCK_KEY}</strong><strong>{ARENA_PATCH_QUALITY_KEY}</strong></>}{selected&&<strong>{ARENA_SELECTED_OVERLAY_KEY}</strong>}{selected?.mode==='hunting'&&<strong>{ARENA_HUNT_CONTACT_KEY}</strong>}<label htmlFor="arena-focus" style={{pointerEvents:'auto',display:'inline-flex',alignItems:'center',gap:5,flexBasis:'100%',justifyContent:'flex-end',fontWeight:700}}><span>Focus</span><select id="arena-focus" aria-label="Focus creatures by current action" value={arenaFocus} onChange={event=>setArenaFocus(event.target.value as 'all'|CreatureState)} style={{pointerEvents:'auto',touchAction:'manipulation',minWidth:0,maxWidth:'170px',minHeight:isNarrow?'44px':'28px',fontSize:'10px',lineHeight:1.2,padding:'3px 5px',border:0,borderRadius:'5px',backgroundColor:'var(--paper)',color:'var(--ink)',colorScheme:'light dark'}}>{ARENA_FOCUS_OPTIONS.map(option=><option key={option.value} value={option.value}>{formatArenaFocusOption(option.value,option.value==='all'?living:stateCounts[option.value])}</option>)}</select></label><small style={{flexBasis:'100%',textAlign:'right',fontSize:'9px',lineHeight:1.35,color:arenaFocus==='all'?'#a7bbb2':'#f6dd83'}}>{formatArenaFocusDescription(arenaFocus,arenaFocusCount,living,selectedOutsideArenaFocus)}</small>{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/><b>{stateCounts[state]}</b>{' '}{metadata.label}</span>)}</div>
-            <div className="legend"><span>Body color = speed</span><i/><small>slower</small><small>faster</small></div>
-          </details>
+  const arenaKeys=<section className="arena-guide" aria-label="Arena guide">
+    <div className="state-key" role="group" aria-label="Current creature actions"><strong>Outline = action · number = current count</strong>{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/><b>{stateCounts[state]}</b>{' '}{metadata.label}</span>)}</div>
+<label style={{display:'flex',alignItems:'center',gap:8,marginTop:8,fontWeight:700}} htmlFor="arena-focus">Focus <select style={{minHeight:44,maxWidth:'100%',background:'var(--paper)',color:'var(--ink)',border:'1px solid var(--line)',borderRadius:6,padding:'4px 8px',fontSize:12,colorScheme:'light dark'}} id="arena-focus" aria-label="Focus creatures by current action" aria-describedby="arena-focus-description" value={arenaFocus} onChange={event=>setArenaFocus(event.target.value as 'all'|CreatureState)}>{ARENA_FOCUS_OPTIONS.map(option=><option key={option.value} value={option.value}>{formatArenaFocusOption(option.value,option.value==='all'?living:stateCounts[option.value])}</option>)}</select></label>
+    <p id="arena-focus-description">{formatArenaFocusDescription(arenaFocus,arenaFocusCount,living,selectedOutsideArenaFocus)}</p>
+    <details className="arena-keys" open={arenaKeysOpen} onToggle={event=>setArenaKeysOpen(event.currentTarget.open)}>
+      <summary>{arenaKeysOpen?'Hide arena key':'Show arena key'}<Suspense fallback={null}><ArenaActivitySpotlightKey world={world} compact/></Suspense></summary>
+      <div className="arena-meanings" role="group" aria-label="Creature action and overlay key"><Suspense fallback={null}><ArenaActivitySpotlightKey world={world}/></Suspense>{world.config.ecologyMode==='energy-regrowth'&&<><strong>{ARENA_PATCH_STOCK_KEY}</strong><strong>{ARENA_PATCH_QUALITY_KEY}</strong></>}{selected&&<strong>{ARENA_SELECTED_OVERLAY_KEY}</strong>}{selected?.mode==='hunting'&&<strong>{ARENA_HUNT_CONTACT_KEY}</strong>}</div>
+      <div className="legend"><span>Body color = speed</span><i/><small>slower</small><small>faster</small></div>
+    </details>
+    <div className="arena-guidance">{arenaGuide}</div>
+  </section>
 
   return <div className="app-shell" onFocusCapture={event=>cancelTerminalFocusTransfer(event.target)}>
     <header className="topbar" aria-hidden={experimentOpen||(settingsOpen&&isNarrow)||undefined}>
@@ -672,10 +669,9 @@ const arenaKeys=<details ref={arenaKeysRef} className="arena-keys" style={{borde
     <main aria-hidden={experimentOpen||undefined}>
       <section className="simulation-panel" aria-label="Simulation" aria-hidden={settingsOpen&&isNarrow||undefined}>
         <ArenaViewport compact={compactTransport}>
-          <Suspense fallback={<ArenaCanvasFallback/>}><ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual} selectedPatchId={selectedPatchId} onSelectPatch={selectPatch} arenaFocus={arenaFocus} playbackStatus={arenaStatus} playbackDetail={arenaDetail} explanationsOutside={compactTransport}/></Suspense>
-          <div className="arena-badge" style={{pointerEvents:'none'}}><strong>{arenaDayLabel}</strong><small>Generation {world.generation}</small>{!compactTransport&&arenaGuide}</div>
+<Suspense fallback={<ArenaCanvasFallback/>}><ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual} selectedPatchId={selectedPatchId} onSelectPatch={selectPatch} arenaFocus={arenaFocus} playbackStatus={arenaStatus} playbackDetail={arenaDetail} explanationsOutside compactControls={compactTransport}/></Suspense>
+          <div className="arena-badge" style={{pointerEvents:'none'}}><strong>{arenaDayLabel}</strong><small>Generation {world.generation}</small></div>
           <PlaybackPhaseStatus status={arenaStatus} detail={arenaDetail} playing={playing} suppressed={suppressPlaybackAnnouncementRef.current}/>
-          {!compactTransport&&arenaKeys}
           {extinct&&<div className="extinct" role="status"><strong>Population extinct</strong><span>Use Founder migration to rescue this run, or adjust the parameters and restart.</span></div>}
         </ArenaViewport>
         <div className="transport" role="group" aria-label="Playback controls">
@@ -686,7 +682,7 @@ const arenaKeys=<details ref={arenaKeysRef} className="arena-keys" style={{borde
           <label className="speed-select">Playback speed <select value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value={.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option><option value={4}>4×</option></select></label>
           <button className="reset" onClick={reset}>{dirty?'Apply & restart':'Restart run'}</button>
         </div>
-        {compactTransport&&<>{arenaKeys}<div className="arena-badge" style={{position:'static',marginBottom:8,letterSpacing:'normal'}}>{arenaGuide}</div></>}
+        {arenaKeys}
         {selectedPatch&&<div ref={selectedPatchInspectorRef} className="inspector-focus-target" tabIndex={-1} aria-label="Selected resource patch details" style={{scrollMarginTop:'84px'}}><Suspense fallback={<ResourcePatchInspectorFallback/>}><ResourcePatchInspector world={world} selectedPatchId={selectedPatchId} onClose={closeSelectedPatch}/></Suspense></div>}
         {manualStepStory.visible&&<Suspense fallback={<ObservedStepStoryFallback observedPath={observedPath}/>}><ObservedStepStory observedPath={observedPath} evidence={stepActivityEvidence}/></Suspense>}
         <SimulationEventStory world={world} selectedIndividualId={selectedIndividualId} onShowIndividual={showActivityIndividual} suppressAnnouncementSequence={stepAnnouncementSequence}/>

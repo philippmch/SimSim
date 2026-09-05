@@ -435,11 +435,11 @@ describe('arena activity spotlight', () => {
     for (const width of [300, 900]) {
       for (const compact of [true, false]) {
         const dimensions = { width, height: 276, pad: 20, compact }
-        const anchors = arenaActivitySpotlightOverlayAnchors(width, 276, compact, true)
-        expect(anchors).toEqual(arenaActivitySpotlightOverlayAnchors(width, 276, !compact, true))
+        const anchors = arenaActivitySpotlightOverlayAnchors(width, 276, compact, true, true)
+        expect(anchors).toEqual(arenaActivitySpotlightOverlayAnchors(width, 276, !compact, true, true))
         expect(arenaActivitySpotlightOverlayAnchors(width, 276, compact)).toEqual(arenaActivitySpotlightOverlayAnchors(width, 276, compact, false))
         const site = arenaActivitySpotlightSiteGeometry({ ...dimensions, x: .85, y: .6, anchors })!
-        const selected = arenaSelectedCreatureCalloutGeometry({ ...dimensions, x: .96, y: .5, explanationsOutside: true })
+        const selected = arenaSelectedCreatureCalloutGeometry({ ...dimensions, x: .96, y: .5, explanationsOutside: true, compactControls: true })
         expect(site).not.toBeNull()
         for (const label of [site, selected]) {
           expect(label.y).toBeGreaterThanOrEqual(72)
@@ -447,7 +447,7 @@ describe('arena activity spotlight', () => {
           expect(label.x + label.width).toBeLessThanOrEqual(width - 20)
           expect(label.y + label.height).toBeLessThanOrEqual(256)
           for (const obstacle of anchors) {
-            expect(label.x + label.width <= obstacle.x || label.x >= obstacle.x + obstacle.width || label.y + label.height <= obstacle.y || label.y >= obstacle.y + obstacle.height).toBe(true)
+            expect(label.x + label.width <= obstacle.x || label.x >= obstacle.x + obstacle.width || label.y + label.height <= obstacle.y || label.y >= obstacle.y + obstacle.height, JSON.stringify({ dimensions, label, obstacle })).toBe(true)
           }
         }
         // The taller former badge occupied this entire horizontal band.
@@ -455,12 +455,37 @@ describe('arena activity spotlight', () => {
         expect(selected.width).toBe(compact ? 148 : 190)
       }
     }
-    const lowerSite = arenaActivitySpotlightSiteGeometry({ width: 300, height: 276, pad: 20, compact: true, x: .9, y: .9, anchors: arenaActivitySpotlightOverlayAnchors(300, 276, true, true) })!
+    const lowerSite = arenaActivitySpotlightSiteGeometry({ width: 300, height: 276, pad: 20, compact: true, x: .9, y: .9, anchors: arenaActivitySpotlightOverlayAnchors(300, 276, true, true, true) })!
     expect(lowerSite).not.toBeNull()
     // The former lower key occupied y=154..224; its removal frees a slot
     // immediately above the retained picker, close to this bottom event.
     expect(lowerSite.y).toBeGreaterThanOrEqual(154)
     expect(lowerSite.y + lowerSite.height).toBeLessThanOrEqual(214)
+  })
+
+  it('keeps detached-guide labels clear of desktop controls even in a narrow canvas', () => {
+    for (const width of [360, 700, 1200]) {
+      const anchors = arenaActivitySpotlightOverlayAnchors(width, 450, true, true, false)
+      expect(anchors).toEqual(arenaActivitySpotlightOverlayAnchors(width, 450, false, true, false))
+      // The desktop picker reaches x=263; using the mobile 205px footprint
+      // would allow labels to sit underneath its right-hand options.
+      expect(anchors.some(anchor => anchor.x <= 263 && anchor.x + anchor.width >= 263 && anchor.y <= 430 && anchor.y + anchor.height >= 430)).toBe(true)
+      for (const x of [.02, .5, .98]) for (const y of [.05, .5, .95]) {
+        const dimensions = { width, height: 450, pad: 20, compact: width <= 720, x, y }
+        const selected = arenaSelectedCreatureCalloutGeometry({ ...dimensions, explanationsOutside: true, compactControls: false })
+        const site = arenaActivitySpotlightSiteGeometry({ ...dimensions, anchors })!
+        expect(site).not.toBeNull()
+        for (const label of [selected, site]) {
+          expect(label.x).toBeGreaterThanOrEqual(20)
+          expect(label.y).toBeGreaterThanOrEqual(20)
+          expect(label.x + label.width).toBeLessThanOrEqual(width - 20)
+          expect(label.y + label.height).toBeLessThanOrEqual(430)
+          for (const obstacle of anchors) {
+            expect(label.x + label.width <= obstacle.x || label.x >= obstacle.x + obstacle.width || label.y + label.height <= obstacle.y || label.y >= obstacle.y + obstacle.height, JSON.stringify({ dimensions, label, obstacle })).toBe(true)
+          }
+        }
+      }
+    }
   })
 
   it('preserves founder actor order while capping the rendered batch at eight', () => {

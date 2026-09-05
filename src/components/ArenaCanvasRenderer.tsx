@@ -28,6 +28,8 @@ import {
 
 interface Props {
   explanationsOutside?: boolean
+  /** DOM controls follow the viewport breakpoint, independently of canvas width. */
+  compactControls?: boolean
   world: World
   revision: number
   selectedIndividualId: number | null
@@ -685,7 +687,7 @@ export function ArenaActivitySpotlightKey({ world, compact = false }: { world: W
     ? <strong data-arena-activity-spotlight-cue="true" data-arena-activity-spotlight-key-sequence={cue.sequence}>{cue.compact}</strong>
     : null
   return <>
-    {cue && <><strong data-arena-activity-spotlight-event="true" data-arena-activity-spotlight-event-sequence={cue.sequence}>{cue.event}</strong><small data-arena-activity-spotlight-context="true" style={{ flexBasis: '100%', textAlign: 'right', lineHeight: 1.4, overflowWrap: 'anywhere' }}>{cue.context}</small></>}
+    {cue && <><strong data-arena-activity-spotlight-event="true" data-arena-activity-spotlight-event-sequence={cue.sequence}>{cue.event}</strong><small data-arena-activity-spotlight-context="true" style={{ flexBasis: '100%', lineHeight: 1.4, overflowWrap: 'anywhere' }}>{cue.context}</small></>}
     <strong data-arena-activity-spotlight-key="true" data-arena-activity-spotlight-key-sequence={spotlight.sequence}>{formatArenaActivitySpotlightKey(spotlight)}</strong>
   </>
 }
@@ -809,6 +811,7 @@ export function deriveArenaSelectedCreatureCallout(world: unknown, selectedIndiv
 
 export interface ArenaSelectedCreatureCalloutGeometryInput {
   explanationsOutside?: boolean
+  compactControls?: boolean
   width: number
   height: number
   pad: number
@@ -860,7 +863,7 @@ export function arenaSelectedCreatureCalloutGeometry(input: ArenaSelectedCreatur
   const actorOffset = selectedRingRadius + gap
   const centeredX = arenaClamp(leaderStartX - boxWidth / 2, left, Math.max(left, right - boxWidth))
   const centeredY = arenaClamp(leaderStartY - boxHeight / 2, top, Math.max(top, bottom - boxHeight))
-  const compactBandTop = Math.max(top, input.explanationsOutside ? 72 : 132)
+  const compactBandTop = Math.max(top, input.explanationsOutside ? (input.compactControls ? 72 : 78) : 132)
   const compactBandBottom = Math.min(bottom, height - (input.explanationsOutside ? 60 : 102))
   const compactBandFits = (input.compact === true || input.explanationsOutside === true) && compactBandBottom - compactBandTop >= boxHeight
   const compactBandY = compactBandFits
@@ -887,10 +890,10 @@ export function arenaSelectedCreatureCalloutGeometry(input: ArenaSelectedCreatur
     const nearestY = arenaClamp(leaderStartY, candidate.y, candidate.y + boxHeight)
     return Math.hypot(leaderStartX - nearestX, leaderStartY - nearestY) >= selectedRingRadius + gap / 2
   }
-  // These canvas-space rectangles conservatively mirror the DOM badge, the
-  // closed key summary, and the inspection picker layered above the canvas.
+  // These canvas-space rectangles conservatively mirror the DOM overlays.
+  // A narrow canvas in a desktop sidebar layout still has desktop controls.
   const overlays = input.explanationsOutside
-    ? arenaActivitySpotlightOverlayAnchors(width, height, !!input.compact, true)
+    ? arenaActivitySpotlightOverlayAnchors(width, height, !!input.compact, true, input.compactControls)
     : input.compact
     ? [
       { x: 12, y: 12, width: Math.max(0, width - 24), height: 120 },
@@ -1011,10 +1014,13 @@ export function arenaActivitySpotlightHaloRect(
   return { x: actorX - radius, y: actorY - radius, width: radius * 2, height: radius * 2 }
 }
 
-export function arenaActivitySpotlightOverlayAnchors(width: number, height: number, compact: boolean, explanationsOutside = false): ArenaActivitySpotlightTagRect[] {
-  if (explanationsOutside) return [
+export function arenaActivitySpotlightOverlayAnchors(width: number, height: number, compact: boolean, explanationsOutside = false, compactControls = false): ArenaActivitySpotlightTagRect[] {
+  if (explanationsOutside) return compactControls ? [
     { x: 12, y: 12, width: Math.max(0, width - 24), height: 60 },
     { x: 12, y: Math.max(0, height - 60), width: Math.max(0, Math.min(205, width - 24)), height: 48 },
+  ] : [
+    { x: 20, y: 18, width: Math.max(0, Math.min(300, width - 40)), height: 60 },
+    { x: 18, y: Math.max(0, height - 60), width: Math.max(0, Math.min(245, width - 36)), height: 44 },
   ]
   return compact
     ? [
@@ -1039,6 +1045,7 @@ function drawArenaActivitySpotlightSite(
   pad: number,
   externalOccupied: readonly ArenaActivitySpotlightTagRect[] = [],
   explanationsOutside = false,
+  compactControls = false,
 ): ArenaActivitySpotlightTagRect[] {
   if (!spotlight.location) return []
   const compact = width <= 720
@@ -1056,7 +1063,7 @@ function drawArenaActivitySpotlightSite(
     y: spotlight.location.y,
     compact,
     occupied: [...externalOccupied, ...actorHalos],
-    anchors: arenaActivitySpotlightOverlayAnchors(width, height, compact, explanationsOutside),
+    anchors: arenaActivitySpotlightOverlayAnchors(width, height, compact, explanationsOutside, compactControls),
   })
   ctx.save()
   ctx.globalAlpha = spotlight.alpha
@@ -1116,10 +1123,11 @@ function drawArenaActivitySpotlightTags(
   pad: number,
   externalOccupied: readonly ArenaActivitySpotlightTagRect[] = [],
   explanationsOutside = false,
+  compactControls = false,
 ) {
   if (!tags.length) return
   const compact = width <= 720
-  const anchors = arenaActivitySpotlightOverlayAnchors(width, height, compact, explanationsOutside)
+  const anchors = arenaActivitySpotlightOverlayAnchors(width, height, compact, explanationsOutside, compactControls)
   const occupied: ArenaActivitySpotlightTagRect[] = [...externalOccupied]
   const haloRects = tags.map(tag => arenaActivitySpotlightHaloRect(width, height, pad, tag))
   for (let index = 0; index < tags.length; index++) {
@@ -1390,7 +1398,7 @@ export function arenaCanvasCanDraw(width: number, height: number) {
   return Number.isFinite(width) && Number.isFinite(height) && width > 40 && height > 40
 }
 
-export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, selectedPatchId = null, onSelectPatch = () => {}, arenaFocus, playbackStatus, playbackDetail, explanationsOutside = false }: Props) {
+export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, selectedPatchId = null, onSelectPatch = () => {}, arenaFocus, playbackStatus, playbackDetail, explanationsOutside = false, compactControls = false }: Props) {
   const ref = useRef<HTMLCanvasElement>(null)
   const drawRef = useRef<() => void>(() => {})
   const darkModeRef = useRef<boolean | null>(null)
@@ -1411,7 +1419,7 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
       }
       const ctx = canvas.getContext('2d'); if (!ctx) return; ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       const w = rect.width, h = rect.height, pad = Math.max(20, Math.min(w, h) * .055), palette = arenaCanvasPalette(darkModeRef.current ?? false)
-      const selectedCalloutGeometry = selectedCallout ? arenaSelectedCreatureCalloutGeometry({ width: w, height: h, pad, x: selectedCallout.x, y: selectedCallout.y, size: selectedCallout.size, compact: w <= 720, explanationsOutside }) : null
+      const selectedCalloutGeometry = selectedCallout ? arenaSelectedCreatureCalloutGeometry({ width: w, height: h, pad, x: selectedCallout.x, y: selectedCallout.y, size: selectedCallout.size, compact: w <= 720, explanationsOutside, compactControls }) : null
       const activityTagObstacles = selectedCallout && selectedCalloutGeometry
         ? [selectedCalloutGeometry, arenaActivitySpotlightHaloRect(w, h, pad, selectedCallout)]
         : []
@@ -1515,8 +1523,8 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
       }
       if (activitySpotlight) {
         drawArenaActivitySpotlight(ctx, activitySpotlight, w, h, sx, sy)
-        const siteObstacles = drawArenaActivitySpotlightSite(ctx, activitySpotlight, w, h, pad, activityTagObstacles, explanationsOutside)
-        drawArenaActivitySpotlightTags(ctx, activitySpotlightTags, activitySpotlight.alpha, w, h, pad, [...activityTagObstacles, ...siteObstacles], explanationsOutside)
+        const siteObstacles = drawArenaActivitySpotlightSite(ctx, activitySpotlight, w, h, pad, activityTagObstacles, explanationsOutside, compactControls)
+        drawArenaActivitySpotlightTags(ctx, activitySpotlightTags, activitySpotlight.alpha, w, h, pad, [...activityTagObstacles, ...siteObstacles], explanationsOutside, compactControls)
       }
       const pct = Math.min(1, world.dayTime / world.config.dayLength)
       ctx.fillStyle = palette.progressTrack; ctx.fillRect(pad, pad - 9, w - pad * 2, 3)
@@ -1525,7 +1533,7 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
       if (selectedCallout && selectedCalloutGeometry) drawArenaSelectedCreatureCallout(ctx, selectedCallout, selectedCalloutGeometry, palette.selectedRing)
     }
     drawRef.current = draw; draw()
-  }, [world, revision, selectedIndividualId, selectedPatchId, arenaFocus, explanationsOutside])
+  }, [world, revision, selectedIndividualId, selectedPatchId, arenaFocus, explanationsOutside, compactControls])
   useEffect(() => {
     const query = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia(ARENA_COLOR_SCHEME_QUERY) : null
     if (!query) return
