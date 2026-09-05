@@ -22,6 +22,7 @@ import {
   arenaCanvasPalette,
   arenaActivitySpotlightAlpha,
   arenaActivitySpotlightHaloRect,
+  arenaActivitySpotlightSiteGeometry,
   arenaActivitySpotlightTagGeometry,
   arenaActivitySpotlightWindowTicks,
   arenaPatchQualityGeometry,
@@ -42,6 +43,7 @@ import {
   CREATURE_STATE_METADATA,
   formatArenaAccessibleDescription,
   formatArenaActivitySpotlightDescription,
+  formatArenaActivitySpotlightKey,
   formatArenaDayProgress,
   formatArenaFocusDescription,
   formatArenaFocusOption,
@@ -157,6 +159,7 @@ const spotlightMoment = (overrides: Partial<WorldActivityEntry> = {}): WorldActi
   kind: 'food-collected',
   summary: 'Individual 1 collected food.',
   count: 1,
+  location: [.4, .5],
   actorIds: [1],
   ...overrides,
 })
@@ -238,7 +241,7 @@ describe('arena activity spotlight', () => {
       spotlightMoment({ sequence: 10, actorIds: [1] }),
     ]
 
-    expect(resolveArenaActivitySpotlight(world)).toMatchObject({ sequence: 12, kind: 'food-collected', tick: 200, age: 0, actors: [{ individualId: 2 }] })
+    expect(resolveArenaActivitySpotlight(world)).toMatchObject({ sequence: 12, kind: 'food-collected', tick: 200, age: 0, location: { x: .4, y: .5 }, actors: [{ individualId: 2 }] })
     expect(deriveArenaActivitySpotlightCue(world)?.compact).toContain('Highlighted · Food collected')
     expect(deriveArenaActivitySpotlightCue(world)?.compact).not.toContain('Latest ·')
   })
@@ -342,6 +345,12 @@ describe('arena activity spotlight', () => {
     expect(arenaActivitySpotlightTagGeometry({ width: Number.NaN, height: 276, pad: 20, x: .5, y: .5, individualId: 1, role: 'collector' })).toBeNull()
     expect(arenaActivitySpotlightTagGeometry({ width: 300, height: 276, pad: 20, x: -1, y: .5, individualId: 1, role: 'collector' })).toBeNull()
 
+    const site = arenaActivitySpotlightSiteGeometry({ width: 300, height: 276, pad: 20, compact: true, x: .5, y: .5, anchors: compactAnchors })
+    expect(site).not.toBeNull()
+    expect(site?.actorX).toBe(150)
+    expect(site?.actorY).toBe(138)
+    expect(compactAnchors.every(anchor => site!.x + site!.width <= anchor.x || site!.x >= anchor.x + anchor.width || site!.y + site!.height <= anchor.y || site!.y >= anchor.y + anchor.height)).toBe(true)
+
     const selectedCallout = arenaSelectedCreatureCalloutGeometry({ width: 300, height: 276, pad: 20, compact: true, x: .72, y: .95, size: 1 })
     const selectedHalo = arenaActivitySpotlightHaloRect(300, 276, 20, { x: .72, y: .95, size: 1 })
     const remainingActor = arenaActivitySpotlightTagGeometry({
@@ -361,6 +370,63 @@ describe('arena activity spotlight', () => {
     expect(remainingActor).not.toBeNull()
     for (const obstacle of [selectedCallout, selectedHalo]) {
       expect(remainingActor!.x + remainingActor!.width <= obstacle.x || remainingActor!.x >= obstacle.x + obstacle.width || remainingActor!.y + remainingActor!.height <= obstacle.y || remainingActor!.y >= obstacle.y + obstacle.height).toBe(true)
+    }
+  })
+
+  it('keeps historical site labels near crowded bottom actors and clear of selected callouts', () => {
+    for (const dimensions of [
+      { width: 1392, height: 522, pad: 32, compact: false },
+      { width: 900, height: 600, pad: 32, compact: false },
+      { width: 300, height: 276, pad: 20, compact: true },
+    ]) {
+      const { width, height, pad, compact } = dimensions
+      const occupied = [
+        arenaSelectedCreatureCalloutGeometry({ ...dimensions, x: .65, y: .95, size: 1 }),
+        arenaActivitySpotlightHaloRect(width, height, pad, { x: .65, y: .95, size: 1 }),
+        arenaActivitySpotlightHaloRect(width, height, pad, { x: .61, y: .95, size: 1 }),
+      ]
+      const anchors = [{ x: 12, y: height - 60, width: compact ? 110 : 240, height: 48 }]
+      const site = arenaActivitySpotlightSiteGeometry({ ...dimensions, x: .61, y: .97, occupied, anchors })!
+      expect(site).not.toBeNull()
+      expect(site.actorX).toBe(pad + .61 * (width - 2 * pad))
+      expect(site.actorY).toBe(pad + .97 * (height - 2 * pad))
+      expect(site.x).toBeGreaterThanOrEqual(pad)
+      expect(site.y).toBeGreaterThanOrEqual(pad)
+      expect(site.x + site.width).toBeLessThanOrEqual(width - pad)
+      expect(site.y + site.height).toBeLessThanOrEqual(height - pad)
+      const gap = compact ? 2 : 6
+      for (const obstacle of [...occupied, ...anchors]) {
+        expect(site.x + site.width + gap <= obstacle.x || site.x >= obstacle.x + obstacle.width + gap || site.y + site.height + gap <= obstacle.y || site.y >= obstacle.y + obstacle.height + gap).toBe(true)
+      }
+      // There is room immediately beside or above the occupied area; using a
+      // distant field edge would make the leader misleadingly span the arena.
+      const nearestX = Math.max(site.x, Math.min(site.x + site.width, site.actorX))
+      const nearestY = Math.max(site.y, Math.min(site.y + site.height, site.actorY))
+      expect(Math.hypot(site.actorX - nearestX, site.actorY - nearestY)).toBeLessThan(110)
+      expect(Math.hypot(site.actorX - nearestX, site.actorY - nearestY)).toBeGreaterThanOrEqual(site.haloRadius + gap)
+    }
+    expect(arenaActivitySpotlightSiteGeometry({ width: 300, height: 276, pad: 20, x: .5, y: .5, occupied: [{ x: 20, y: 20, width: 260, height: 236 }] })).toBeNull()
+    expect(arenaActivitySpotlightSiteGeometry({ width: 300, height: 276, pad: 20, x: Number.NaN, y: .5 })).toBeNull()
+  })
+
+  it('keeps both the site and subsequent prey label nearby when a selected callout crowds the bottom', () => {
+    const dimensions = { width: 1392, height: 522, pad: 32 }
+    const selectedCallout = arenaSelectedCreatureCalloutGeometry({ ...dimensions, x: .65, y: .95, size: 1 })
+    const selectedHalo = arenaActivitySpotlightHaloRect(1392, 522, 32, { x: .65, y: .95, size: 1 })
+    const preyHalo = arenaActivitySpotlightHaloRect(1392, 522, 32, { x: .61, y: .95, size: 1 })
+    const anchors = [{ x: 12, y: 462, width: 240, height: 48 }]
+    const site = arenaActivitySpotlightSiteGeometry({ ...dimensions, x: .61, y: .97, occupied: [selectedCallout, selectedHalo, preyHalo], anchors })!
+    expect(site).not.toBeNull()
+    const prey = arenaActivitySpotlightTagGeometry({ ...dimensions, x: .61, y: .95, size: 1, individualId: 6, role: 'prey', occupied: [selectedCallout, selectedHalo, site], anchors })!
+    expect(prey).not.toBeNull()
+    for (const [label, obstacles] of [[site, [selectedCallout, selectedHalo, preyHalo, ...anchors]], [prey, [selectedCallout, selectedHalo, site, ...anchors]]] as const) {
+      const nearestX = Math.max(label.x, Math.min(label.x + label.width, label.actorX))
+      const nearestY = Math.max(label.y, Math.min(label.y + label.height, label.actorY))
+      expect(Math.hypot(label.actorX - nearestX, label.actorY - nearestY)).toBeLessThan(150)
+      expect(Math.hypot(label.actorX - nearestX, label.actorY - nearestY)).toBeGreaterThanOrEqual(label.haloRadius + 6)
+      for (const obstacle of obstacles) {
+        expect(label.x + label.width + 6 <= obstacle.x || label.x >= obstacle.x + obstacle.width + 6 || label.y + label.height + 6 <= obstacle.y || label.y >= obstacle.y + obstacle.height + 6).toBe(true)
+      }
     }
   })
 
@@ -387,7 +453,21 @@ describe('arena activity spotlight', () => {
 
   it('ignores stray attack-role fields on non-attack interventions', () => {
     const world = spotlightWorld()
-    world.activity = [spotlightMoment({ kind: 'intervention', actorIds: undefined, attackerId: 2, preyId: 1 })]
+    world.activity = [spotlightMoment({ kind: 'intervention', actorIds: undefined, attackerId: 2, preyId: 1, location: undefined })]
+    expect(resolveArenaActivitySpotlight(world)).toBeNull()
+  })
+
+  it('keeps a recorded site visible when no involved actor remains alive', () => {
+    const world = spotlightWorld()
+    for (const creature of world.creatures) creature.alive = false
+    world.activity = [spotlightMoment({ kind: 'energy-death', actorIds: [1], location: [.25, .75] })]
+    const spotlight = resolveArenaActivitySpotlight(world)
+    expect(spotlight).toMatchObject({ kind: 'energy-death', location: { x: .25, y: .75 }, actors: [] })
+    expect(formatArenaActivitySpotlightDescription(spotlight!)).toContain('no involved actor has a current live arena position')
+    expect(formatArenaActivitySpotlightKey(spotlight!)).toContain('the site remains visible, but no involved actor has a current live arena position')
+    expect(formatArenaActivitySpotlightKey(spotlight!)).not.toContain('dashed guides')
+
+    world.activity = [spotlightMoment({ kind: 'energy-death', actorIds: [1], location: [Number.NaN, .75] })]
     expect(resolveArenaActivitySpotlight(world)).toBeNull()
   })
 
@@ -413,14 +493,19 @@ describe('arena activity spotlight', () => {
     expect(resolveArenaActivitySpotlight(world)).toBeNull()
   })
 
-  it('uses canonical copy that names current positions without claiming historical locations', () => {
+  it('distinguishes the recorded event site from current actor positions and paths', () => {
     const world = spotlightWorld()
     world.activity = [spotlightMoment({ kind: 'attack-success', attackerId: 2, preyId: 1, actorIds: [2, 1] })]
     const spotlight = resolveArenaActivitySpotlight(world)!
     const description = formatArenaActivitySpotlightDescription(spotlight)
-    expect(description).toContain('Latest actor halo marks Individual 2 (attacker), Individual 1 (prey) at their current arena positions')
-    expect(description).toContain('it does not show the historical event location.')
-    expect(description).not.toContain('event location is current')
+    expect(description).toContain('“Then” marker shows the recorded event site')
+    expect(description).toContain('actor halos mark Individual 2 (attacker), Individual 1 (prey) at their current arena positions')
+    expect(description).toContain('they are not movement paths')
+    expect(formatArenaActivitySpotlightKey(spotlight)).toContain('recorded event site')
+
+    const legacy = { ...spotlight, location: null }
+    expect(formatArenaActivitySpotlightDescription(legacy)).toContain('does not show the historical event location')
+    expect(formatArenaActivitySpotlightKey(legacy)).toContain('Historical event site unavailable')
   })
 
   it('exposes active SSR key, canvas data hooks, and accessible actor ids only for an active spotlight', async () => {
@@ -440,7 +525,8 @@ describe('arena activity spotlight', () => {
     }))
 
     expect(key).toContain('data-arena-activity-spotlight-key-sequence="22"')
-    expect(key).toContain('Latest actor halo marks each actor’s current arena position; role tags identify recorded roles there. Neither shows the historical event location.')
+    expect(key).toContain('Orange “Then” marker = recorded event site')
+    expect(key).toContain('not movement paths')
     expect(key).toContain('Food collected · Generation 3 · day 1.00 · Individual 2 collected food.')
     expect(key).toContain('Model context: Energy-regrowth mode uses each item’s recorded energy')
     expect(compactKey).toContain('data-arena-activity-spotlight-cue="true"')
@@ -449,10 +535,13 @@ describe('arena activity spotlight', () => {
     expect(markup).toContain('data-arena-activity-spotlight="true"')
     expect(markup).toContain('data-arena-activity-spotlight-sequence="22"')
     expect(markup).toContain('data-arena-activity-spotlight-actors="2"')
+    expect(markup).toContain('data-arena-activity-spotlight-site="true"')
+    expect(markup).toContain('data-arena-activity-spotlight-site-x="0.4"')
+    expect(markup).toContain('data-arena-activity-spotlight-site-y="0.5"')
     expect(markup).toContain('data-arena-activity-spotlight-tag-copies="Collector · Individual 2"')
     expect(markup).toContain('data-arena-activity-spotlight-event="true"')
     expect(markup).toContain('data-arena-activity-spotlight-event-copy="Food collected · Generation 3 · day 1.00 · Individual 2 collected food."')
-    expect(markup).toContain('Latest actor halo marks Individual 2')
+    expect(markup).toContain('“Then” marker shows the recorded event site')
     expect(markup).toContain('Highlighted event: Food collected · Generation 3 · day 1.00 · Individual 2 collected food.')
     expect(markup).toContain('Model context: Energy-regrowth mode uses each item’s recorded energy')
     expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)

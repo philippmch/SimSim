@@ -27,10 +27,15 @@ const contextConfig: Partial<Config> = {
 
 describe('simulation activity helpers', () => {
   it('normalizes legacy missing sequence and keeps optional actor metadata safe', () => {
-    const legacy = { ...moment({ actorIds: ['1', 2, Number.NaN] as unknown as number[] }), sequence: undefined }
+    const legacy = { ...moment({ actorIds: ['1', 2, Number.NaN] as unknown as number[], location: [.2, .3] }), sequence: undefined }
     const normalized = normalizeActivityMoment(legacy, 4)
 
-    expect(normalized).toMatchObject({ sequence: 5, actorIds: [2], attackerId: null, preyId: null, contestChance: null })
+    expect(normalized).toMatchObject({ sequence: 5, location: [.2, .3], actorIds: [2], attackerId: null, preyId: null, contestChance: null })
+    legacy.location![0] = .9
+    expect(normalized?.location).toEqual([.2, .3])
+    expect(normalizeActivityMoment(moment({ location: [Number.NaN, .5] }), 0)?.location).toBeNull()
+    expect(normalizeActivityMoment(moment({ location: [-.1, .5] }), 0)?.location).toBeNull()
+    expect(normalizeActivityMoment(moment({ location: [.5] as unknown as [number, number] }), 0)?.location).toBeNull()
   })
 
   it('drops malformed entries without exposing throwing getters or non-finite values', () => {

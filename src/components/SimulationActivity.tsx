@@ -89,6 +89,17 @@ function safeActorIds(value: unknown): number[] {
   return actorIds
 }
 
+function safeActivityLocation(value: unknown): [x: number, y: number] | null {
+  const source = safeArray(value)
+  if (safeArrayLength(source) !== 2) return null
+  try {
+    const x = source[0], y = source[1]
+    return finiteNonnegative(x) && x <= 1 && finiteNonnegative(y) && y <= 1 ? [x, y] : null
+  } catch {
+    return null
+  }
+}
+
 export interface SimulationActivityMoment {
   sourceIndex: number
   sequence: number
@@ -99,6 +110,7 @@ export interface SimulationActivityMoment {
   kindLabel: string
   summary: string
   count: number
+  location: [x: number, y: number] | null
   actorIds: number[]
   attackerId: number | null
   preyId: number | null
@@ -233,6 +245,7 @@ export function normalizeActivityMoment(value: unknown, sourceIndex: number): Si
     kindLabel: ACTIVITY_KIND_LABELS[kind],
     summary,
     count,
+    location: safeActivityLocation(field(value, 'location')),
     actorIds: safeActorIds(field(value, 'actorIds')),
     attackerId: safeInteger(rawAttackerId, 1) ? rawAttackerId : null,
     preyId: safeInteger(rawPreyId, 1) ? rawPreyId : null,
