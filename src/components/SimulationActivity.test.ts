@@ -72,6 +72,16 @@ describe('retained event review controls', () => {
     expect(markup).not.toContain('>Review event in arena</button>')
     expect(markup).toContain('aria-label="Pause and inspect current arena state for Collector Individual 1;')
   })
+
+  it('does not offer review for a fabricated legacy identity that collides with a real record', () => {
+    const valid = moment({ sequence: 2 })
+    const legacy = { ...valid, sequence: undefined }
+    const markup = renderToStaticMarkup(createElement(SimulationActivity, {
+      world: { ...world, activity: [valid, legacy] }, onReviewMoment: () => undefined,
+    }))
+    expect(markup.match(/>Review event in arena<\/button>/g)).toHaveLength(1)
+    expect(markup).toContain('Event review unavailable: this legacy record has no stable identity.')
+  })
 })
 
 describe('simulation activity helpers', () => {

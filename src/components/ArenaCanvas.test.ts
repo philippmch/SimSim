@@ -236,6 +236,23 @@ describe('arena color scheme lifecycle', () => {
 })
 
 describe('arena activity spotlight', () => {
+  it('uses the newest valid raw duplicate metadata before testing whether it can be drawn', () => {
+    const world = spotlightWorld()
+    const older = spotlightMoment({ sequence: 1, day: .1, actorIds: [1], location: [.1, .2] })
+    const canonical = { ...older, day: .7, actorIds: [2], location: [.7, .8] as [number, number] }
+    const review = normalizeActivityMoment(older, 90)!
+    world.activity = [older, canonical]
+    expect(resolveArenaActivitySpotlight(world, review)).toMatchObject({
+      sourceIndex: 1, location: { x: .7, y: .8 }, actors: [{ individualId: 2 }], activityMoment: { day: .7, actorIds: [2] },
+    })
+    world.activity = [older, { ...canonical, actorIds: [], location: undefined }]
+    expect(resolveArenaActivitySpotlight(world, review)).toBeNull()
+    world.activity.push({ ...canonical, day: NaN })
+    expect(resolveArenaActivitySpotlight(world, review)).toBeNull()
+    world.activity = [older, { ...canonical, sequence: undefined } as never]
+    expect(resolveArenaActivitySpotlight(world, review)).toMatchObject({ sourceIndex: 0, location: { x: .1, y: .2 } })
+  })
+
   it('reviews an older retained record at full opacity and restores the latest when released', () => {
     const world = spotlightWorld()
     const earlier = spotlightMoment({ sequence: 1, tick: 1 })

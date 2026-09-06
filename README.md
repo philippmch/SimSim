@@ -56,7 +56,9 @@ to reconstructed movement paths.
 **Review event in arena** pins a retained record, including earlier generations,
 instead of highlighting an unrelated newer event. Actor inspection also reviews
 its associated record when a stable event identity is available. Review explains
-when no site or living actor position exists. **Return to latest event** ends
+when no site or living actor position exists. **Earlier**, **Later**, and the
+record slider browse retained events in order without advancing simulation time;
+this is a review of recorded moments, not a replay. **Return to latest event** ends
 review without resuming playback; Play, Next action, Finish generation, live
 shocks, and restart also leave review mode.
 

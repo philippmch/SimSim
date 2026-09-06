@@ -19,11 +19,11 @@ import {
   type CreatureState,
 } from './ArenaCanvasModel'
 import { resourcePatchOrdinal, sortResourcePatchRecords } from './ResourcePatchPresentation'
-import { isSameActivityReview } from './ActivityReviewModel'
 import {
   formatActivityContext,
   formatActivityMoment,
   normalizeActivityMoment,
+  resolveActivityReviewMoment,
   type SimulationActivityMoment,
 } from './SimulationActivity'
 
@@ -372,6 +372,7 @@ export function resolveArenaActivitySpotlight(world: unknown, reviewedMoment?: S
   }
   const windowTicks = arenaActivitySpotlightWindowTicks(arenaField(arenaField(world, 'config'), 'reactionTime'))
   const activity = arenaSafeArray(arenaField(world, 'activity'))
+  const canonicalReview = reviewedMoment ? resolveActivityReviewMoment(activity, reviewedMoment) : null
   let best: ArenaActivitySpotlight | null = null
   let bestSourceIndex = -1
   for (let sourceIndex = 0; sourceIndex < arenaArrayLength(activity); sourceIndex++) {
@@ -390,7 +391,7 @@ export function resolveArenaActivitySpotlight(world: unknown, reviewedMoment?: S
     const eventGeneration = normalizedMoment?.generation ?? arenaSafeGeneration(arenaField(entry, 'generation'))
     const tick = normalizedMoment?.tick ?? arenaSafeInteger(arenaField(entry, 'tick'), 0)
     const kind = normalizedMoment?.kind ?? arenaField(entry, 'kind')
-    if (reviewing && (!normalizedMoment || !isSameActivityReview(entry, reviewedMoment))) continue
+    if (reviewing && sourceIndex !== canonicalReview?.sourceIndex) continue
     if (sequence === null || eventGeneration === null || tick === null || !arenaActivityKind(kind)) continue
     if (!reviewing && (eventGeneration !== generation || tick > currentTick || ARENA_ACTIVITY_AGGREGATE_KINDS.has(kind))) continue
     const age = Math.max(0, currentTick - tick)

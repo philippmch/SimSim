@@ -694,7 +694,7 @@ function App(){
           <label className="speed-select">Playback speed <select value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value={.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option><option value={4}>4×</option></select></label>
           <button className="reset" onClick={reset}>{dirty?'Apply & restart':'Restart run'}</button>
         </div>
-        {activeReviewedMoment&&<Suspense fallback={null}><ActivityReviewNotice moment={activeReviewedMoment} creatures={world.creatures} focusFrom={reviewFocusSourceRef.current} onReturnToLatest={endActivityReview}/></Suspense>}
+        {activeReviewedMoment&&<Suspense fallback={null}><ActivityReviewNotice moment={activeReviewedMoment} activity={world.activity} creatures={world.creatures} focusFrom={reviewFocusSourceRef.current} onReviewMoment={reviewActivity} onReturnToLatest={endActivityReview}/></Suspense>}
         {arenaKeys}
         {selectedPatch&&<div ref={selectedPatchInspectorRef} className="inspector-focus-target" tabIndex={-1} aria-label="Selected resource patch details" style={{scrollMarginTop:'84px'}}><Suspense fallback={<ResourcePatchInspectorFallback/>}><ResourcePatchInspector world={world} selectedPatchId={selectedPatchId} onClose={closeSelectedPatch}/></Suspense></div>}
         {manualStepStory.visible&&<Suspense fallback={<ObservedStepStoryFallback observedPath={observedPath}/>}><ObservedStepStory observedPath={observedPath} evidence={stepActivityEvidence}/></Suspense>}
