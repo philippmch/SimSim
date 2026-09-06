@@ -67,7 +67,7 @@ export function formatDecisionBasis(basis:DecisionSelectionBasis|undefined):stri
 }
 
 export function formatDecisionProvenance(provenance:DecisionProvenance|undefined):string{
-  if(!provenance||!Number.isInteger(provenance.generation)||provenance.generation<1||!Number.isFinite(provenance.dayTime)||provenance.dayTime<0||!Number.isInteger(provenance.reactionWindow)||provenance.reactionWindow<0)return'Decision capture time unavailable'
+  if(!provenance||!Number.isSafeInteger(provenance.generation)||provenance.generation<1||!Number.isFinite(provenance.dayTime)||provenance.dayTime<0||!Number.isSafeInteger(provenance.reactionWindow)||provenance.reactionWindow<0)return'Decision capture time unavailable'
   return`Captured decision · Generation ${provenance.generation} · day ${provenance.dayTime.toFixed(2)} · reaction window ${provenance.reactionWindow}`
 }
 
@@ -104,6 +104,39 @@ export function decisionCandidateMatches(summary:DecisionSummary,candidate:Decis
   if(chosenId===undefined)return true
   if(chosenId===null)return candidate.targetId===null
   return Number.isFinite(chosenId)&&candidate.targetId===chosenId
+}
+
+/** Captured choices describe a past evaluation; held targets describe current state. */
+export function formatDecisionContext(selected:Creature,dayTime:number):string[]{
+  if(!selected.alive)return['No active target: this individual is inactive. Any captured decision is historical.']
+  if(selected.home)return['No active target: this individual is home. Any captured decision is historical.']
+  const decision=selected.decisionSummary
+  const knownType=(type:unknown):type is TargetType=>typeof type==='string'&&Object.hasOwn(decisionActionLabels,type)
+  const entityType=(type:TargetType)=>type==='food'||type==='prey'||type==='threat'
+  const validId=(id:unknown)=>typeof id==='number'&&Number.isSafeInteger(id)&&id>=0
+  const lines:string[]=[]
+  if(!decision)lines.push('No captured choice is available to compare with the current action.')
+  if(!knownType(selected.targetType))lines.push('No current held destination is available.')
+  else if(decision){
+    if(!knownType(decision.chosen))lines.push('Captured choice unavailable for comparison with the held destination.')
+    else if(selected.targetType!==decision.chosen)lines.push('The held action type differs from the captured choice.')
+    else if(!entityType(selected.targetType))lines.push('The held action type matches the captured choice; captured coordinates are unavailable for destination comparison.')
+    else if(!validId(decision.chosenTargetId)||!validId(selected.targetId))lines.push('Target identity unavailable for comparison with the captured choice.')
+    else lines.push(selected.targetId===decision.chosenTargetId
+      ?'The held target matches the captured choice.'
+      :'The held target differs from the captured choice.')
+  }
+  if(decision){
+    const capture=decision.decidedAt,perception=selected.perceptionDiagnostics
+    const validWindow=(value:unknown)=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0
+    if(capture&&Number.isSafeInteger(capture.generation)&&capture.generation>=1&&Number.isFinite(capture.dayTime)&&capture.dayTime>=0&&validWindow(capture.reactionWindow)&&perception&&validWindow(perception.reactionWindow)){
+      lines.push(`Captured reaction window ${capture.reactionWindow} · perception sample window ${perception.reactionWindow}. ${capture.reactionWindow===perception.reactionWindow?'Even within one window, perception can refresh after the decision.':'These window numbers differ; the perception sample is separate from the captured choice.'}`)
+    }else lines.push('Decision/perception window comparison unavailable.')
+  }
+  if(knownType(selected.targetType)&&Number.isFinite(dayTime)&&dayTime>=0&&Number.isFinite(selected.commitUntil)&&selected.commitUntil>dayTime){
+    lines.push(`Target preference timer: ${(selected.commitUntil-dayTime).toFixed(2)}s remaining. At a decision, urgency, a better option, or an unavailable target can override this preference.`)
+  }
+  return lines
 }
 
 /** Keep the inspector's rejection buckets additive and understandable at a glance. */
@@ -158,6 +191,7 @@ export interface CreatureInspectorActionControls {
 export function CreatureInspector({ selected, world, ecologyMode, dayTime, stateLabel, targetLabel, decisionTargetLabel, huntContactRule, settlementPreview, actionControls, embedded=false, onClose }: CreatureInspectorProps) {
   const perceptionCopy = selected.perceptionDiagnostics ? formatPerceptionTelemetry(selected.perceptionDiagnostics) : null
   const decision=selected.decisionSummary
+  const decisionContext=formatDecisionContext(selected,dayTime)
   const candidates=decision&&Array.isArray(decision.candidates)?decision.candidates:[]
   const chosenIndex=decision?candidates.findIndex(candidate=>decisionCandidateMatches(decision,candidate)):-1
   const decisionReason=typeof decision?.reason==='string'&&decision.reason.trim()?decision.reason:'Decision reason unavailable'
@@ -174,8 +208,9 @@ export function CreatureInspector({ selected, world, ecologyMode, dayTime, state
     {decision
       ? <div className="utility-breakdown" role="group" aria-label="Latest captured decision"><strong>Latest decision: {formatDecisionActionLabel(decision.chosen)}</strong><span style={decisionLineStyle}>Chosen target: {formatDecisionTargetLabel(decision,decisionTargetLabel)}</span><span style={decisionLineStyle}>Reason: {decisionReason}</span><span style={decisionLineStyle}>Selection basis: {formatDecisionBasis(decision.selectionBasis)}</span><span style={decisionLineStyle}>{formatDecisionProvenance(decision.decidedAt)}</span></div>
       : <div className="utility-breakdown" role="group" aria-label="Latest captured decision"><strong>{selected.home?'No active decision while home.':'No decision captured yet'}</strong><span style={decisionLineStyle}>{selected.home?'This individual is waiting at home; there is no active action to explain.':selected.alive?'Advance the simulation to capture its next decision.':'This individual is inactive; no further decisions will be captured.'}</span></div>}
-    <div className="inspector-grid"><dl style={{gridColumn:'1/-1'}}><div><dt>Age</dt><dd>{selected.age} generations</dd></div><div><dt>Energy</dt><dd>{selected.energy.toFixed(1)}</dd></div><div><dt>Food</dt><dd>{selected.food}{ecologyMode==='classic'?' / 2':' collected'}</dd></div><div><dt>State</dt><dd>{stateLabel}</dd></div><div><dt>Target</dt><dd>{targetLabel}</dd></div><div><dt>Attack ready</dt><dd>{selected.attackCooldownUntil<=dayTime?'now':`in ${(selected.attackCooldownUntil-dayTime).toFixed(2)}s`}</dd></div><div><dt>Memory</dt><dd>food {selected.memory.foodX===null?'none':'active'} · threat {selected.memory.threatX===null?'none':'active'}</dd></div></dl></div>
-    {selected.perceptionDiagnostics&&perceptionCopy&&<div className="perception-summary" role="group" aria-label="Selected creature perception telemetry"><strong>Perception window {selected.perceptionDiagnostics.reactionWindow}</strong><span>{perceptionCopy.creatures}</span><span>{perceptionCopy.food}</span><span>{perceptionCopy.notDetected}</span></div>}
+    <div className="utility-breakdown" role="group" aria-label="Current action context"><strong>Current action context</strong>{decisionContext.map(line=><span key={line} style={decisionLineStyle}>{line}</span>)}</div>
+    <div className="inspector-grid"><dl style={{gridColumn:'1/-1'}}><div><dt>Age</dt><dd>{selected.age} generations</dd></div><div><dt>Energy</dt><dd>{selected.energy.toFixed(1)}</dd></div><div><dt>Food</dt><dd>{selected.food}{ecologyMode==='classic'?' / 2':' collected'}</dd></div><div><dt>State</dt><dd>{stateLabel}</dd></div><div><dt>Held destination</dt><dd>{!selected.alive?'None · inactive':selected.home?'None · home':targetLabel}</dd></div><div><dt>Attack ready</dt><dd>{selected.attackCooldownUntil<=dayTime?'now':`in ${(selected.attackCooldownUntil-dayTime).toFixed(2)}s`}</dd></div><div><dt>Memory</dt><dd>food {selected.memory.foodX===null?'none':'active'} · threat {selected.memory.threatX===null?'none':'active'}</dd></div></dl></div>
+    {selected.perceptionDiagnostics&&perceptionCopy&&<div className="perception-summary" role="group" aria-label="Selected creature perception telemetry"><strong>Perception window {Number.isSafeInteger(selected.perceptionDiagnostics.reactionWindow)&&selected.perceptionDiagnostics.reactionWindow>=0?selected.perceptionDiagnostics.reactionWindow:'unavailable'}</strong><span>{perceptionCopy.creatures}</span><span>{perceptionCopy.food}</span><span>{perceptionCopy.notDetected}</span></div>}
     {selected.mode==='hunting'&&<div className="utility-breakdown" role="note"><strong>Hunt contact rule</strong><span>{huntContactRule}</span></div>}
     <details key={`traits-${selected.individualId}`} className="utility-breakdown"><summary>Trait profile · 6 values</summary><dl>{(['speed','size','sense','aggression','caution','exploration']as BiologicalTrait[]).map(trait=><div key={trait}><dt>{trait}</dt><dd>{selected[trait].toFixed(3)}</dd></div>)}</dl></details>
     {decision&&<details key={`candidates-${selected.individualId}`} className="utility-breakdown"><summary>{formatCandidateUtilitySummary(candidates.length)}</summary><small style={{display:'block',marginTop:4,color:'var(--muted)'}}>Scores rank candidates within this captured decision—not probability or biological fitness; perception can refresh before the next decision.</small><table><caption className="sr-only">Captured candidate relative utilities; scores rank candidates within this decision, not probability or biological fitness</caption><thead><tr><th>Candidate</th><th>Relative utility</th><th>Reason</th></tr></thead><tbody>{candidates.map((candidate,i)=>{const chosen=i===chosenIndex;return <tr key={`${candidate.type}-${candidate.targetId}-${i}`} aria-label={chosen?`${candidate.type} chosen candidate`:undefined}><td>{candidate.type}{chosen&&<small> · Chosen</small>}</td><td>{Number.isFinite(candidate.score)?candidate.score.toFixed(2):'unavailable'}</td><td>{typeof candidate.reason==='string'&&candidate.reason.trim()?candidate.reason:'Reason unavailable'}</td></tr>})}</tbody></table></details>}

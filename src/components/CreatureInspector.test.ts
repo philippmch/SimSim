@@ -6,7 +6,7 @@ import { createWorld } from '../simulation/engine'
 import type { DecisionSummary } from '../simulation/types'
 import { summarizeSelectedSettlementPreview, type SelectedSettlementPreview } from './GenerationForecast'
 import type { CreatureInspectorActionControls, CreatureInspectorProps } from './CreatureInspector'
-import { CreatureInspector, decisionCandidateMatches, formatCandidateUtilitySummary, formatDecisionActionLabel, formatDecisionBasis, formatDecisionProvenance, formatDecisionTargetLabel, formatSelectedSettlementOutcome, formatSelectedSettlementReproduction } from './CreatureInspector'
+import { CreatureInspector, decisionCandidateMatches, formatCandidateUtilitySummary, formatDecisionActionLabel, formatDecisionBasis, formatDecisionContext, formatDecisionProvenance, formatDecisionTargetLabel, formatSelectedSettlementOutcome, formatSelectedSettlementReproduction } from './CreatureInspector'
 
 const summary:DecisionSummary={
   chosen:'prey',
@@ -59,6 +59,88 @@ describe('captured decision inspector helpers',()=>{
 })
 
 const renderInspector=(world:ReturnType<typeof createWorld>,selected=world.creatures[0],overrides:Partial<CreatureInspectorProps>={})=>renderToStaticMarkup(createElement(CreatureInspector,{selected,ecologyMode:world.config.ecologyMode,dayTime:world.dayTime,stateLabel:'Exploring',targetLabel:'No current target',huntContactRule:'Contact required',onClose:()=>{},...overrides}))
+
+describe('current action context',()=>{
+  const fixture=()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1})
+    const selected=world.creatures[0]
+    Object.assign(selected,{alive:true,home:false,targetType:'prey',targetId:42,commitUntil:0,decisionSummary:{...summary}})
+    return {world,selected}
+  }
+
+  it('compares entity identity without inferring a reason for holding it',()=>{
+    const {world,selected}=fixture()
+    expect(renderInspector(world,selected)).toContain('The held target matches the captured choice.')
+    selected.targetId=43
+    expect(formatDecisionContext(selected,0).join(' ')).toContain('The held target differs')
+    selected.targetType='food'
+    expect(formatDecisionContext(selected,0).join(' ')).toContain('held action type differs')
+    selected.targetType='home'
+    selected.decisionSummary={...summary,chosen:'home',chosenTargetId:null}
+    expect(formatDecisionContext(selected,0).join(' ')).toContain('captured coordinates are unavailable')
+    expect(formatDecisionContext(selected,0).join(' ')).not.toContain('held target matches')
+  })
+
+  it('labels same-window samples without claiming simultaneous capture',()=>{
+    const {selected}=fixture()
+    const counts={total:0,detected:0,range:0,fov:0,occlusion:0,detection:0}
+    selected.reactionWindow=99
+    selected.perceptionDiagnostics={mode:'realistic',reactionWindow:4,creatures:counts,food:counts}
+    let copy=formatDecisionContext(selected,0).join(' ')
+    expect(copy).toContain('Captured reaction window 4 · perception sample window 4')
+    expect(copy).toContain('Even within one window, perception can refresh after the decision.')
+    expect(copy).not.toContain('99')
+    selected.perceptionDiagnostics.reactionWindow=5
+    copy=formatDecisionContext(selected,0).join(' ')
+    expect(copy).toContain('perception sample window 5')
+    expect(copy).toContain('These window numbers differ')
+  })
+
+  it('treats home and dead creatures as inactive despite retained target fields',()=>{
+    const {world,selected}=fixture()
+    selected.commitUntil=10
+    for(const home of [true,false]){
+      selected.home=home
+      selected.alive=home
+      const markup=renderInspector(world,selected,{targetLabel:'Prey · Individual 17'})
+      expect(markup).toContain(home?'None · home':'None · inactive')
+      expect(markup).toContain('Any captured decision is historical.')
+      expect(markup).not.toContain('<dd>Prey · Individual 17</dd>')
+      expect(markup).not.toContain('Target preference timer')
+      expect(markup).toContain('Latest decision: Hunt prey')
+    }
+  })
+
+  it('degrades missing and malformed capture metadata without invented matches',()=>{
+    const {world,selected}=fixture()
+    for(const id of [undefined,null,NaN,Infinity,-1,1.2]){
+      selected.decisionSummary={...summary,chosenTargetId:id,decidedAt:undefined}
+      const copy=formatDecisionContext(selected,0).join(' ')
+      expect(copy).toContain('Target identity unavailable')
+      expect(copy).toContain('window comparison unavailable')
+      expect(copy).not.toMatch(/NaN|Infinity|undefined|target matches/)
+    }
+    const counts={total:0,detected:0,range:0,fov:0,occlusion:0,detection:0}
+    selected.perceptionDiagnostics={mode:'realistic',reactionWindow:NaN,creatures:counts,food:counts}
+    selected.decisionSummary={...summary,decidedAt:{generation:3,dayTime:Infinity,reactionWindow:4}}
+    expect(formatDecisionContext(selected,0).join(' ')).toContain('window comparison unavailable')
+    expect(renderInspector(world,selected)).toContain('Perception window unavailable')
+    expect(renderInspector(world,selected)).not.toMatch(/NaN|Infinity|undefined/)
+    delete selected.decisionSummary
+    expect(formatDecisionContext(selected,0).join(' ')).toContain('No captured choice is available')
+  })
+
+  it('describes a positive commitment timer as an overridable preference',()=>{
+    const {selected}=fixture()
+    selected.commitUntil=1.75
+    const copy=formatDecisionContext(selected,1.25).join(' ')
+    expect(copy).toContain('Target preference timer: 0.50s remaining.')
+    expect(copy).toContain('urgency, a better option, or an unavailable target can override')
+    for(const time of [1.75,2,NaN,Infinity,-1])expect(formatDecisionContext(selected,time).join(' ')).not.toContain('Target preference timer')
+    selected.commitUntil=Infinity
+    expect(formatDecisionContext(selected,0).join(' ')).not.toContain('Target preference timer')
+  })
+})
 
 const controls=(overrides:Partial<CreatureInspectorActionControls>={}):CreatureInspectorActionControls=>({
   nextAction:()=>{},

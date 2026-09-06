@@ -44,7 +44,10 @@ keeps a bounded newest-first list of salient actor-level moments—such as food
 collection, attacks, home arrivals, energy loss, regrowth, interventions, and
 generation settlement—with generation/day provenance and a short model-context
 line. Movement-only ticks are omitted, so this is not a long per-tick trace or
-replay. Clicking a creature still opens its bounded inspection telemetry.
+replay. The latest retained event stays above expandable history at every screen
+size. Clicking a creature opens its bounded inspection telemetry, which compares
+its current destination with the captured choice and explains the timing of
+decision and perception samples.
 
 The arena guide sits below playback controls so its explanations never cover
 the field. Live action counts and the Focus filter remain visible when the
