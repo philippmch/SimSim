@@ -569,6 +569,8 @@ describe('SimulationActivity SSR markup', () => {
     expect(markup).toContain('Show earlier chronological details · 1 earlier current-generation key moment')
     expect(markup.match(/Earlier current moment\./g)).toHaveLength(1)
     expect(markup.match(/Latest current moment\./g)).toHaveLength(1)
+    expect(markup.indexOf('data-activity-latest="true"')).toBeLessThan(markup.indexOf('data-activity-timeline="true"'))
+    expect(markup).toContain('the latest retained moment is shown above this timeline')
     expect(markup).not.toContain('Earlier retained key moments, newest first')
   })
 
@@ -585,7 +587,7 @@ describe('SimulationActivity SSR markup', () => {
       },
     }))
 
-    expect(markup).toContain('Previous settlement boundary is shown in the latest card below.')
+    expect(markup).toContain('Previous settlement boundary is shown in the latest card above.')
     expect(markup).not.toContain('Previous settlement boundary is retained in the chronological details.')
     expect(markup).not.toContain('data-activity-timeline-details')
     expect(markup.match(/Generation 1 settled\./g)).toHaveLength(1)

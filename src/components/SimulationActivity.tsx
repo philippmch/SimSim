@@ -742,7 +742,7 @@ function ActivityTimeline({ timeline, latest, rawActivity, currentCreatures, sel
   const hasDetailContent = detailMomentCount > 0 || detailBoundary !== null
   const markerText = formatActivityTimelineCurrentMarker(timeline.currentDay, timeline.dayLength)
   const listLabel = suppressLatestMoment
-    ? `Earlier Generation ${timeline.generation} key moments, earliest to latest; the latest retained moment is shown immediately after this timeline; movement-only ticks are not retained`
+    ? `Earlier Generation ${timeline.generation} key moments, earliest to latest; the latest retained moment is shown above this timeline; movement-only ticks are not retained`
     : `Generation ${timeline.generation} key moments in chronological time order; movement-only ticks are not retained`
   const currentSummary = timeline.moments.length === 0
     ? 'No current-generation key moments are retained yet.'
@@ -752,9 +752,9 @@ function ActivityTimeline({ timeline, latest, rawActivity, currentCreatures, sel
   const previousSettlementLocation = timeline.previousSettlement
     ? detailBoundary
       ? ' Previous settlement boundary is retained in the chronological details.'
-      : ' Previous settlement boundary is shown in the latest card below.'
+      : ' Previous settlement boundary is shown in the latest card above.'
     : ''
-  return <section data-activity-timeline="true" role="group" aria-labelledby="simulation-activity-timeline-title" style={{ flex: '1 1 100%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4, padding: '7px 0 5px', borderTop: '1px solid color-mix(in srgb, var(--muted) 35%, transparent)' }}>
+  return <section data-activity-timeline="true" role="group" aria-labelledby="simulation-activity-timeline-title" style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4, padding: '7px 0 5px', borderTop: '1px solid color-mix(in srgb, var(--muted) 35%, transparent)' }}>
     <span style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1, overflowWrap: 'anywhere' }}>
       <span id="simulation-activity-timeline-title" style={{ fontSize: 12, fontWeight: 700 }}>Generation key moments</span>
       <small style={{ fontSize: 10 }}>Generation {timeline.generation} · earliest → latest · retained event records only</small>
@@ -836,10 +836,10 @@ export function SimulationActivity({ world, selectedIndividualId, onShowIndividu
   const latest = feed.latest
   const timelineKeys = new Set([...timeline.moments, ...(timeline.previousSettlement ? [timeline.previousSettlement] : [])].map(activityKey))
   const earlier = latest ? feed.entries.slice(1).filter(moment => !timelineKeys.has(activityKey(moment))) : []
-  return <div className="interventions" role="group" aria-labelledby="simulation-activity-title">
-    <span><strong id="simulation-activity-title" style={{ fontSize: 12 }}>What happened</strong><small style={{ fontSize: 10 }}>Retained moments across the run · not limited to the latest step</small></span>
-    <ActivityTimeline rawActivity={activity} timeline={timeline} latest={latest} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>
-    {latest ? <div style={{ flex: '1 1 100%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
+  return <div className="interventions" role="group" aria-labelledby="simulation-activity-title" style={{ flexDirection: 'column', flexWrap: 'nowrap', alignItems: 'stretch', minWidth: 0, overflowWrap: 'anywhere' }}>
+    <span style={{ whiteSpace: 'normal', flexBasis: 'auto', minWidth: 0 }}><strong id="simulation-activity-title" style={{ fontSize: 12 }}>What happened</strong><small style={{ fontSize: 10 }}>Retained moments across the run · not limited to the latest step</small></span>
+    {latest ? <div data-activity-latest="true" style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
+      <small style={{ fontSize: 10 }}>Latest retained event</small>
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <span className="journal-kicker" style={{ margin: 0, fontSize: 10, overflowWrap: 'anywhere' }}>{latest.kindLabel} · {formatActivityProvenance(latest)}</span>
         <strong style={{ fontSize: 12, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{latest.summary}</strong>
@@ -847,7 +847,9 @@ export function SimulationActivity({ world, selectedIndividualId, onShowIndividu
         <ActivityReviewButton rawActivity={activity} moment={latest} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>
         {(onShowIndividual || selectedIndividualId !== undefined) && <ActivityActorAffordances rawActivity={activity} moment={latest} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>}
       </div>
-      {earlier.length > 0 && <details>
+      </div> : <p className="journal-equation" style={{ fontSize: 11 }}>{NO_ACTIVITY_MOMENTS}</p>}
+    <ActivityTimeline rawActivity={activity} timeline={timeline} latest={latest} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>
+    {earlier.length > 0 && <details>
         <summary style={{ fontSize: 11, minHeight: 44, display: 'list-item', boxSizing: 'border-box', padding: '12px 0', lineHeight: '20px', cursor: 'pointer' }}>Show {earlier.length} earlier retained {earlier.length === 1 ? 'key moment' : 'key moments'}</summary>
         <ol aria-label="Earlier retained key moments, newest first" style={{ flex: '1 1 100%', minWidth: 0, margin: '6px 0 0', padding: 0, listStyle: 'none' }}>
           {earlier.map(moment => <li key={`${moment.sequence}-${moment.sourceIndex}`} style={{ minWidth: 0, padding: '4px 0', overflowWrap: 'anywhere' }}>
@@ -859,8 +861,7 @@ export function SimulationActivity({ world, selectedIndividualId, onShowIndividu
           </li>)}
         </ol>
       </details>}
-      </div> : <p className="journal-equation" style={{ flex: '1 1 auto', fontSize: 11 }}>{NO_ACTIVITY_MOMENTS}</p>}
-    <small style={{ flexBasis: '100%', fontSize: 10, lineHeight: 1.35, overflowWrap: 'anywhere' }}>{formatActivityRetentionContext(feed)}</small>
+    <small style={{ fontSize: 10, lineHeight: 1.35, overflowWrap: 'anywhere' }}>{formatActivityRetentionContext(feed)}</small>
     <output className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</output>
   </div>
 }
