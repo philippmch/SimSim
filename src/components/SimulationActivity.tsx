@@ -837,17 +837,19 @@ export function SimulationActivity({ world, selectedIndividualId, onShowIndividu
   const timelineKeys = new Set([...timeline.moments, ...(timeline.previousSettlement ? [timeline.previousSettlement] : [])].map(activityKey))
   const earlier = latest ? feed.entries.slice(1).filter(moment => !timelineKeys.has(activityKey(moment))) : []
   return <div className="interventions" role="group" aria-labelledby="simulation-activity-title" style={{ flexDirection: 'column', flexWrap: 'nowrap', alignItems: 'stretch', minWidth: 0, overflowWrap: 'anywhere' }}>
-    <span style={{ whiteSpace: 'normal', flexBasis: 'auto', minWidth: 0 }}><strong id="simulation-activity-title" style={{ fontSize: 12 }}>What happened</strong><small style={{ fontSize: 10 }}>Retained moments across the run · not limited to the latest step</small></span>
+    <span style={{ whiteSpace: 'normal', flexBasis: 'auto', minWidth: 0 }}><strong id="simulation-activity-title" style={{ fontSize: 12 }}>What happened</strong></span>
     {latest ? <div data-activity-latest="true" style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
-      <small style={{ fontSize: 10 }}>Latest retained event</small>
-      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <span style={{ fontSize: 12, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{latest.summary}</span>
+      <ActivityReviewButton rawActivity={activity} moment={latest} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>
+    </div> : <p className="journal-equation" style={{ fontSize: 11 }}>{NO_ACTIVITY_MOMENTS}</p>}
+    <details data-activity-details="true">
+      <summary style={{ fontSize: 11, minHeight: 44, display: 'list-item', boxSizing: 'border-box', padding: '12px 0', lineHeight: '20px', cursor: 'pointer' }}>Show event details and history</summary>
+      <small style={{ fontSize: 10 }}>Retained moments across the run · not limited to the latest step</small>
+      {latest && <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5, padding: '6px 0' }}>
         <span className="journal-kicker" style={{ margin: 0, fontSize: 10, overflowWrap: 'anywhere' }}>{latest.kindLabel} · {formatActivityProvenance(latest)}</span>
-        <strong style={{ fontSize: 12, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{latest.summary}</strong>
         <span style={{ fontSize: 11, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{formatActivityContext(latest, config)}</span>
-        <ActivityReviewButton rawActivity={activity} moment={latest} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>
         {(onShowIndividual || selectedIndividualId !== undefined) && <ActivityActorAffordances rawActivity={activity} moment={latest} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>}
-      </div>
-      </div> : <p className="journal-equation" style={{ fontSize: 11 }}>{NO_ACTIVITY_MOMENTS}</p>}
+      </div>}
     <ActivityTimeline rawActivity={activity} timeline={timeline} latest={latest} currentCreatures={currentCreatures} selectedIndividualId={selectedIndividualId} onShowIndividual={onShowIndividual} onReviewMoment={onReviewMoment} reviewedMoment={reviewedMoment}/>
     {earlier.length > 0 && <details>
         <summary style={{ fontSize: 11, minHeight: 44, display: 'list-item', boxSizing: 'border-box', padding: '12px 0', lineHeight: '20px', cursor: 'pointer' }}>Show {earlier.length} earlier retained {earlier.length === 1 ? 'key moment' : 'key moments'}</summary>
@@ -862,6 +864,7 @@ export function SimulationActivity({ world, selectedIndividualId, onShowIndividu
         </ol>
       </details>}
     <small style={{ fontSize: 10, lineHeight: 1.35, overflowWrap: 'anywhere' }}>{formatActivityRetentionContext(feed)}</small>
+    </details>
     <output className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</output>
   </div>
 }

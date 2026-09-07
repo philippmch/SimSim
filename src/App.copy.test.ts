@@ -163,11 +163,11 @@ describe('next action control copy', () => {
     expect(suppressed).not.toContain('Awaiting settlement')
   })
 
-  it('describes a stopped manual step as awaiting settlement until the cohort is recorded', () => {
+  it('distinguishes ecological resting from dead and extinct cohorts after a manual step', () => {
     const home = createWorld({ ...defaultConfig, initialPopulation: 2 })
     for (const individual of home.creatures) individual.home = true
-    expect(formatStepCompletion(home, { stepResult: { ticks: 0, stop: 'no-active' } })).toContain('Awaiting settlement')
-    expect(formatStepCompletion(home, { stepResult: { ticks: 0, stop: 'no-active' } })).toContain('all living creatures are home')
+    expect(formatStepCompletion(home, { stepResult: { ticks: 0, stop: 'no-active' } })).toContain('Resting uses energy')
+    expect(formatStepCompletion(home, { stepResult: { ticks: 0, stop: 'no-active' } })).toContain('All living creatures are resting at home')
 
     const dead = createWorld({ ...defaultConfig, initialPopulation: 2 })
     for (const individual of dead.creatures) individual.alive = false

@@ -60,8 +60,9 @@ describe('retained review navigation', () => {
     }))
     expect(markup).toContain('day 7.00')
     expect(markup).not.toContain('day 3.00')
-    expect(markup).toContain('No historical site was recorded')
-    expect(markup).toContain('No involved actor has a current living position')
+    expect(markup).toContain('This event has no recorded location')
+    expect(markup).toContain('No creatures from this event are visible now')
+    expect(markup).not.toContain('no longer alive')
   })
 
   it('renders one-based range values and descriptive provenance with an initially empty live status', () => {

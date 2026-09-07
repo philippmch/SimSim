@@ -11,12 +11,14 @@ export interface ArenaPlaybackStatusInput {
   playing: boolean
   populationCount: number
   activeCount: number
+  restingCanAct?: boolean
 }
 
 export interface ArenaPlaybackDetailInput {
   status: ArenaPlaybackStatus
   populationCount: number
   livingCount: number
+  restingCanAct?: boolean
 }
 
 export const ARENA_PATCH_STOCK_KEY = 'Full inner rings = patch stock capacity; colored arcs = current food stock.'
@@ -28,7 +30,7 @@ export const ARENA_SAFE_FOCUS_TARGET_PATH_KEY = 'Safe-at-home creatures have no 
 
 export const ARENA_FOCUS_LABELS = {
   all:'All creatures',
-  safe:'Safe at home',
+  safe:'Resting at home',
   exploring:'Exploring',
   foraging:'Finding food',
   hunting:'Hunting prey',
@@ -115,7 +117,7 @@ export function arenaPlaybackStatus(input: ArenaPlaybackStatusInput): ArenaPlayb
   const populationCount = Number.isFinite(input.populationCount) ? Math.max(0, input.populationCount) : 0
   const activeCount = Number.isFinite(input.activeCount) ? Math.max(0, input.activeCount) : 0
   if (populationCount === 0) return 'Extinct'
-  if (activeCount === 0) return 'Awaiting settlement'
+  if (activeCount === 0 && !input.restingCanAct) return 'Awaiting settlement'
   return input.playing ? 'Running' : 'Paused'
 }
 
@@ -123,6 +125,7 @@ export function formatArenaPlaybackDetail(input: ArenaPlaybackDetailInput): stri
   const populationCount = Number.isFinite(input.populationCount) ? Math.max(0, Math.trunc(input.populationCount)) : 0
   const livingCount = Number.isFinite(input.livingCount) ? Math.max(0, Math.trunc(input.livingCount)) : 0
   if (input.status === 'Extinct' || populationCount === 0) return 'Extinct. The last settlement produced no creatures. Use Founder migration to rescue this run or restart.'
+  if (input.restingCanAct && livingCount > 0) return 'All living creatures are resting at home. Resting uses energy, and hungry creatures may forage again. Play or Next action advances time; Finish generation completes the round.'
   if (input.status === 'Awaiting settlement') {
     return livingCount > 0
       ? 'Awaiting settlement. No active creature actions remain; all living creatures are home. Finish generation to settle this cohort.'
@@ -273,6 +276,7 @@ function formatObservedGenerationBoundary(world: World): string {
  */
 export function formatObservedPath(world: World, result: NextActionResult, context: NextActionContext): string {
   if (result.stop === 'generation-boundary') return `Observed path: ${formatObservedGenerationBoundary(world)}`
+  if (result.stop === 'resting') return 'Resting advanced: creatures used energy at home. No new movement decision was needed; hungry creatures may forage again.'
   const inspected = inspectedCreature(world, context.selectedIndividualId)
   if (result.stop === 'selected-inactive') {
     const outcome = !inspected
@@ -285,14 +289,16 @@ export function formatObservedPath(world: World, result: NextActionResult, conte
     return `Observed path: The selected creature ${outcome}; other active creatures remain. The manual step stopped for this selection.`
   }
   if (context.selectedIndividualId !== null && !context.selectedWasActive) {
+    if (world.config.ecologyMode === 'energy-regrowth' && inspected?.alive && !inspected.home) return `Observed path: The inspected creature left home to forage. ${formatObservedCreaturePath(world, context)}`
     return inspected?.home
       ? 'Observed path: The inspected creature was already home at step start; no new decision path was observed.'
       : 'Observed path: The selected creature was not active at step start; no new decision path was observed.'
   }
   if (result.stop === 'no-active') {
     const living = world.creatures.filter(creature => creature.alive)
-    const status = arenaPlaybackStatus({ playing: false, populationCount: world.creatures.length, activeCount: 0 })
-    const aggregate = formatArenaPlaybackDetail({ status, populationCount: world.creatures.length, livingCount: living.length })
+    const restingCanAct = world.config.ecologyMode === 'energy-regrowth' && living.length > 0
+    const status = arenaPlaybackStatus({ playing: false, populationCount: world.creatures.length, activeCount: 0, restingCanAct })
+    const aggregate = formatArenaPlaybackDetail({ status, populationCount: world.creatures.length, livingCount: living.length, restingCanAct })
     if (context.selectedWasActive) {
       if (!inspected) return `Observed path: The selected creature became unavailable. ${aggregate}`
       if (!inspected.alive) return `Observed path: The selected creature died. ${aggregate}`
@@ -414,7 +420,7 @@ export function formatArenaSelectionStatus(selectedIndividualId: number | null):
 }
 
 export const CREATURE_STATE_METADATA = {
-  safe:{label:'Safe at home',color:'#f8fafc'},
+  safe:{label:'Resting at home',color:'#f8fafc'},
   exploring:{label:'Exploring',color:'#38bdf8'},
   foraging:{label:'Finding food',color:'#fde047'},
   hunting:{label:'Hunting prey',color:'#fb7185'},

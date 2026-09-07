@@ -70,8 +70,8 @@ describe('bounded scheduler',()=>{
     expect(result.ticks).toBe(Math.ceil(reactionTime/SIMULATION_TIMESTEP)+2)
   })
 
-  it('returns without looping when there are no active or living creatures',()=>{
-    const world=createWorld({...defaultConfig,initialPopulation:1,foodPerDay:0})
+  it('returns without looping when classic has no active or living creatures',()=>{
+    const world=createWorld({...defaultConfig,ecologyMode:'classic',initialPopulation:1,foodPerDay:0})
     world.creatures[0].home=true
     const before=structuredClone(world)
     expect(advanceToNextAction(world)).toEqual({ticks:0,stop:'no-active'})

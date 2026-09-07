@@ -1,6 +1,7 @@
 import type { Config,Creature,DecisionProvenance,DecisionSelectionBasis,DecisionSummary,Food,Memory,Mode,TargetType } from './types'
 import { clamp,distance,keyedNoise } from './random'
 import {contestSuccessProbability,isEligiblePrey} from './predation'
+import {homeReturnBudget,homeTravelTime,restingEnergyRate} from './energyPolicy'
 
 export interface Decision {id:number;targetX:number;targetY:number;targetId:number|null;targetType:TargetType;mode:Mode;memory:Memory;commitUntil:number;wanderAngle:number;wanderTurn:number;summary?:DecisionSummary}
 export type DecisionCaptureContext=DecisionProvenance
@@ -64,16 +65,19 @@ export function decide(c:Creature,active:readonly Creature[],food:readonly Food[
   else if(time>=memory.threatUntil){memory.threatX=null;memory.threatY=null}
 
   const cost=.12+cfg.senseEnergyFactor*c.sense*8+cfg.moveEnergyFactor*c.size**3*c.speed**2
-  const homeD=distance(c,{x:c.homeX,y:c.homeY}),homeTime=homeD/Math.max(.001,.038*c.speed),timeLeft=cfg.dayLength-time
+  const homeTime=homeTravelTime(c,cfg),timeLeft=cfg.dayLength-time
   const unsafe=c.food===1&&(timeLeft<=homeTime*1.2+.5||c.energy<=cost*homeTime*1.25+2)
-  const advancedUnsafe=timeLeft<=homeTime*1.2+.5||c.energy<=cost*homeTime*1.25+5
-  const reserveReady=advanced&&c.energy>=reproductiveReserve
+  // Low energy is a reason to seek food, not to enter cost-free shelter.
+  // Preserve the travel deadline and budget the baseline cost of resting.
+  const advancedUnsafe=timeLeft<=homeReturnBudget(c,cfg)
+  const reserveReady=advanced&&c.energy>=reproductiveReserve+restingEnergyRate(c,cfg)*Math.max(0,timeLeft)
+  const continueReturn=advanced&&c.returning&&c.energy>=cfg.startingEnergy+restingEnergyRate(c,cfg)*Math.max(0,timeLeft)
   const candidates:Candidate[]=[]
   if(nearestThreat){const urgent=threatD<c.sense*(.1+.5*c.caution);candidates.push({type:'threat',mode:'fleeing',id:nearestThreat.id,x:clamp(c.x+(c.x-nearestThreat.x)*3,0,1),y:clamp(c.y+(c.y-nearestThreat.y)*3,0,1),score:6+6*c.caution+(c.sense-threatD)/c.sense*4,urgent})}
   else if(memory.threatX!==null)candidates.push({type:'threat',mode:'fleeing',id:null,x:clamp(c.x+(c.x-memory.threatX)*2,0,1),y:clamp(c.y+(c.y-memory.threatY!)*2,0,1),score:2.5*c.caution})
   if(!advanced&&(c.food>=2||unsafe||c.returning))candidates.push({type:'home',mode:'returning',id:null,x:c.homeX,y:c.homeY,score:c.food>=2?100:unsafe?45+10*c.caution:12,urgent:c.food>=2||unsafe})
-  if(advanced&&(advancedUnsafe||reserveReady||c.returning))candidates.push({type:'home',mode:'returning',id:null,x:c.homeX,y:c.homeY,score:reserveReady?100:advancedUnsafe?45+10*c.caution:12,urgent:reserveReady||advancedUnsafe})
-  if((advanced||c.food<2)&&!c.returning){
+  if(advanced&&(advancedUnsafe||reserveReady||continueReturn))candidates.push({type:'home',mode:'returning',id:null,x:c.homeX,y:c.homeY,score:reserveReady?100:45+10*c.caution,urgent:true})
+  if(advanced||c.food<2&&!c.returning){
     if(nearestFood)candidates.push({type:'food',mode:'foraging',id:nearestFood.id,x:nearestFood.x,y:nearestFood.y,score:advanced?bestFoodScore:(3.2+c.exploration)/(foodD+.06)})
     if(nearestPrey){const score=huntScore(nearestPrey,preyD);if(Number.isFinite(score))candidates.push({type:'prey',mode:'hunting',id:nearestPrey.id,x:nearestPrey.x,y:nearestPrey.y,score})}
     if(c.targetType==='food'&&c.targetId!==nearestFood?.id){const held=food.find(f=>f.id===c.targetId),heldD=held?distance(c,held):Infinity;if(held&&heldD<=c.sense)candidates.push({type:'food',mode:'foraging',id:held.id,x:held.x,y:held.y,score:advanced?foodDistanceUtility(c,held,heldD,cfg,reproductiveReserve,false):(3.2+c.exploration)/(heldD+.06)})}

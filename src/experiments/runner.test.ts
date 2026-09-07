@@ -43,10 +43,13 @@ describe('paired experiment runner', () => {
       expect(replicate.scenarioA.replaySeed).toBe(replicate.scenarioB.replaySeed)
       expect(replicate.scenarioA.generations).toEqual(replicate.scenarioB.generations)
       for (const point of replicate.pairedDeltas) {
-        expect(Object.values(point.metrics).every(value => Object.is(value, 0))).toBe(true)
+        for (const [metric, value] of Object.entries(point.metrics)) {
+          const control = replicate.scenarioA.generations[point.generation - 1].metrics[metric as keyof typeof point.metrics]
+          expect(value).toBe(control === null ? null : 0)
+        }
       }
     }
-    expect(result.aggregates.every(point => point.effect.mean === 0)).toBe(true)
+    expect(result.aggregates.every(point => point.effect.mean === 0 || (point.effect.count === 0 && point.effect.mean === null))).toBe(true)
   })
 
   it('records settlement evidence even when the selected metric is not population-based', async () => {
@@ -174,7 +177,7 @@ describe('paired experiment runner', () => {
     expect(first.replicates[0].scenarioB.generations.map(point => point.appliedInterventionIds)).toEqual([[], ['ecology-pressure']])
     expect(first.replicates[0].pairedDeltas[0].metrics).toEqual({
       population: 0,
-      avgEnergy: 0,
+      avgEnergy: first.replicates[0].scenarioA.generations[0].metrics.avgEnergy === null ? null : 0,
       foodProduced: 0,
       resourceAbundance: 0,
       attackSuccessRate: null,

@@ -10,6 +10,7 @@ import {collectAttackClaims,resolveAttackClaims} from './predation'
 import {advanceResourceDynamics,consumeResourceStock} from './resourceDynamics'
 import {settleLifecycle} from './lifecycle'
 import {retainIndividualActivity} from './individualHistory'
+import {restingEnergyRate,shouldLeaveHome} from './energyPolicy'
 
 export {defaultConfig} from './config'
 export { getSelectionTakeaway, meetsStandardizedEffectThreshold, snapStandardizedEffect, SELECTION_SIGNAL_THRESHOLD, SELECTION_PATTERN_THRESHOLD, SELECTION_PATTERN_MIN_COUNT, SELECTION_THRESHOLD_TOLERANCE } from './selectionNarrative'
@@ -214,6 +215,17 @@ export function tick(world:World,dt:number,boundaryConfig?:Config){
   let homeArrivals:Creature[]|undefined
   for(const c of world.creatures){const wasHome=c.home;if(c.alive&&!c.home&&(advanced?(c.returning||c.mode==='returning'):c.food>=1)&&distance(c,{x:c.homeX,y:c.homeY})<.025){c.home=true;c.mode='returning';c.vx=0;c.vy=0}if(c.alive&&!wasHome&&c.home)(homeArrivals??=[]).push(c)}
   if(homeArrivals)for(const c of homeArrivals.sort((a,b)=>a.id-b.id||a.individualId-b.individualId))recordActivity(world,'reached-home',`${activityActorLabel(c.individualId)} reached home.`,1,{actorIds:activityActorIds(c.individualId),location:[c.x,c.y]})
+  if(advanced)for(const c of [...world.creatures].sort((a,b)=>a.id-b.id||a.individualId-b.individualId)){
+    if(!c.alive||!c.home)continue
+    if(shouldLeaveHome(c,world.config,world.dayTime)){
+      c.home=false;c.returning=false;c.mode='exploring';c.targetType=null;c.targetId=null;c.commitUntil=0;c.reactionWindow=-1
+      c.wanderAngle=Math.atan2(.5-c.y,.5-c.x);c.wanderTurn=0
+      delete c.decisionSummary;delete c.perceptionDiagnostics
+    }else{
+      c.energy-=restingEnergyRate(c,world.config)*dt
+      if(c.energy<=0){c.alive=false;c.deathCause='energy';recordActivity(world,'energy-death',`${activityActorLabel(c.individualId)} died from energy loss.`,1,{actorIds:activityActorIds(c.individualId),location:[c.x,c.y]})}
+    }
+  }
   const snapshots=world.creatures.filter(c=>c.alive&&!c.home).map(c=>({...c,memory:{...c.memory}})).sort((a,b)=>a.id-b.id)
   const canonicalFood=snapshots.length?[...world.food].sort((a,b)=>a.id-b.id):[]
   const decisions=new Map<number,Decision>()
@@ -234,7 +246,7 @@ export function tick(world:World,dt:number,boundaryConfig?:Config){
   for(const s of snapshots){const c=byId.get(s.id)!,d=decisions.get(s.id)!,m=motions.get(s.id)!
     const wasAlive=c.alive,wasHome=c.home
     Object.assign(c,{x:m.x,y:m.y,vx:m.vx,vy:m.vy,angle:m.angle,energy:m.energy,home:m.home||c.home,alive:m.energy>0,
-      mode:m.home?'returning':d.mode,returning:c.returning||d.mode==='returning',memory:d.memory,targetType:d.targetType,targetId:d.targetId,targetX:d.targetX,targetY:d.targetY,commitUntil:d.commitUntil,wanderAngle:d.wanderAngle,wanderTurn:d.wanderTurn,reactionWindow:reactionWindows.get(c.id)!,decisionSummary:d.summary,perceptionDiagnostics:diagnostics.get(c.id)})
+      mode:m.home?'returning':d.mode,returning:advanced?d.mode==='returning':c.returning||d.mode==='returning',memory:d.memory,targetType:d.targetType,targetId:d.targetId,targetX:d.targetX,targetY:d.targetY,commitUntil:d.commitUntil,wanderAngle:d.wanderAngle,wanderTurn:d.wanderTurn,reactionWindow:reactionWindows.get(c.id)!,decisionSummary:d.summary,perceptionDiagnostics:diagnostics.get(c.id)})
     if(m.energy<=0){c.deathCause='energy';if(wasAlive&&c.alive===false)recordActivity(world,'energy-death',`${activityActorLabel(c.individualId)} died from energy loss.`,1,{actorIds:activityActorIds(c.individualId),location:[c.x,c.y]})}
     if(c.alive&&!wasHome&&c.home)recordActivity(world,'reached-home',`${activityActorLabel(c.individualId)} reached home.`,1,{actorIds:activityActorIds(c.individualId),location:[c.x,c.y]})
   }

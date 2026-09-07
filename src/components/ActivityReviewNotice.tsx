@@ -49,7 +49,7 @@ export default function ActivityReviewNotice({ moment, creatures, focusFrom, onR
   return <section ref={ref} tabIndex={-1} className="interventions inspector-focus-target" aria-label="Arena event review" aria-describedby="arena-review-provenance arena-review-summary arena-review-positions" style={{ flexWrap: 'wrap' }}>
     <span id="arena-review-announcement" className="sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</span>
     <span style={{ flex: '1 1 220px', whiteSpace: 'normal' }}>
-      <strong>Reviewing retained event · playback paused</strong>
+      <strong>Past event · simulation paused</strong>
       <small id="arena-review-provenance">Recorded Generation {moment.generation} · day {moment.day.toFixed(2)} · tick {moment.tick}</small>
     </span>
     <button type="button" onClick={onReturnToLatest}>Return to latest event</button>
@@ -63,9 +63,9 @@ export default function ActivityReviewNotice({ moment, creatures, focusFrom, onR
     </div>}
     <p id="arena-review-summary" style={{ flexBasis: '100%', fontSize: 12 }}>{moment.summary}</p>
     <p id="arena-review-positions" style={{ flexBasis: '100%', fontSize: 11, color: 'var(--muted)' }}>
-      {moment.location ? 'The orange Then marker shows the recorded event site. ' : 'No historical site was recorded for this event. '}
-      {hasLivingActor ? 'Living actors are shown at their current positions, not their past positions.' : 'No involved actor has a current living position to show.'}
-      {' '}This is event review, not a replay. Play, Next action, Finish generation, and live shocks return to the latest event.
+      {moment.location ? '“Happened here” marks where this event occurred. ' : 'This event has no recorded location. '}
+      {hasLivingActor ? 'Highlighted creatures show where they are now.' : 'No creatures from this event are visible now.'}
+      {' '}The simulation has not rewound.
     </p>
   </section>
 }

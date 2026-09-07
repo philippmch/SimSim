@@ -215,7 +215,9 @@ function CurrentStateLane({
   } else if (active > 0) {
     detail = 'Choose Next action to inspect the next decision beat, or Finish generation to record the cohort when ready.'
   } else if (living > 0) {
-    detail = 'All living creatures are home. Finish generation to record this cohort.'
+    detail = read(read(world, 'config'), 'ecologyMode') === 'energy-regrowth'
+      ? 'All living creatures are resting. They use energy and may forage again. Play or Next action advances time; Finish generation completes the round.'
+      : 'All living creatures are home. Finish generation to record this cohort.'
   } else {
     detail = 'No living creatures remain in this cohort. Finish generation to record its outcomes.'
   }

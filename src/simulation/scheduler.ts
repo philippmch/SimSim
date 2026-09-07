@@ -13,7 +13,7 @@ export function nextActionMaxTicks(reactionTime:number){
   return Math.max(1,Math.ceil(reactionTime/SIMULATION_TIMESTEP)+2)
 }
 
-export type NextActionStop='beat'|'generation-boundary'|'no-active'|'selected-inactive'|'bounded'
+export type NextActionStop='beat'|'generation-boundary'|'no-active'|'selected-inactive'|'bounded'|'resting'
 /** Numeric cursor metadata for the activity records produced by one manual step. */
 export interface NextActionActivityWindow{
   startSequence:number
@@ -59,7 +59,17 @@ export function captureNextActionContext(world:World):NextActionContext{
 export function advanceToNextAction(world:World):NextActionResult{
   const active=()=>world.creatures.filter(creature=>creature.alive&&!creature.home)
   const initial=active()
-  if(!initial.length)return{ticks:0,stop:'no-active'}
+  if(!initial.length){
+    if(world.config.ecologyMode!=='energy-regrowth'||!world.creatures.some(c=>c.alive))return{ticks:0,stop:'no-active'}
+    const generation=world.generation,maxTicks=world.config.perceptionMode==='perfect'?1:nextActionMaxTicks(world.config.reactionTime)
+    for(let ticks=1;ticks<=maxTicks;ticks++){
+      tick(world,SIMULATION_TIMESTEP)
+      if(world.generation!==generation)return{ticks,stop:'generation-boundary'}
+      if(active().length)return{ticks,stop:'beat'}
+      if(!world.creatures.some(c=>c.alive))return{ticks,stop:'no-active'}
+    }
+    return{ticks:maxTicks,stop:'resting'}
+  }
 
   // A selected active creature is the subject of a manual step. Other actors
   // may be in a later (or earlier) reaction window after an intervention such

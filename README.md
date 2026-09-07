@@ -51,12 +51,17 @@ decision and perception samples. An expandable perception table separates food
 and creature counts, showing detections and the first reason each missed item
 was filtered out. Perfect-perception mode explains its different sensing rules.
 
-The arena guide sits below playback controls so its explanations never cover
-the field. Live action counts and the Focus filter remain visible when the
-detailed key is closed. Selecting a living actor in an event record pauses
-playback and inspects its current state. An orange “Then” marker shows a recorded
-event site when available; guides connect it to actors' current positions, not
-to reconstructed movement paths.
+An expandable **How to read the arena** guide sits above the field. Illustrated
+examples explain creatures, food, rocks, patch richness (1.0× is normal), and
+stock rings, with separate explanations for classic mode. It also explains
+outline colors, inspection highlights, and playback controls. The guide starts
+closed; live population/food counts and the Highlight filter remain below the
+playback controls. Selecting a living actor in an event record pauses
+playback and inspects its current state. Event annotations appear only after an
+explicit review, keeping ordinary playback free of event callouts. “Happened here”
+marks where the selected event occurred; highlighted creatures show their current
+positions. The What happened panel shows one short update, with detailed history
+inside a closed disclosure that opens only when requested.
 
 Arena view controls zoom from 1× to 4×. Drag with a mouse or touch to pan while
 zoomed. Focus the arena or view controls to use arrow keys, plus/minus, or Home
@@ -76,6 +81,10 @@ environment, individuals, and retained history. It survives closing and reopenin
 the browser. **Resume saved run** asks before replacing the current run and staged
 settings, then restores the saved moment paused. Save again to replace the slot;
 clearing browser data removes it. Configuration links still share only a setup.
+**Download run JSON** creates a portable backup of the current moment. **Import
+run JSON** validates a backup file up to 4 MB and asks before replacing the current
+run and staged settings, then restores paused. Downloading or importing does not
+replace the browser save slot. Setup-only experiment files use the settings import.
 
 Steering wraps accumulated headings before choosing the shortest turn, so
 equivalent orientations produce the same pursuit, obstacle detours, and energy
@@ -205,3 +214,5 @@ The project is currently intended to run locally. Nothing in the app publishes,
 uploads, or hosts a simulation. Use Node 20.19 or newer and `npm ci` when an exact
 dependency install is needed; `npm run preview` only serves the production build
 on the local machine for verification.
+
+Ecological shelter is rest, not free survival: resting creatures pay the same baseline metabolism as active creatures (`0.08 + senseEnergyFactor × sense × 8` per time unit), without movement cost, and can die when energy runs out. Below the starting energy reserve they leave to forage if enough time remains for a quarter-day foraging trip plus the return safety allowance. Separate departure and return thresholds prevent repeated turnarounds. Ecological travel uses a base speed of 0.055 so central resources are reachable within the default day, with movement energy normalized to that speed. Classic mode retains its original 0.038 travel speed and shelter rules. Existing ecological saves still load, but these rule corrections change their future trajectories.

@@ -182,8 +182,8 @@ export function listenToArenaColorScheme(
 const ARENA_ACTIVITY_KINDS = ['food-collected', 'attack-success', 'attack-failure', 'energy-death', 'reached-home', 'natural-regrowth', 'intervention', 'generation-settlement'] as const satisfies readonly WorldActivityKind[]
 const ARENA_ACTIVITY_KIND_SET = new Set<string>(ARENA_ACTIVITY_KINDS)
 const ARENA_ACTIVITY_AGGREGATE_KINDS = new Set<WorldActivityKind>(['natural-regrowth', 'generation-settlement'])
-const ARENA_ACTIVITY_SPOTLIGHT_CURRENT_KEY_COPY = 'Actor halos mark current positions; role tags identify recorded roles. Historical event site unavailable for this retained record.'
-const ARENA_ACTIVITY_SPOTLIGHT_SITE_KEY_COPY = 'Orange “Then” marker = recorded event site; dashed guides connect it to actor halos at their current positions, not movement paths.'
+const ARENA_ACTIVITY_SPOTLIGHT_CURRENT_KEY_COPY = 'Highlighted creatures show where they are now. This event has no recorded location.'
+const ARENA_ACTIVITY_SPOTLIGHT_SITE_KEY_COPY = '“Happened here” marks where this event occurred. Highlighted creatures show where they are now.'
 
 export type ArenaActivitySpotlightRole = 'attacker' | 'prey' | 'collector' | 'returning individual' | 'involved individual'
 
@@ -419,18 +419,23 @@ export function resolveArenaActivitySpotlight(world: unknown, reviewedMoment?: S
 /** Canonical wording distinguishes the live actor position from the retained event location. */
 export function formatArenaActivitySpotlightDescription(spotlight: ArenaActivitySpotlight): string {
   if (spotlight.location) {
-    if (!spotlight.actors.length) return 'Highlighted “Then” marker shows the recorded event site; no involved actor has a current live arena position.'
+    if (!spotlight.actors.length) return '“Happened here” marks where this event occurred. No creatures from this event are visible now.'
     const actors = spotlight.actors.map(actor => `Individual ${actor.individualId} (${actor.roleLabel.toLowerCase()})`).join(', ')
     const position = spotlight.actors.length === 1 ? 'position' : 'positions'
-    return `Highlighted “Then” marker shows the recorded event site; actor halos mark ${actors} at their current arena ${position}. Dashed guides connect the site to those positions; they are not movement paths.`
+    return `“Happened here” marks where this event occurred. Highlighted creatures show ${actors} at their current ${position}.`
   }
   const actors = spotlight.actors.map(actor => `Individual ${actor.individualId} (${actor.roleLabel.toLowerCase()})`).join(', ')
   const position = spotlight.actors.length === 1 ? 'position' : 'positions'
   return `${spotlight.reviewed ? 'Reviewed event actor' : 'Latest actor'} halo marks ${actors} at their current arena ${position}; it does not show the historical event location.`
 }
 
+/** Historical annotations are opt-in; ordinary playback keeps the arena quiet. */
+export function resolveVisibleArenaActivitySpotlight(world: unknown, reviewedMoment?: SimulationActivityMoment | null): ArenaActivitySpotlight | null {
+  return reviewedMoment ? resolveArenaActivitySpotlight(world, reviewedMoment) : null
+}
+
 export function formatArenaActivitySpotlightKey(spotlight: Pick<ArenaActivitySpotlight, 'location' | 'actors'>): string {
-  if (spotlight.location && spotlight.actors.length === 0) return 'Orange “Then” marker = recorded event site; the site remains visible, but no involved actor has a current live arena position.'
+  if (spotlight.location && spotlight.actors.length === 0) return '“Happened here” marks where this event occurred. No creatures from this event are visible now.'
   return spotlight.location ? ARENA_ACTIVITY_SPOTLIGHT_SITE_KEY_COPY : ARENA_ACTIVITY_SPOTLIGHT_CURRENT_KEY_COPY
 }
 
@@ -666,7 +671,7 @@ export interface ArenaActivitySpotlightSiteGeometryInput {
 
 /** Reuse the collision-aware callout solver while anchoring to the exact recorded point. */
 export function arenaActivitySpotlightSiteGeometry(input: ArenaActivitySpotlightSiteGeometryInput): ArenaActivitySpotlightTagGeometry | null {
-  return arenaActivitySpotlightTagGeometry({ ...input, size: .3, individualId: 1, role: 'involved individual', label: input.compact ? 'Then · site' : 'Then · event site', pointAnchor: true })
+  return arenaActivitySpotlightTagGeometry({ ...input, size: .3, individualId: 1, role: 'involved individual', label: 'Happened here', pointAnchor: true })
 }
 
 function formatArenaActivitySpotlightCue(spotlight: ArenaActivitySpotlight, config: unknown): ArenaActivitySpotlightCue | null {
@@ -690,7 +695,7 @@ export function deriveArenaActivitySpotlightCue(world: unknown): ArenaActivitySp
 }
 
 export function ArenaActivitySpotlightKey({ world, compact = false, reviewedMoment }: { world: World; compact?: boolean; reviewedMoment?: SimulationActivityMoment | null }): React.ReactElement | null {
-  const spotlight = resolveArenaActivitySpotlight(world, reviewedMoment)
+  const spotlight = resolveVisibleArenaActivitySpotlight(world, reviewedMoment)
   if (!spotlight) return null
   const cue = formatArenaActivitySpotlightCue(spotlight, world.config)
   if (compact) return cue
@@ -1084,20 +1089,6 @@ function drawArenaActivitySpotlightSite(
   ctx.globalAlpha = spotlight.alpha
   ctx.lineCap = 'round'
   if (mode !== 'labels') {
-  for (const halo of actorHalos) {
-    const actorX = halo.x + halo.width / 2, actorY = halo.y + halo.height / 2
-    const deltaX = actorX - siteX, deltaY = actorY - siteY, distance = Math.hypot(deltaX, deltaY)
-    const actorRadius = halo.width / 2
-    if (!Number.isFinite(distance) || distance <= markerRadius + actorRadius + 3) continue
-    const unitX = deltaX / distance, unitY = deltaY / distance
-    const startX = siteX + unitX * (markerRadius + 2), startY = siteY + unitY * (markerRadius + 2)
-    const endX = actorX - unitX * (actorRadius + 2), endY = actorY - unitY * (actorRadius + 2)
-    ctx.setLineDash([3, 5])
-    ctx.strokeStyle = 'rgba(3, 17, 29, .9)'; ctx.lineWidth = 4
-    ctx.beginPath(); ctx.moveTo(startX, startY); ctx.lineTo(endX, endY); ctx.stroke()
-    ctx.strokeStyle = ARENA_ACTIVITY_SPOTLIGHT_SITE_ACCENT; ctx.lineWidth = 1.4
-    ctx.beginPath(); ctx.moveTo(startX, startY); ctx.lineTo(endX, endY); ctx.stroke()
-  }
   ctx.setLineDash([4, 3])
   ctx.strokeStyle = 'rgba(3, 17, 29, .95)'; ctx.lineWidth = 5
   ctx.beginPath(); ctx.arc(siteX, siteY, markerRadius, 0, Math.PI * 2); ctx.stroke()
@@ -1115,7 +1106,7 @@ function drawArenaActivitySpotlightSite(
     ctx.fillStyle = 'rgba(3, 17, 29, .94)'; ctx.strokeStyle = ARENA_ACTIVITY_SPOTLIGHT_SITE_ACCENT
     ctx.beginPath(); ctx.roundRect(geometry.x, geometry.y, geometry.width, geometry.height, 6); ctx.fill(); ctx.stroke()
     ctx.fillStyle = '#fff7ed'; ctx.font = '700 10px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-    const label = compact ? 'Then · site' : 'Then · event site'
+    const label = 'Happened here'
     ctx.fillText(label, geometry.x + geometry.width / 2, geometry.y + geometry.height / 2)
   }
   ctx.restore()
@@ -1424,7 +1415,7 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
   const dragRef = useRef<{ id: number; x: number; y: number; moved: boolean } | null>(null)
   const suppressClickRef = useRef(false)
   const zoomBy = (factor: number) => setView(current => clampArenaView({ ...current, zoom: current.zoom * factor }))
-  const activitySpotlight = resolveArenaActivitySpotlight(world, reviewedMoment)
+  const activitySpotlight = resolveVisibleArenaActivitySpotlight(world, reviewedMoment)
   const reviewSite = reviewedMoment ? activitySpotlight?.location : undefined
   const centerOn = (target: { x: number; y: number } | null | undefined) => {
     const rect = ref.current?.getBoundingClientRect()

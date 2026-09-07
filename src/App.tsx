@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { ARENA_FOCUS_OPTIONS, ARENA_HUNT_CONTACT_KEY, ARENA_PATCH_QUALITY_KEY, ARENA_PATCH_STOCK_KEY, ARENA_SELECTED_OVERLAY_KEY, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress, formatArenaFocusDescription, formatArenaFocusOption, formatArenaPlaybackDetail, formatObservedPath, formatSelectedTarget, showArenaQuickStart } from './components/ArenaCanvasModel'
+import { ARENA_FOCUS_OPTIONS, ARENA_HUNT_CONTACT_KEY, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress, formatArenaFocusDescription, formatArenaFocusOption, formatArenaPlaybackDetail, formatObservedPath, formatSelectedTarget } from './components/ArenaCanvasModel'
 import type { ArenaPlaybackStatus, CreatureState } from './components/ArenaCanvasModel'
 import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
 import { MAX_FOOD,MAX_FOUNDER_MIGRATION_BATCH,MAX_POPULATION, sanitizeConfig } from './simulation/config'
@@ -15,7 +15,7 @@ import DashboardNavigation, { DASHBOARD_SECTION_IDS, DASHBOARD_SECTION_SCROLL_ST
 
 const ExperimentPanel=lazy(()=>import('./components/ExperimentPanel').then(module=>({default:module.ExperimentPanel})))
 const ArenaCanvas=lazy(()=>import('./components/ArenaCanvasRenderer').then(module=>({default:module.ArenaCanvas})))
-const ArenaActivitySpotlightKey=lazy(()=>import('./components/ArenaCanvasRenderer').then(module=>({default:module.ArenaActivitySpotlightKey})))
+const ArenaLegend=lazy(()=>import('./components/ArenaLegend'))
 const ActivityReviewNotice=lazy(()=>import('./components/ActivityReviewNotice'))
 const GenerationJournal=lazy(()=>import('./components/GenerationJournal'))
 const InsightsPanel=lazy(()=>import('./components/InsightsPanel'))
@@ -27,7 +27,7 @@ const GenerationHandoff=lazy(()=>import('./components/GenerationHandoff'))
 const GenerationAccounting=lazy(()=>import('./components/GenerationAccounting'))
 const SimulationActivity=lazy(()=>import('./components/SimulationActivity'))
 const ObservedStepStory=lazy(()=>import('./components/ObservedStepStory'))
-const FirstGenerationGuide=lazy(()=>import('./components/ObservedStepStory').then(module=>({default:module.FirstGenerationGuide})))
+
 const InterventionFeed=lazy(()=>import('./components/InterventionFeed'))
 const ParametersPanel=lazy(()=>import('./components/ParametersPanel'))
 const SavedRunControls=lazy(()=>import('./components/SavedRunControls'))
@@ -180,11 +180,13 @@ export function formatStepCompletion(world:World,meta:SimulationSnapshotMeta){
   const result=meta.stepResult
   if(!result)return''
   if(result.stop==='generation-boundary')return`Generation ${world.generation} started.`
+  if(result.stop==='resting')return'Resting advanced. Creatures used energy at home; hungry creatures may forage again.'
   if(result.stop==='selected-inactive')return'Selected creature is no longer active; other active creatures remain.'
   if(result.stop==='no-active'){
     const livingCount=world.creatures.filter(creature=>creature.alive).length
-    const status=arenaPlaybackStatus({playing:false,populationCount:world.creatures.length,activeCount:0})
-    return formatArenaPlaybackDetail({status,populationCount:world.creatures.length,livingCount})
+    const restingCanAct=world.config.ecologyMode==='energy-regrowth'&&livingCount>0
+    const status=arenaPlaybackStatus({playing:false,populationCount:world.creatures.length,activeCount:0,restingCanAct})
+    return formatArenaPlaybackDetail({status,populationCount:world.creatures.length,livingCount,restingCanAct})
   }
   if(result.stop==='bounded')return'Reaction window bound reached.'
   return'Next action beat reached.'
@@ -199,6 +201,14 @@ export function formatPlaybackControlLabel(status:ArenaPlaybackStatus,playing:bo
   if(status==='Extinct')return'Playback unavailable: population extinct'
   if(status==='Awaiting settlement')return playing?'Pause playback before settlement':'Resume playback toward settlement'
   return playing?'Pause simulation':'Play simulation'
+}
+
+export function formatArenaRestingHint(homeCount:number,activeCount:number,playing:boolean,dayLength:number,ecologyMode:Config['ecologyMode']='energy-regrowth'):string{
+  if(homeCount===0)return'Click a creature or food patch to learn more.'
+  if(ecologyMode==='energy-regrowth')return `${homeCount} resting at home · ${activeCount} still active. Resting uses energy; hungry creatures may forage again.${activeCount===0&&!playing?' Choose Next action or Play to continue.':''}`
+  if(activeCount>0)return`${homeCount} resting at home · ${activeCount} still active. Home creatures stay put until the next generation.`
+  const rest=homeCount===1?'The remaining creature is resting at home.':`All ${homeCount} living creatures are resting at home.`
+  return `${rest} ${playing?`The next generation starts when the timer reaches ${dayLength.toFixed(1)}. Choose Finish generation to advance now.`:'Choose Play to continue the timer, or Finish generation to advance now.'}`
 }
 
 export function formatPlaybackPhaseAnnouncement(status:ArenaPlaybackStatus,detail:string,playing:boolean):string{
@@ -257,6 +267,7 @@ export interface NextActionCopyInput {
   selectedIndividualId: number | null
   selectedIsActive: boolean
   livingCreatures: number
+  restingCanAct?: boolean
 }
 
 export interface NextActionCopy {
@@ -278,6 +289,11 @@ export function formatNextActionCopy(input: NextActionCopyInput): NextActionCopy
     buttonLabel: 'Finishing generation…',
     ariaLabel: 'Finish generation pending; wait for the current cohort to settle',
     title: 'Finish generation is in progress; wait for settlement before starting another action.',
+  }
+  if (!input.hasActiveCreatures && input.restingCanAct) return {
+    buttonLabel: input.pending ? 'Advancing rest…' : 'Advance resting creatures',
+    ariaLabel: input.pending ? 'Resting step pending' : 'Pause and advance resting creatures: energy use and possible foraging',
+    title: 'Advance time for resting creatures. They use energy and may leave to forage.',
   }
   if (!input.hasActiveCreatures) return {
     buttonLabel: 'No active creatures',
@@ -311,7 +327,7 @@ export function formatNextActionCopy(input: NextActionCopyInput): NextActionCopy
 export function formatCompactNextActionLabel(input: NextActionCopyInput): string {
   if (input.extinct) return 'Extinct'
   if (input.pending && input.pendingCommand === 'finish') return 'Finishing…'
-  if (!input.hasActiveCreatures) return 'No actions'
+  if (!input.hasActiveCreatures) return input.restingCanAct ? (input.pending ? 'Advancing…' : 'Advance rest') : 'No actions'
   const selected = input.selectedIsActive && input.selectedIndividualId !== null && Number.isFinite(input.selectedIndividualId)
   if (input.pending) return selected ? 'Advancing selected…' : 'Advancing…'
   return selected ? 'Next selected' : 'Next action'
@@ -467,7 +483,7 @@ function App(){
   const [experimentOpen,setExperimentOpen]=useState(false)
   const [isNarrow,setIsNarrow]=useState(()=>window.matchMedia('(max-width: 1050px)').matches)
   const [compactTransport,setCompactTransport]=useState(()=>window.matchMedia(COMPACT_TRANSPORT_QUERY).matches)
-  const [arenaKeysOpen,setArenaKeysOpen]=useState(false)
+
   const [reviewedMoment,setReviewedMoment]=useState<SimulationActivityMoment|null>(null)
   const reviewFocusSourceRef=useRef<Element|null>(null)
   const settingsToggleRef=useRef<HTMLButtonElement>(null)
@@ -504,7 +520,8 @@ function App(){
   const living=world.creatures.filter(c=>c.alive).length
   const extinct=world.creatures.length===0
   const hasActiveCreatures=world.creatures.some(c=>c.alive&&!c.home)
-  const nextActionUnavailable=!hasActiveCreatures
+  const restingCanAct=world.config.ecologyMode==='energy-regrowth'&&living>0
+  const nextActionUnavailable=!hasActiveCreatures&&!restingCanAct
   const playingRef=useRef(playing);playingRef.current=playing
   const extinctRef=useRef(extinct);extinctRef.current=extinct
   const resumeOnVisibleRef=useRef(false)
@@ -522,9 +539,9 @@ function App(){
   const selectedArenaState=selected?(selected.home?'safe':selected.mode):null
   const selectedOutsideArenaFocus=arenaFocus!=='all'&&selectedArenaState!==null&&selectedArenaState!==arenaFocus
   const activeCreatures=world.creatures.filter(c=>c.alive&&!c.home).length
-  const arenaStatus=arenaPlaybackStatus({playing,populationCount:world.creatures.length,activeCount:activeCreatures})
-  const arenaDetail=formatArenaPlaybackDetail({status:arenaStatus,populationCount:world.creatures.length,livingCount:living})
-  const nextActionInput:NextActionCopyInput={extinct,hasActiveCreatures,pending:pendingCommand!==null,pendingCommand:pendingCommand?.kind,selectedIndividualId,selectedIsActive:Boolean(selected&&!selected.home),livingCreatures:living},nextActionCopy=formatNextActionCopy(nextActionInput)
+  const arenaStatus=arenaPlaybackStatus({playing,populationCount:world.creatures.length,activeCount:activeCreatures,restingCanAct})
+  const arenaDetail=formatArenaPlaybackDetail({status:arenaStatus,populationCount:world.creatures.length,livingCount:living,restingCanAct:restingCanAct&&!hasActiveCreatures})
+  const nextActionInput:NextActionCopyInput={extinct,hasActiveCreatures,restingCanAct,pending:pendingCommand!==null,pendingCommand:pendingCommand?.kind,selectedIndividualId,selectedIsActive:Boolean(selected&&!selected.home),livingCreatures:living},nextActionCopy=formatNextActionCopy(nextActionInput)
   const stepAnnouncementSequence=stepActivityAnnouncementSequence(stepActivityEvidence)
   const activeReviewedMoment=!playing&&isActivityReviewRetained(world,reviewedMoment)?reviewedMoment:null
   useEffect(()=>{if(reviewedMoment&&!activeReviewedMoment)setReviewedMoment(null)},[reviewedMoment,activeReviewedMoment])
@@ -660,28 +677,21 @@ function App(){
     terminalOutcomeRef.current?.focus()
   },[terminalOutcome])
 
-  const arenaGuide=<><small>{world.config.ecologyMode==='energy-regrowth'?`${world.food.length} current food across ${world.environment.patches.length} resource patches`:`${world.food.length} current food`}</small>{showArenaQuickStart(world.ledger.length)&&<Suspense fallback={null}><FirstGenerationGuide playbackStatus={arenaStatus} selection={selectedPatchId!==null?'patch':selectedIndividualId!==null?'creature':'none'} stepState={pendingCommand?.kind==='finish'?'finishing':pendingCommand?.kind==='step'?'pending':stepActivityEvidence?'observed':'ready'}/></Suspense>}</>
-  const arenaKeys=<section className="arena-guide" aria-label="Arena guide">
-    <div className="state-key" role="group" aria-label="Current creature actions"><strong>Outline = action · number = current count</strong>{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/><b>{stateCounts[state]}</b>{' '}{metadata.label}</span>)}</div>
-<label style={{display:'flex',alignItems:'center',gap:8,marginTop:8,fontWeight:700}} htmlFor="arena-focus">Focus <select style={{minHeight:44,maxWidth:'100%',background:'var(--paper)',color:'var(--ink)',border:'1px solid var(--line)',borderRadius:6,padding:'4px 8px',fontSize:12,colorScheme:'light dark'}} id="arena-focus" aria-label="Focus creatures by current action" aria-describedby="arena-focus-description" value={arenaFocus} onChange={event=>setArenaFocus(event.target.value as 'all'|CreatureState)}>{ARENA_FOCUS_OPTIONS.map(option=><option key={option.value} value={option.value}>{formatArenaFocusOption(option.value,option.value==='all'?living:stateCounts[option.value])}</option>)}</select></label>
-    <p id="arena-focus-description">{formatArenaFocusDescription(arenaFocus,arenaFocusCount,living,selectedOutsideArenaFocus)}</p>
-    <details className="arena-keys" open={arenaKeysOpen} onToggle={event=>setArenaKeysOpen(event.currentTarget.open)}>
-      <summary>{arenaKeysOpen?'Hide arena key':'Show arena key'}<Suspense fallback={null}><ArenaActivitySpotlightKey world={world} reviewedMoment={activeReviewedMoment} compact/></Suspense></summary>
-      <div className="arena-meanings" role="group" aria-label="Creature action and overlay key"><Suspense fallback={null}><ArenaActivitySpotlightKey world={world} reviewedMoment={activeReviewedMoment}/></Suspense>{world.config.ecologyMode==='energy-regrowth'&&<><strong>{ARENA_PATCH_STOCK_KEY}</strong><strong>{ARENA_PATCH_QUALITY_KEY}</strong></>}{selected&&<strong>{ARENA_SELECTED_OVERLAY_KEY}</strong>}{selected?.mode==='hunting'&&<strong>{ARENA_HUNT_CONTACT_KEY}</strong>}</div>
-      <div className="legend"><span>Body color = speed</span><i/><small>slower</small><small>faster</small></div>
-    </details>
-    <div className="arena-guidance">{arenaGuide}</div>
-  </section>
-
+  const arenaFilters=<div className="interventions" role="group" aria-label="Arena view filter" style={{flexWrap:'wrap',justifyContent:'space-between',fontSize:12}}>
+    <span style={{whiteSpace:'normal',flex:'1 1 230px'}}><strong style={{fontSize:12}}>{living} creatures · {world.food.length} food</strong><small>{formatArenaRestingHint(living-activeCreatures,activeCreatures,playing,world.config.dayLength,world.config.ecologyMode)}</small></span>
+    <label style={{display:'flex',alignItems:'center',gap:8}} htmlFor="arena-focus">Highlight <select style={{minHeight:44,maxWidth:'100%',background:'var(--paper)',color:'var(--ink)',border:'1px solid var(--line)',borderRadius:6,padding:'4px 8px',fontSize:12,colorScheme:'light dark'}} id="arena-focus" aria-label="Focus creatures by current action" aria-describedby="arena-focus-description" value={arenaFocus} onChange={event=>setArenaFocus(event.target.value as 'all'|CreatureState)}>{ARENA_FOCUS_OPTIONS.map(option=><option key={option.value} value={option.value}>{formatArenaFocusOption(option.value,option.value==='all'?living:stateCounts[option.value])}</option>)}</select></label>
+    <p id="arena-focus-description" className="sr-only">{formatArenaFocusDescription(arenaFocus,arenaFocusCount,living,selectedOutsideArenaFocus)}</p>
+  </div>
   return <div className="app-shell" onFocusCapture={event=>cancelTerminalFocusTransfer(event.target)}>
     <header className="topbar" aria-hidden={experimentOpen||(settingsOpen&&isNarrow)||undefined}>
-      <div className="brand"><div className="mark" aria-hidden="true">∿</div><div><h1>Evolution Field Lab</h1><p>Shape an ecosystem. Watch selection unfold.</p></div></div>
+      <div className="brand"><div className="mark" aria-hidden="true">∿</div><div><h1>Evolution Field Lab</h1><p>Watch creatures find food, survive, and pass on their traits.</p></div></div>
       <div className="top-actions"><button ref={experimentToggleRef} className="experiment-toggle" onClick={()=>{setPlaying(false);setSettingsOpen(false);setExperimentOpen(true)}} aria-haspopup="dialog"><span aria-hidden="true">◫</span> Experiment lab</button><button ref={settingsToggleRef} className="settings-toggle" onClick={()=>{setSettingsPanelRequested(true);setSettingsOpen(v=>!v)}} aria-label={settingsOpen?'Close parameters':'Open parameters'} aria-expanded={settingsOpen} aria-controls="settings" aria-haspopup={isNarrow?'dialog':undefined}>
         <span aria-hidden="true">⚙</span> <span>Parameters</span>{dirty&&<><b aria-hidden="true">•</b><span className="sr-only">Unapplied parameter changes</span></>}
       </button></div>
     </header>
     <main aria-hidden={experimentOpen||undefined}>
       <section className="simulation-panel" aria-label="Simulation" aria-hidden={settingsOpen&&isNarrow||undefined}>
+        <Suspense fallback={<p style={{padding:16,fontSize:14}} role="status">Opening the visual arena guide…</p>}><ArenaLegend ecologyMode={world.config.ecologyMode}/></Suspense>
         <ArenaViewport compact={compactTransport}>
           <Suspense fallback={<ArenaCanvasFallback/>}><ArenaCanvas world={world} revision={revision} selectedIndividualId={selectedIndividualId} onSelect={selectIndividual} selectedPatchId={selectedPatchId} onSelectPatch={selectPatch} arenaFocus={arenaFocus} playbackStatus={arenaStatus} playbackDetail={arenaDetail} explanationsOutside compactControls={compactTransport} reviewedMoment={activeReviewedMoment}/></Suspense>
           <div className="arena-badge" style={{pointerEvents:'none'}}><strong>{arenaDayLabel}</strong><small>Generation {world.generation}</small></div>
@@ -696,9 +706,10 @@ function App(){
           <label className="speed-select">Playback speed <select value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value={.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option><option value={4}>4×</option></select></label>
           <button className="reset" onClick={reset}>{dirty?'Apply & restart':'Restart run'}</button>
         </div>
+        {arenaFilters}
         <Suspense fallback={null}><SavedRunControls world={world} onRestore={replaceRun} disabled={pendingCommand!==null}/></Suspense>
         {activeReviewedMoment&&<Suspense fallback={null}><ActivityReviewNotice moment={activeReviewedMoment} activity={world.activity} creatures={world.creatures} focusFrom={reviewFocusSourceRef.current} onReviewMoment={reviewActivity} onReturnToLatest={endActivityReview}/></Suspense>}
-        {arenaKeys}
+
         {selectedPatch&&<div ref={selectedPatchInspectorRef} className="inspector-focus-target" tabIndex={-1} aria-label="Selected resource patch details" style={{scrollMarginTop:'84px'}}><Suspense fallback={<ResourcePatchInspectorFallback/>}><ResourcePatchInspector world={world} selectedPatchId={selectedPatchId} onClose={closeSelectedPatch}/></Suspense></div>}
         {manualStepStory.visible&&<Suspense fallback={<ObservedStepStoryFallback observedPath={observedPath}/>}><ObservedStepStory observedPath={observedPath} evidence={stepActivityEvidence}/></Suspense>}
         <SimulationEventStory world={world} selectedIndividualId={selectedIndividualId} onShowIndividual={showActivityIndividual} onReviewMoment={reviewActivity} reviewedMoment={activeReviewedMoment} suppressAnnouncementSequence={stepAnnouncementSequence}/>
@@ -707,7 +718,7 @@ function App(){
         <Suspense fallback={<GenerationHandoffFallback/>}><GenerationHandoff world={world} playbackStatus={arenaStatus} playing={playing} onReviewGeneration={reviewSettlement} revealGeneration={generationRevealRequest} onRevealComplete={clearGenerationReveal}/></Suspense>
         {arenaStatus==='Awaiting settlement'&&<div className="pending" aria-label="Settlement status">{arenaDetail}</div>}
         <div className="interventions" role="group" aria-label="Live ecological interventions">
-          <span><strong>Live shocks</strong><small>No restart needed</small></span>
+          <span><strong>Change the environment</strong><small>Takes effect immediately</small></span>
           <button onClick={()=>intervene('resource-bloom')} disabled={world.food.length>=MAX_FOOD} title={world.food.length>=MAX_FOOD?'Food is at the safety cap':'Add a deterministic pulse of food'}>Resource bloom</button>
           <button onClick={()=>intervene('drought')} disabled={!world.food.length} title={!world.food.length?'There is no food to remove':'Remove 40% of current food'}>Drought</button>
           <button onClick={()=>intervene('founder-migration')} disabled={founderMigrationCopy.available===0} title={founderMigrationCopy.title} aria-label={founderMigrationCopy.ariaLabel}>{founderMigrationCopy.buttonLabel}</button>
@@ -727,11 +738,11 @@ function App(){
             </dl>
           </div>
           <div className="behavior-summary" aria-label="Live behavior gene averages">
-            <strong>Behavior genes</strong><span>Aggression <b>{stats.avgAggression.toFixed(2)}</b></span><span>Caution <b>{stats.avgCaution.toFixed(2)}</b></span><span>Exploration <b>{stats.avgExploration.toFixed(2)}</b></span>
+            <strong>Inherited behavior</strong><span>Aggression <b>{stats.avgAggression.toFixed(2)}</b></span><span>Caution <b>{stats.avgCaution.toFixed(2)}</b></span><span>Exploration <b>{stats.avgExploration.toFixed(2)}</b></span>
           </div>
           <div className="mode-line activity-line" aria-label={`What creatures are doing now. ${living} living creatures total.`}><strong>What creatures are doing now</strong>{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/><b>{stateCounts[state]}</b> {metadata.label.toLowerCase()}</span>)}</div>
           <Suspense fallback={<div className="ecology-line activity-line" role="group" aria-label="Live simulation pulse. Waiting for the next simulation update."><strong>Live pulse</strong><span>Waiting for the next simulation update.</span></div>}><LivePulse key={livePulseRun} world={world}/></Suspense>
-          <div className="ecology-line" aria-label="Current model and energy statistics"><strong>{world.config.ecologyMode==='energy-regrowth'?'Ecological model':'Classic model'}</strong><span>{world.config.perceptionMode} perception</span><span>{world.config.predationMode} predation</span><span>mean energy <b>{stats.avgEnergy.toFixed(1)}</b></span><span>mean age <b>{stats.avgAge.toFixed(1)}</b></span></div>
+          <div className="ecology-line" aria-label="Current model and energy statistics"><strong>{world.config.ecologyMode==='energy-regrowth'?'Ecological model':'Classic model'}</strong><span>{world.config.perceptionMode==='realistic'?'Directional vision':'Perfect local vision'}</span><span>{world.config.predationMode==='contest'?'Hunts can fail':'Larger creatures catch smaller prey'}</span><span>mean energy <b>{stats.avgEnergy.toFixed(1)}</b></span><span>mean age <b>{stats.avgAge.toFixed(1)}</b></span></div>
           <Suspense fallback={<GenerationAccountingFallback/>}><GenerationAccounting world={world} globalFoodCap={MAX_FOOD}/></Suspense>
           </section>
           <section id={DASHBOARD_SECTION_IDS.generationJournal} tabIndex={-1} aria-label="Generation journal review" style={DASHBOARD_SECTION_SCROLL_STYLE}><Suspense fallback={<div className="evolution-story generation-journal" aria-busy="true"><p className="journal-empty" role="status">Opening generation journal…</p></div>}><GenerationJournal ledgers={world.ledger} events={world.events} requestedGeneration={requestedGeneration} onRequestedGenerationChange={setRequestedGeneration}/></Suspense></section>

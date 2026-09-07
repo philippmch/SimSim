@@ -401,7 +401,8 @@ describe('SimulationActivity SSR markup', () => {
     expect(markup).toContain(NO_ACTIVITY_MOMENTS)
     expect(markup).toContain('Showing 0 retained key moments, newest first; 0 records dropped or unavailable.')
     expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
-    expect(markup).not.toContain('<details')
+    expect(markup).toContain('<details data-activity-details="true">')
+    expect(markup).not.toMatch(/<details[^>]*\bopen=/)
   })
 
   it('does not repeat the empty message for a generation-aware fresh run', () => {
@@ -454,13 +455,47 @@ describe('SimulationActivity SSR markup', () => {
     expect(markup).not.toContain(`Show all ${MAX_VISIBLE_ACTIVITY_ENTRIES + 3}`)
   })
 
-  it('omits the disclosure when the latest event is the only retained moment', () => {
+  it('keeps event details optional even when only one moment is retained', () => {
     const markup = renderToStaticMarkup(createElement(SimulationActivity, { world: { activity: [moment()], activityDropped: 0, config: contextConfig } }))
 
-    expect(markup).not.toContain('<details')
+    expect(markup).toContain('<details data-activity-details="true">')
+    expect(markup).toContain('Show event details and history</summary>')
+    expect(markup).not.toMatch(/<details[^>]*\bopen=/)
     expect(markup).not.toContain('Show 0 earlier')
     expect(markup).toContain('What happened')
-    expect(markup.match(/<strong/g)).toHaveLength(2)
+    expect(markup.match(/<strong/g)).toHaveLength(1)
+  })
+
+  it('shows a concise latest summary and explicit arena review before the closed details', () => {
+    const markup = renderToStaticMarkup(createElement(SimulationActivity, {
+      world: {
+        generation: 1, dayTime: 2, config: contextConfig, activityDropped: 3,
+        activity: [moment({ sequence: 1, summary: 'Earlier food event.' }), moment({ sequence: 2, day: 2 })],
+        creatures: [{ individualId: 1, alive: true }],
+      },
+      onShowIndividual: () => undefined,
+      onReviewMoment: () => undefined,
+    }))
+    const disclosureIndex = markup.indexOf('<details data-activity-details="true">')
+    const visible = markup.slice(0, disclosureIndex)
+    const details = markup.slice(disclosureIndex)
+
+    expect(disclosureIndex).toBeGreaterThan(0)
+    expect(visible).toContain('What happened')
+    expect(visible).toContain('Individual 1 collected food.')
+    expect(visible).toContain('>Review event in arena</button>')
+    expect(visible.match(/<button/g)).toHaveLength(1)
+    expect(visible).not.toContain('Model context:')
+    expect(visible).not.toContain('Event actors')
+    expect(visible).not.toContain('data-activity-timeline=')
+    expect(visible).not.toContain('Earlier food event.')
+    expect(visible).not.toContain('records dropped')
+    expect(details).toContain('Model context:')
+    expect(details).toContain('Event actors')
+    expect(details).toContain('data-activity-timeline="true"')
+    expect(details).toContain('Earlier food event.')
+    expect(details).toContain('records dropped')
+    expect(markup).not.toMatch(/<details[^>]*\bopen=/)
   })
 
   it('does not render an activity panel for legacy worlds with no activity field', () => {

@@ -59,6 +59,7 @@ import {
   hitTestArenaPatch,
   hitTestArenaInspection,
   resolveArenaActivitySpotlight,
+  resolveVisibleArenaActivitySpotlight,
   deriveArenaActivitySpotlightCue,
   deriveArenaActivitySpotlightTags,
   deriveArenaSelectedCreatureCallout,
@@ -253,7 +254,7 @@ describe('arena activity spotlight', () => {
     expect(resolveArenaActivitySpotlight(world, review)).toMatchObject({ sourceIndex: 0, location: { x: .1, y: .2 } })
   })
 
-  it('reviews an older retained record at full opacity and restores the latest when released', () => {
+  it('reviews an older retained record at full opacity and clears visible annotations when released', () => {
     const world = spotlightWorld()
     const earlier = spotlightMoment({ sequence: 1, tick: 1 })
     world.activity = [earlier, spotlightMoment({ sequence: 5, actorIds: [2] })]
@@ -263,6 +264,8 @@ describe('arena activity spotlight', () => {
     expect(resolveArenaActivitySpotlight(world, review)?.alpha).toBe(1)
     world.tickIndex = 200
     expect(resolveArenaActivitySpotlight(world, null)?.sequence).toBe(5)
+    expect(resolveVisibleArenaActivitySpotlight(world, review)?.sequence).toBe(1)
+    expect(resolveVisibleArenaActivitySpotlight(world, null)).toBeNull()
     expect(renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world, reviewedMoment: review, compact: true }))).toContain('Reviewed ·')
   })
 
@@ -291,7 +294,7 @@ describe('arena activity spotlight', () => {
     const review = normalizeActivityMoment(entry, 0)!
     const spotlight = resolveArenaActivitySpotlight(world, review)!
     expect(spotlight).toMatchObject({ generation: 2, alpha: 1, location: { x: .4, y: .5 }, actors: [] })
-    expect(formatArenaActivitySpotlightDescription(spotlight)).toContain('no involved actor has a current live arena position')
+    expect(formatArenaActivitySpotlightDescription(spotlight)).toContain('No creatures from this event are visible now.')
     delete entry.location
     expect(resolveArenaActivitySpotlight(world, review)).toBeNull()
     entry.actorIds = [2]
@@ -599,8 +602,8 @@ describe('arena activity spotlight', () => {
     world.activity = [spotlightMoment({ kind: 'energy-death', actorIds: [1], location: [.25, .75] })]
     const spotlight = resolveArenaActivitySpotlight(world)
     expect(spotlight).toMatchObject({ kind: 'energy-death', location: { x: .25, y: .75 }, actors: [] })
-    expect(formatArenaActivitySpotlightDescription(spotlight!)).toContain('no involved actor has a current live arena position')
-    expect(formatArenaActivitySpotlightKey(spotlight!)).toContain('the site remains visible, but no involved actor has a current live arena position')
+    expect(formatArenaActivitySpotlightDescription(spotlight!)).toContain('No creatures from this event are visible now.')
+    expect(formatArenaActivitySpotlightKey(spotlight!)).toContain('No creatures from this event are visible now.')
     expect(formatArenaActivitySpotlightKey(spotlight!)).not.toContain('dashed guides')
 
     world.activity = [spotlightMoment({ kind: 'energy-death', actorIds: [1], location: [Number.NaN, .75] })]
@@ -634,24 +637,53 @@ describe('arena activity spotlight', () => {
     world.activity = [spotlightMoment({ kind: 'attack-success', attackerId: 2, preyId: 1, actorIds: [2, 1] })]
     const spotlight = resolveArenaActivitySpotlight(world)!
     const description = formatArenaActivitySpotlightDescription(spotlight)
-    expect(description).toContain('“Then” marker shows the recorded event site')
-    expect(description).toContain('actor halos mark Individual 2 (attacker), Individual 1 (prey) at their current arena positions')
-    expect(description).toContain('they are not movement paths')
-    expect(formatArenaActivitySpotlightKey(spotlight)).toContain('recorded event site')
+    expect(description).toContain('“Happened here” marks where this event occurred')
+    expect(description).toContain('Highlighted creatures show Individual 2 (attacker), Individual 1 (prey) at their current positions')
+    expect(description).not.toContain('dashed guides')
+    expect(formatArenaActivitySpotlightKey(spotlight)).toContain('where this event occurred')
 
     const legacy = { ...spotlight, location: null }
     expect(formatArenaActivitySpotlightDescription(legacy)).toContain('does not show the historical event location')
-    expect(formatArenaActivitySpotlightKey(legacy)).toContain('Historical event site unavailable')
+    expect(formatArenaActivitySpotlightKey(legacy)).toContain('This event has no recorded location.')
   })
 
-  it('exposes active SSR key, canvas data hooks, and accessible actor ids only for an active spotlight', async () => {
+  it('keeps fresh activity out of default canvas annotations and accessible descriptions', async () => {
     const { ArenaCanvas } = await import('./ArenaCanvasRenderer')
     const world = spotlightWorld()
     world.activity = [spotlightMoment({ sequence: 22, actorIds: [2], summary: 'Individual 2 collected food.' })]
-    const key = renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world }))
-    const compactKey = renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world, compact: true }))
+    expect(resolveArenaActivitySpotlight(world)?.sequence).toBe(22)
+    expect(resolveVisibleArenaActivitySpotlight(world)).toBeNull()
+    expect(renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world }))).toBe('')
+    expect(renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world, compact: true }))).toBe('')
     const markup = renderToStaticMarkup(createElement(ArenaCanvas, {
       world,
+      revision: 0,
+      selectedIndividualId: null,
+      onSelect: () => {},
+      arenaFocus: 'all',
+      playbackStatus: 'Running',
+      playbackDetail: 'Playing.',
+    }))
+    expect(markup).not.toContain('data-arena-activity-spotlight="true"')
+    expect(markup).not.toContain('data-arena-activity-spotlight-sequence=')
+    expect(markup).not.toContain('data-arena-activity-spotlight-event-copy=')
+    expect(markup).not.toContain('Individual 2 collected food.')
+    expect(markup).not.toContain('Happened here')
+    expect(markup).not.toContain('Highlighted event:')
+    expect(markup).not.toContain('Reviewed retained event:')
+    expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
+  })
+
+  it('exposes SSR key, canvas data hooks, and accessible actor ids when reviewing an event', async () => {
+    const { ArenaCanvas } = await import('./ArenaCanvasRenderer')
+    const world = spotlightWorld()
+    world.activity = [spotlightMoment({ sequence: 22, actorIds: [2], summary: 'Individual 2 collected food.' })]
+    const reviewedMoment = normalizeActivityMoment(world.activity[0], 0)!
+    const key = renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world, reviewedMoment }))
+    const compactKey = renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world, reviewedMoment, compact: true }))
+    const markup = renderToStaticMarkup(createElement(ArenaCanvas, {
+      world,
+      reviewedMoment,
       revision: 0,
       selectedIndividualId: null,
       onSelect: () => {},
@@ -661,13 +693,13 @@ describe('arena activity spotlight', () => {
     }))
 
     expect(key).toContain('data-arena-activity-spotlight-key-sequence="22"')
-    expect(key).toContain('Orange “Then” marker = recorded event site')
-    expect(key).toContain('not movement paths')
+    expect(key).toContain('“Happened here” marks where this event occurred')
+    expect(key).toContain('Highlighted creatures show where they are now.')
     expect(key).toContain('Food collected · Generation 3 · day 1.00 · Individual 2 collected food.')
     expect(key).toContain('Model context: Energy-regrowth mode uses each item’s recorded energy')
     expect(compactKey).toContain('data-arena-activity-spotlight-cue="true"')
     expect(compactKey).toContain('data-arena-activity-spotlight-key-sequence="22"')
-    expect(compactKey).toContain('Highlighted · Food collected · Individual 2 collected food.')
+    expect(compactKey).toContain('Reviewed · Food collected · Individual 2 collected food.')
     expect(markup).toContain('data-arena-activity-spotlight="true"')
     expect(markup).toContain('data-arena-activity-spotlight-sequence="22"')
     expect(markup).toContain('data-arena-activity-spotlight-actors="2"')
@@ -677,14 +709,15 @@ describe('arena activity spotlight', () => {
     expect(markup).toContain('data-arena-activity-spotlight-tag-copies="Collector · Individual 2"')
     expect(markup).toContain('data-arena-activity-spotlight-event="true"')
     expect(markup).toContain('data-arena-activity-spotlight-event-copy="Food collected · Generation 3 · day 1.00 · Individual 2 collected food."')
-    expect(markup).toContain('“Then” marker shows the recorded event site')
-    expect(markup).toContain('Highlighted event: Food collected · Generation 3 · day 1.00 · Individual 2 collected food.')
+    expect(markup).toContain('“Happened here” marks where this event occurred')
+    expect(markup).toContain('Reviewed retained event: Food collected · Generation 3 · day 1.00 · Individual 2 collected food.')
     expect(markup).toContain('Model context: Energy-regrowth mode uses each item’s recorded energy')
     expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
 
     world.activity = [spotlightMoment({ sequence: 23, kind: 'attack-success', actorIds: [2, 1], attackerId: 2, preyId: 1 })]
     const selectedMarkup = renderToStaticMarkup(createElement(ArenaCanvas, {
       world,
+      reviewedMoment: normalizeActivityMoment(world.activity[0], 0)!,
       revision: 0,
       selectedIndividualId: 2,
       onSelect: () => {},
@@ -706,17 +739,17 @@ describe('arena activity spotlight', () => {
 
     const spotlight = resolveArenaActivitySpotlight(world)
     const cue = deriveArenaActivitySpotlightCue(world)
-    const compactKey = renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world, compact: true }))
+    const compactKey = renderToStaticMarkup(createElement(ArenaActivitySpotlightKey, { world, reviewedMoment: normalizeActivityMoment(world.activity[1], 1)!, compact: true }))
     expect(spotlight).toMatchObject({ sourceIndex: 1, sequence: 40, kind: 'attack-failure' })
     expect(cue).toMatchObject({ sequence: 40, kind: 'attack-failure' })
     expect(cue?.event).toContain("Individual 2's attack on Individual 3 failed")
     expect(cue?.context).toContain('recorded contest chance 41%')
     expect(cue?.event).not.toContain('First record')
-    expect(compactKey).toContain('Highlighted · Attack failed · Individual 2 → Individual 3 · 41% contest')
+    expect(compactKey).toContain('Reviewed · Attack failed · Individual 2 → Individual 3 · 41% contest')
     expect(compactKey).not.toContain('First record')
   })
 
-  it('bounds compact copy and keeps malformed event prose out of an otherwise valid halo', async () => {
+  it('bounds compact copy and keeps unreviewable malformed prose out of the arena', async () => {
     const long = formatArenaActivitySpotlightCompact({ kind: 'food-collected', kindLabel: 'Food collected', summary: 'individual context '.repeat(20), attackerId: null, preyId: null, contestChance: null })
     expect(long.length).toBeLessThanOrEqual(ARENA_ACTIVITY_SPOTLIGHT_COMPACT_LIMIT)
     expect(long.startsWith('Highlighted · Food collected ·')).toBe(true)
@@ -739,11 +772,12 @@ describe('arena activity spotlight', () => {
 
     expect(resolveArenaActivitySpotlight(world)).toMatchObject({ sourceIndex: 0, sequence: 50 })
     expect(deriveArenaActivitySpotlightCue(world)).toBeNull()
-    expect(key).toContain('data-arena-activity-spotlight-key="true"')
+    expect(normalizeActivityMoment(world.activity[0], 0)).toBeNull()
+    expect(key).toBe('')
     expect(key).not.toContain('data-arena-activity-spotlight-event="true"')
     expect(key).not.toContain('data-arena-activity-spotlight-context="true"')
     expect(compactKey).toBe('')
-    expect(markup).toContain('data-arena-activity-spotlight="true"')
+    expect(markup).not.toContain('data-arena-activity-spotlight="true"')
     expect(markup).not.toContain('data-arena-activity-spotlight-event="true"')
     expect(markup).not.toContain('Highlighted event:')
     expect(markup.match(/aria-live="polite"/g)).toHaveLength(1)
@@ -805,7 +839,7 @@ describe('selected creature callout', () => {
     for (const [mode, label] of [['exploring', 'Exploring'], ['foraging', 'Finding food'], ['hunting', 'Hunting prey'], ['fleeing', 'Fleeing danger'], ['returning', 'Going home']] as const) {
       expect(target({ mode, targetType: null }).title).toBe(`Individual 1 · ${label}`)
     }
-    expect(target({ home: true, mode: 'exploring', targetType: 'home' }).title).toBe('Individual 1 · Safe at home')
+    expect(target({ home: true, mode: 'exploring', targetType: 'home' }).title).toBe('Individual 1 · Resting at home')
   })
 
   it('rejects malformed, dead, and out-of-domain selected actors without fabricating a callout', () => {
@@ -1066,7 +1100,7 @@ describe('arena clarity helpers', () => {
   it('offers stable action focus labels and keeps the selected creature visible', () => {
     expect(ARENA_FOCUS_OPTIONS.map(option => option.label)).toEqual([
       'All creatures',
-      'Safe at home',
+      'Resting at home',
       'Exploring',
       'Finding food',
       'Hunting prey',
@@ -1385,9 +1419,9 @@ describe('arena clarity helpers', () => {
     noActive.inspectedIndividualId = null
     for (const creature of noActive.creatures) creature.home = true
     const noActivePath = formatObservedPath(noActive, { ticks: 0, stop: 'no-active' }, { selectedIndividualId: null, selectedWasActive: false })
-    expect(noActivePath).toContain('Awaiting settlement')
-    expect(noActivePath).toContain('all living creatures are home')
-    expect(noActivePath).toContain('Finish generation to settle this cohort')
+    expect(noActivePath).toContain('Resting uses energy')
+    expect(noActivePath).toContain('All living creatures are resting at home')
+    expect(noActivePath).toContain('Finish generation completes the round')
 
     const extinct = observedWorld()
     for (const creature of extinct.creatures) creature.alive = false
@@ -1435,8 +1469,8 @@ describe('arena clarity helpers', () => {
     dead.creatures[1].home = true
     const deadPath = formatObservedPath(dead, { ticks: 1, stop: 'no-active' }, deadContext)
     expect(deadPath).toContain('selected creature died')
-    expect(deadPath).toContain('Awaiting settlement')
-    expect(deadPath).toContain('all living creatures are home')
+    expect(deadPath).toContain('Resting uses energy')
+    expect(deadPath).toContain('All living creatures are resting at home')
 
     const home = observedWorld()
     const homeContext = observedContext(home)
@@ -1446,8 +1480,8 @@ describe('arena clarity helpers', () => {
     delete home.creatures[0].decisionSummary
     const homePath = formatObservedPath(home, { ticks: 1, stop: 'no-active' }, homeContext)
     expect(homePath).toContain('selected creature reached home during this step')
-    expect(homePath).toContain('Awaiting settlement')
-    expect(homePath).toContain('all living creatures are home')
+    expect(homePath).toContain('Resting uses energy')
+    expect(homePath).toContain('All living creatures are resting at home')
   })
 
   it('reports a generation boundary without fabricating a missing ledger', () => {
@@ -1466,6 +1500,7 @@ describe('arena clarity helpers', () => {
     returning.y = returning.homeY
     returning.mode = 'returning'
     returning.returning = true
+    for (const creature of world.creatures) creature.energy = 200
     for (const creature of world.creatures.slice(1)) creature.home = true
 
     const result = advanceToNextAction(world)
@@ -1473,7 +1508,7 @@ describe('arena clarity helpers', () => {
     expect(result.stop).toBe('no-active')
     expect(path).toContain('perception recorded 1/2 creatures and 2/4 food')
     expect(path).toContain('decision recorded as food (reason noted: Nearby food utility)')
-    expect(path).toContain('current action: Safe at home · target: Food item')
+    expect(path).toContain('current action: Resting at home · target: Food item')
     expect(path).toContain('It reached home during this step.')
     expect(path).not.toContain(String(internalCreatureId))
   })

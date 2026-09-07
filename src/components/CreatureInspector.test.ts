@@ -193,7 +193,7 @@ describe('progressive individual inspector disclosure',()=>{
     active.home=true
     const homeMarkup=renderInspector(world,active)
     expect(homeMarkup).toContain('No active decision while home.')
-    expect(homeMarkup).toContain('there is no active action to explain')
+    expect(homeMarkup).toContain('Hunger can send it out to forage again')
     expect(homeMarkup).not.toContain('Advance the simulation to capture its next decision.')
     expect(activeMarkup).not.toContain('aria-live')
     expect(homeMarkup).not.toContain('aria-live')
