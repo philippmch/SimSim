@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { INITIAL_ARENA_VIEW, arenaViewFromScreen, arenaViewToScreen, clampArenaView, panArenaView } from './ArenaView'
 import type React from 'react'
 import { MAX_FOUNDER_MIGRATION_BATCH, MAX_POPULATION } from '../simulation/config'
 import { SIMULATION_TIMESTEP } from '../simulation/engine'
@@ -479,6 +480,7 @@ export interface ArenaActivitySpotlightTagRect {
 }
 
 export interface ArenaActivitySpotlightTagGeometryInput {
+  visualScale?: number
   width: number
   height: number
   pad: number
@@ -565,7 +567,7 @@ export function arenaActivitySpotlightTagGeometry(input: ArenaActivitySpotlightT
   const sizeValue = typeof input.size === 'number' && Number.isFinite(input.size) && input.size > 0 ? input.size : 1
   const size = Math.max(.3, Math.min(2.8, sizeValue))
   const extent = Math.min(width, height)
-  const base = Math.max(7, extent * .017 * size)
+  const base = Math.max(7, extent * .017 * size) * (input.visualScale ?? 1)
   const actorX = left + input.x * fieldWidth
   const actorY = top + input.y * fieldHeight - (input.pointAnchor ? 0 : base * 1.55 * .35)
   const haloRadius = Math.max(base * 2.15, 15)
@@ -651,6 +653,7 @@ export function arenaActivitySpotlightTagGeometry(input: ArenaActivitySpotlightT
 }
 
 export interface ArenaActivitySpotlightSiteGeometryInput {
+  visualScale?: number
   width: number
   height: number
   pad: number
@@ -817,6 +820,7 @@ export function deriveArenaSelectedCreatureCallout(world: unknown, selectedIndiv
 }
 
 export interface ArenaSelectedCreatureCalloutGeometryInput {
+  visualScale?: number
   explanationsOutside?: boolean
   compactControls?: boolean
   width: number
@@ -859,7 +863,7 @@ export function arenaSelectedCreatureCalloutGeometry(input: ArenaSelectedCreatur
   const normalizedX = Number.isFinite(input.x) ? arenaClamp(input.x, 0, 1) : .5
   const normalizedY = Number.isFinite(input.y) ? arenaClamp(input.y, 0, 1) : .5
   const safeSize = Number.isFinite(input.size) && input.size! > 0 ? Math.max(.3, Math.min(2.8, input.size!)) : 1
-  const base = Math.max(7, Math.min(width, height) * .017 * safeSize)
+  const base = Math.max(7, Math.min(width, height) * .017 * safeSize) * (input.visualScale ?? 1)
   const selectedRingRadius = base * 1.5
   const leaderStartX = arenaClamp(left + normalizedX * fieldWidth, left, right)
   const leaderStartY = arenaClamp(top + normalizedY * fieldHeight - base * 1.55 * .35, top, bottom)
@@ -1013,8 +1017,9 @@ export function arenaActivitySpotlightHaloRect(
   height: number,
   pad: number,
   actor: Pick<ArenaActivitySpotlightTag, 'x' | 'y' | 'size'>,
+  visualScale = 1,
 ): ArenaActivitySpotlightTagRect {
-  const base = Math.max(7, Math.min(width, height) * .017 * actor.size)
+  const base = Math.max(7, Math.min(width, height) * .017 * actor.size) * visualScale
   const radius = Math.max(base * 2.15, 15)
   const actorX = pad + actor.x * Math.max(0, width - pad * 2)
   const actorY = pad + actor.y * Math.max(0, height - pad * 2) - base * 1.55 * .35
@@ -1053,6 +1058,8 @@ function drawArenaActivitySpotlightSite(
   externalOccupied: readonly ArenaActivitySpotlightTagRect[] = [],
   explanationsOutside = false,
   compactControls = false,
+  mode: 'all' | 'markers' | 'labels' = 'all',
+  visualScale = 1,
 ): ArenaActivitySpotlightTagRect[] {
   if (!spotlight.location) return []
   const compact = width <= 720
@@ -1060,8 +1067,8 @@ function drawArenaActivitySpotlightSite(
   const fieldHeight = Math.max(0, height - pad * 2)
   const siteX = pad + spotlight.location.x * fieldWidth
   const siteY = pad + spotlight.location.y * fieldHeight
-  const markerRadius = compact ? 10 : 12
-  const actorHalos = spotlight.actors.map(actor => arenaActivitySpotlightHaloRect(width, height, pad, actor))
+  const markerRadius = (compact ? 10 : 12) * visualScale
+  const actorHalos = spotlight.actors.map(actor => arenaActivitySpotlightHaloRect(width, height, pad, actor, visualScale))
   const geometry = arenaActivitySpotlightSiteGeometry({
     width,
     height,
@@ -1069,12 +1076,14 @@ function drawArenaActivitySpotlightSite(
     x: spotlight.location.x,
     y: spotlight.location.y,
     compact,
+    visualScale,
     occupied: [...externalOccupied, ...actorHalos],
     anchors: arenaActivitySpotlightOverlayAnchors(width, height, compact, explanationsOutside, compactControls),
   })
   ctx.save()
   ctx.globalAlpha = spotlight.alpha
   ctx.lineCap = 'round'
+  if (mode !== 'labels') {
   for (const halo of actorHalos) {
     const actorX = halo.x + halo.width / 2, actorY = halo.y + halo.height / 2
     const deltaX = actorX - siteX, deltaY = actorY - siteY, distance = Math.hypot(deltaX, deltaY)
@@ -1097,7 +1106,8 @@ function drawArenaActivitySpotlightSite(
   ctx.setLineDash([])
   ctx.fillStyle = 'rgba(3, 17, 29, .95)'; ctx.strokeStyle = ARENA_ACTIVITY_SPOTLIGHT_SITE_ACCENT; ctx.lineWidth = 1.5
   ctx.beginPath(); ctx.moveTo(siteX, siteY - 5); ctx.lineTo(siteX + 5, siteY); ctx.lineTo(siteX, siteY + 5); ctx.lineTo(siteX - 5, siteY); ctx.closePath(); ctx.fill(); ctx.stroke()
-  if (geometry) {
+  }
+  if (geometry && mode !== 'markers') {
     ctx.strokeStyle = 'rgba(3, 17, 29, .95)'; ctx.lineWidth = 4
     ctx.beginPath(); ctx.moveTo(geometry.leaderStartX, geometry.leaderStartY); ctx.lineTo(geometry.leaderEndX, geometry.leaderEndY); ctx.stroke()
     ctx.strokeStyle = ARENA_ACTIVITY_SPOTLIGHT_SITE_ACCENT; ctx.lineWidth = 1.4
@@ -1131,12 +1141,13 @@ function drawArenaActivitySpotlightTags(
   externalOccupied: readonly ArenaActivitySpotlightTagRect[] = [],
   explanationsOutside = false,
   compactControls = false,
+  visualScale = 1,
 ) {
   if (!tags.length) return
   const compact = width <= 720
   const anchors = arenaActivitySpotlightOverlayAnchors(width, height, compact, explanationsOutside, compactControls)
   const occupied: ArenaActivitySpotlightTagRect[] = [...externalOccupied]
-  const haloRects = tags.map(tag => arenaActivitySpotlightHaloRect(width, height, pad, tag))
+  const haloRects = tags.map(tag => arenaActivitySpotlightHaloRect(width, height, pad, tag, visualScale))
   for (let index = 0; index < tags.length; index++) {
     const tag = tags[index]
     const canvasLabel = compact ? tag.label.replace(' · Individual ', ' ') : tag.label
@@ -1147,6 +1158,7 @@ function drawArenaActivitySpotlightTags(
       x: tag.x,
       y: tag.y,
       size: tag.size,
+      visualScale,
       individualId: tag.individualId,
       role: tag.role,
       label: canvasLabel,
@@ -1408,9 +1420,28 @@ export function arenaCanvasCanDraw(width: number, height: number) {
 export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, selectedPatchId = null, onSelectPatch = () => {}, arenaFocus, playbackStatus, playbackDetail, explanationsOutside = false, compactControls = false, reviewedMoment }: Props) {
   const ref = useRef<HTMLCanvasElement>(null)
   const drawRef = useRef<() => void>(() => {})
+  const [view, setView] = useState(INITIAL_ARENA_VIEW)
+  const dragRef = useRef<{ id: number; x: number; y: number; moved: boolean } | null>(null)
+  const suppressClickRef = useRef(false)
+  const zoomBy = (factor: number) => setView(current => clampArenaView({ ...current, zoom: current.zoom * factor }))
+  const activitySpotlight = resolveArenaActivitySpotlight(world, reviewedMoment)
+  const reviewSite = reviewedMoment ? activitySpotlight?.location : undefined
+  const centerOn = (target: { x: number; y: number } | null | undefined) => {
+    const rect = ref.current?.getBoundingClientRect()
+    if (!rect || !arenaCanvasCanDraw(rect.width, rect.height)) return
+    if (!target) return
+    const pad = Math.max(20, Math.min(rect.width, rect.height) * .055)
+    setView(current => clampArenaView({ ...current, x: (pad + target.x * (rect.width - 2 * pad)) / rect.width, y: (pad + target.y * (rect.height - 2 * pad)) / rect.height }))
+  }
+  // A new inspection reveals its subject. A newly reviewed site takes priority
+  // when review also selects an actor, without following moving actors each tick.
+  useEffect(() => {
+    centerOn(world.creatures.find(c => c.alive && c.individualId === selectedIndividualId)
+      ?? world.environment.patches.find(p => p.id === selectedPatchId))
+  }, [selectedIndividualId, selectedPatchId])
+  useEffect(() => { centerOn(reviewSite) }, [reviewedMoment, reviewSite?.x, reviewSite?.y])
   const darkModeRef = useRef<boolean | null>(null)
   if (darkModeRef.current === null) darkModeRef.current = readArenaDarkMode()
-  const activitySpotlight = resolveArenaActivitySpotlight(world, reviewedMoment)
   const activitySpotlightCue = activitySpotlight ? formatArenaActivitySpotlightCue(activitySpotlight, world.config) : null
   const allActivitySpotlightTags = activitySpotlight ? deriveArenaActivitySpotlightTags(activitySpotlight) : []
   const activitySpotlightTags = allActivitySpotlightTags.filter(tag => tag.individualId !== selectedIndividualId)
@@ -1426,11 +1457,21 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
       }
       const ctx = canvas.getContext('2d'); if (!ctx) return; ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       const w = rect.width, h = rect.height, pad = Math.max(20, Math.min(w, h) * .055), palette = arenaCanvasPalette(darkModeRef.current ?? false)
-      const selectedCalloutGeometry = selectedCallout ? arenaSelectedCreatureCalloutGeometry({ width: w, height: h, pad, x: selectedCallout.x, y: selectedCallout.y, size: selectedCallout.size, compact: w <= 720, explanationsOutside, compactControls }) : null
+      const screenPoint = (point: { x: number; y: number }) => {
+        const projected = arenaViewToScreen(view, { x: (pad + point.x * (w - 2 * pad)) / w, y: (pad + point.y * (h - 2 * pad)) / h })
+        return { x: (projected.x * w - pad) / (w - 2 * pad), y: (projected.y * h - pad) / (h - 2 * pad) }
+      }
+      const screenCallout = selectedCallout ? { ...selectedCallout, ...screenPoint(selectedCallout) } : null
+      const screenSpotlight = activitySpotlight ? { ...activitySpotlight, location: activitySpotlight.location ? screenPoint(activitySpotlight.location) : null, actors: activitySpotlight.actors.map(actor => ({ ...actor, ...screenPoint(actor) })) } : null
+      const screenTags = activitySpotlightTags.map(tag => ({ ...tag, ...screenPoint(tag) }))
+      const selectedCalloutGeometry = screenCallout ? arenaSelectedCreatureCalloutGeometry({ width: w, height: h, pad, x: screenCallout.x, y: screenCallout.y, size: screenCallout.size, visualScale: view.zoom, compact: w <= 720, explanationsOutside, compactControls }) : null
       const activityTagObstacles = selectedCallout && selectedCalloutGeometry
-        ? [selectedCalloutGeometry, arenaActivitySpotlightHaloRect(w, h, pad, selectedCallout)]
+        ? [selectedCalloutGeometry, arenaActivitySpotlightHaloRect(w, h, pad, screenCallout!, view.zoom)]
         : []
       ctx.clearRect(0, 0, w, h)
+      ctx.save()
+      ctx.translate(w * (.5 - view.x * view.zoom), h * (.5 - view.y * view.zoom))
+      ctx.scale(view.zoom, view.zoom)
       const grad = ctx.createLinearGradient(0, 0, w, h); grad.addColorStop(0, palette.fieldStart); grad.addColorStop(1, palette.fieldEnd)
       ctx.fillStyle = grad; ctx.beginPath(); ctx.roundRect(pad, pad, w - pad * 2, h - pad * 2, Math.min(34, w * .05)); ctx.fill()
       ctx.strokeStyle = palette.fieldBorder; ctx.lineWidth = 1; ctx.stroke()
@@ -1530,17 +1571,22 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
       }
       if (activitySpotlight) {
         drawArenaActivitySpotlight(ctx, activitySpotlight, w, h, sx, sy)
-        const siteObstacles = drawArenaActivitySpotlightSite(ctx, activitySpotlight, w, h, pad, activityTagObstacles, explanationsOutside, compactControls)
-        drawArenaActivitySpotlightTags(ctx, activitySpotlightTags, activitySpotlight.alpha, w, h, pad, [...activityTagObstacles, ...siteObstacles], explanationsOutside, compactControls)
+        drawArenaActivitySpotlightSite(ctx, activitySpotlight, w, h, pad, [], explanationsOutside, compactControls, 'markers')
       }
+      for (const marker of endpointMarkers) drawHeldPathEndpoint(ctx, marker.kind, marker.x, marker.y, marker.color, marker.size)
+      ctx.restore()
+      // Text stays at its readable screen size while its anchors follow the zoomed world.
+      if (screenSpotlight) {
+        const siteObstacles = drawArenaActivitySpotlightSite(ctx, screenSpotlight, w, h, pad, activityTagObstacles, explanationsOutside, compactControls, 'labels', view.zoom)
+        drawArenaActivitySpotlightTags(ctx, screenTags, screenSpotlight.alpha, w, h, pad, [...activityTagObstacles, ...siteObstacles], explanationsOutside, compactControls, view.zoom)
+      }
+      if (selectedCallout && selectedCalloutGeometry) drawArenaSelectedCreatureCallout(ctx, selectedCallout, selectedCalloutGeometry, palette.selectedRing)
       const pct = Math.min(1, world.dayTime / world.config.dayLength)
       ctx.fillStyle = palette.progressTrack; ctx.fillRect(pad, pad - 9, w - pad * 2, 3)
       ctx.fillStyle = palette.progressFill; ctx.fillRect(pad, pad - 9, (w - pad * 2) * pct, 3)
-      for (const marker of endpointMarkers) drawHeldPathEndpoint(ctx, marker.kind, marker.x, marker.y, marker.color, marker.size)
-      if (selectedCallout && selectedCalloutGeometry) drawArenaSelectedCreatureCallout(ctx, selectedCallout, selectedCalloutGeometry, palette.selectedRing)
     }
     drawRef.current = draw; draw()
-  }, [world, revision, selectedIndividualId, selectedPatchId, arenaFocus, explanationsOutside, compactControls, reviewedMoment])
+  }, [world, revision, selectedIndividualId, selectedPatchId, arenaFocus, explanationsOutside, compactControls, reviewedMoment, view])
   useEffect(() => {
     const query = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia(ARENA_COLOR_SCHEME_QUERY) : null
     if (!query) return
@@ -1552,15 +1598,49 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
   }, [])
   useEffect(() => { const canvas = ref.current; if (!canvas || typeof ResizeObserver === 'undefined') return; const observer = new ResizeObserver(() => drawRef.current()); observer.observe(canvas); return () => observer.disconnect() }, [])
   const chooseAt = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (suppressClickRef.current) { suppressClickRef.current = false; return }
     const canvas = ref.current
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
     if (!arenaCanvasCanDraw(rect.width, rect.height)) return
     const pad = Math.max(20, Math.min(rect.width, rect.height) * .055)
-    const x = (event.clientX - rect.left - pad) / (rect.width - pad * 2)
-    const y = (event.clientY - rect.top - pad) / (rect.height - pad * 2)
+    const point = arenaViewFromScreen(view, { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height })
+    const x = (point.x * rect.width - pad) / (rect.width - pad * 2)
+    const y = (point.y * rect.height - pad) / (rect.height - pad * 2)
     const hit = hitTestArenaInspection(world.creatures, world.environment.patches, { x, y }, { width: rect.width, height: rect.height, pad, foodPatchSpread: world.config.foodPatchSpread })
     dispatchArenaInspectionHit(hit, onSelect, onSelectPatch)
+  }
+  const pointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    suppressClickRef.current = false
+    if (view.zoom === 1 || event.button !== 0 || dragRef.current) return
+    dragRef.current = { id: event.pointerId, x: event.clientX, y: event.clientY, moved: false }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  const pointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const drag = dragRef.current
+    if (!drag || drag.id !== event.pointerId) return
+    const dx = event.clientX - drag.x, dy = event.clientY - drag.y
+    if (!drag.moved && Math.hypot(dx, dy) < 5) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    if (!arenaCanvasCanDraw(rect.width, rect.height)) return
+    drag.moved = true; suppressClickRef.current = true
+    drag.x = event.clientX; drag.y = event.clientY
+    setView(current => panArenaView(current, dx / rect.width, dy / rect.height))
+  }
+  const pointerEnd = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (dragRef.current?.id !== event.pointerId) return
+    dragRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+  const viewKeys = (event: React.KeyboardEvent) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return
+    const directions: Record<string, [number, number]> = { ArrowLeft: [.12, 0], ArrowRight: [-.12, 0], ArrowUp: [0, .12], ArrowDown: [0, -.12] }
+    if (directions[event.key]) { const [x, y] = directions[event.key]; setView(current => panArenaView(current, x, y)) }
+    else if (event.key === '+' || event.key === '=') zoomBy(1.5)
+    else if (event.key === '-') zoomBy(1 / 1.5)
+    else if (event.key === 'Home') setView(INITIAL_ARENA_VIEW)
+    else return
+    event.preventDefault()
   }
   const livingCreatures = world.creatures.filter(c => c.alive)
   const selected = world.creatures.find(creature => creature.individualId === selectedIndividualId && creature.alive)
@@ -1610,7 +1690,12 @@ export function ArenaCanvas({ world, revision, selectedIndividualId, onSelect, s
     }
     dispatchArenaInspectionHit(null, onSelect, onSelectPatch)
   }
-  return <><canvas ref={ref} className="arena" role="img" onClick={chooseAt} aria-label={accessibleDescription} data-arena-activity-spotlight={activitySpotlight ? 'true' : undefined} data-arena-activity-spotlight-sequence={activitySpotlight?.sequence} data-arena-activity-spotlight-kind={activitySpotlight?.kind} data-arena-activity-spotlight-tick={activitySpotlight?.tick} data-arena-activity-spotlight-age={activitySpotlight?.age} data-arena-activity-spotlight-actors={activitySpotlight?.actors.map(actor => actor.individualId).join(',')} data-arena-activity-spotlight-site={activitySpotlight?.location ? 'true' : undefined} data-arena-activity-spotlight-site-x={activitySpotlight?.location?.x} data-arena-activity-spotlight-site-y={activitySpotlight?.location?.y} data-arena-activity-spotlight-event={activitySpotlightCue ? 'true' : undefined} data-arena-activity-spotlight-event-copy={activitySpotlightCue?.event} data-arena-activity-spotlight-event-context={activitySpotlightCue?.context} data-arena-activity-spotlight-tag-copies={activitySpotlightTags.length ? activitySpotlightTags.map(tag => tag.label).join(', ') : undefined} data-arena-selected-callout={selectedCallout ? 'true' : undefined} data-arena-selected-callout-individual-id={selectedCallout?.individualId} data-arena-selected-callout-title={selectedCallout?.title} data-arena-selected-callout-detail={selectedCallout?.detail} data-arena-selected-callout-copy={selectedCallout?.description}>
+  return <><canvas ref={ref} className="arena" role="img" tabIndex={0} aria-describedby="arena-view-help" data-arena-zoom={view.zoom} data-arena-view-x={view.x} data-arena-view-y={view.y} onKeyDown={viewKeys} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerEnd} onPointerCancel={pointerEnd} onLostPointerCapture={pointerEnd} style={{ touchAction: view.zoom > 1 ? 'none' : 'pan-y', cursor: view.zoom > 1 ? 'grab' : 'pointer' }} onClick={chooseAt} aria-label={accessibleDescription} data-arena-activity-spotlight={activitySpotlight ? 'true' : undefined} data-arena-activity-spotlight-sequence={activitySpotlight?.sequence} data-arena-activity-spotlight-kind={activitySpotlight?.kind} data-arena-activity-spotlight-tick={activitySpotlight?.tick} data-arena-activity-spotlight-age={activitySpotlight?.age} data-arena-activity-spotlight-actors={activitySpotlight?.actors.map(actor => actor.individualId).join(',')} data-arena-activity-spotlight-site={activitySpotlight?.location ? 'true' : undefined} data-arena-activity-spotlight-site-x={activitySpotlight?.location?.x} data-arena-activity-spotlight-site-y={activitySpotlight?.location?.y} data-arena-activity-spotlight-event={activitySpotlightCue ? 'true' : undefined} data-arena-activity-spotlight-event-copy={activitySpotlightCue?.event} data-arena-activity-spotlight-event-context={activitySpotlightCue?.context} data-arena-activity-spotlight-tag-copies={activitySpotlightTags.length ? activitySpotlightTags.map(tag => tag.label).join(', ') : undefined} data-arena-selected-callout={selectedCallout ? 'true' : undefined} data-arena-selected-callout-individual-id={selectedCallout?.individualId} data-arena-selected-callout-title={selectedCallout?.title} data-arena-selected-callout-detail={selectedCallout?.detail} data-arena-selected-callout-copy={selectedCallout?.description}>
     Natural selection simulation arena. Live counts are available in the statistics region.
-  </canvas><label className="creature-picker" htmlFor="arena-creature-picker">Inspect <select id="arena-creature-picker" aria-label="Inspect creatures or resource patches" aria-describedby="arena-creature-picker-help" value={selectedValue} onChange={e => selectInspection(e.target.value)} style={{ background: 'var(--paper)', color: 'var(--ink)', colorScheme: 'light dark', minHeight: 32, touchAction: 'manipulation' }}><option value="">Nothing selected</option><optgroup label="Creatures">{livingCreatures.slice().sort((a, b) => a.individualId - b.individualId).map(c => <option key={`creature:${c.individualId}`} value={`creature:${c.individualId}`}>Individual {c.individualId}, lineage {c.lineageId}, {CREATURE_STATE_METADATA[c.home ? 'safe' : c.mode].label}</option>)}</optgroup>{patchOptions.length > 0 && <optgroup label="Resource patches">{patchOptions.map(({ patch, ordinal, currentFood, quality }) => <option key={`patch:${ordinal}`} value={`patch:${ordinal}`}>Patch {ordinal} · {quality} · {currentFood} food</option>)}</optgroup>}</select></label><span id="arena-creature-picker-help" className="sr-only">Choose a living creature or resource patch to inspect. Creature options reveal behavior; patch options reveal live food, capacity, energy, and regrowth. Choose Nothing selected to clear inspection.</span><span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{formatArenaInspectionStatus(selectedIndividualId, selectedPatchId, selectedPatchOrdinal)}</span></>
+  </canvas><div role="group" aria-label="Arena view controls" onKeyDown={viewKeys} style={{ position: 'absolute', right: 12, top: 88, display: 'grid', gap: 2, background: 'var(--paper)', color: 'var(--ink)', border: '1px solid var(--line)', borderRadius: 8, padding: 2 }}>
+    <button className="settings-toggle" type="button" aria-label="Zoom in arena" aria-disabled={view.zoom >= 4} onClick={() => { if (view.zoom < 4) zoomBy(1.5) }} style={{ width: 44, height: 44, padding: 0 }}>+</button>
+    <button className="settings-toggle" type="button" aria-label="Zoom out arena" aria-disabled={view.zoom <= 1} onClick={() => { if (view.zoom > 1) zoomBy(1 / 1.5) }} style={{ width: 44, height: 44, padding: 0 }}>−</button>
+    <button className="settings-toggle" type="button" aria-label="Reset arena view" onClick={() => setView(INITIAL_ARENA_VIEW)} style={{ width: 44, height: 44, padding: 0, fontSize: 11 }}>Reset</button>
+    <span aria-hidden="true" style={{ textAlign: 'center', fontSize: 11 }}>{Math.round(view.zoom * 100)}%</span>
+  </div><span id="arena-view-help" className="sr-only">Zoom in to enlarge creatures. Drag the zoomed arena to pan, or focus the arena or view controls and use arrow keys. Plus and minus zoom; Home resets the view. Tap a creature or patch to inspect.</span><label className="creature-picker" htmlFor="arena-creature-picker">Inspect <select id="arena-creature-picker" aria-label="Inspect creatures or resource patches" aria-describedby="arena-creature-picker-help" value={selectedValue} onChange={e => selectInspection(e.target.value)} style={{ background: 'var(--paper)', color: 'var(--ink)', colorScheme: 'light dark', minHeight: 32, touchAction: 'manipulation' }}><option value="">Nothing selected</option><optgroup label="Creatures">{livingCreatures.slice().sort((a, b) => a.individualId - b.individualId).map(c => <option key={`creature:${c.individualId}`} value={`creature:${c.individualId}`}>Individual {c.individualId}, lineage {c.lineageId}, {CREATURE_STATE_METADATA[c.home ? 'safe' : c.mode].label}</option>)}</optgroup>{patchOptions.length > 0 && <optgroup label="Resource patches">{patchOptions.map(({ patch, ordinal, currentFood, quality }) => <option key={`patch:${ordinal}`} value={`patch:${ordinal}`}>Patch {ordinal} · {quality} · {currentFood} food</option>)}</optgroup>}</select></label><span id="arena-creature-picker-help" className="sr-only">Choose a living creature or resource patch to inspect. Creature options reveal behavior; patch options reveal live food, capacity, energy, and regrowth. Choose Nothing selected to clear inspection.</span><span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{formatArenaInspectionStatus(selectedIndividualId, selectedPatchId, selectedPatchOrdinal)} Arena zoom {Math.round(view.zoom * 100)}%.</span></>
 }
