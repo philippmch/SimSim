@@ -1,5 +1,6 @@
 import { MAX_POPULATION } from '../simulation/config'
 import { settleLifecycle, type LifecycleOutcomeCause } from '../simulation/lifecycle'
+import { chooseHomeMove } from '../simulation/homePolicy'
 import type { World } from '../simulation/types'
 
 export const FORECAST_LOSS_CAUSES = ['hunted', 'energy', 'unfed', 'late', 'aged'] as const satisfies readonly Exclude<LifecycleOutcomeCause, 'survived'>[]
@@ -31,6 +32,8 @@ export interface SelectedSettlementPreview {
   maturityAge?: number
   retainedEnergy: number | null
   settledEnergy: number | null
+  /** Movement is paid after lifecycle and reproduction, before the next round. */
+  relocationCost?: number
   /** Null in classic mode, where food—not retained energy—controls reproduction. */
   energyEligible?: boolean | null
   /** Null in classic mode; true means the current age has reached the threshold. */
@@ -67,6 +70,7 @@ export function summarizeSelectedSettlementPreview(world: World, individualId: n
   const currentAge = safeNonnegativeInteger(outcome.individual.age)
   const maturityAge = world.config.ecologyMode === 'classic' ? 0 : policy.maturityAge
   const retainedEnergy = survivor?.retainedEnergy ?? null
+  const relocationCost = survivor ? chooseHomeMove(survivor.individual, world.config, survivor.settledEnergy)?.energyCost ?? 0 : 0
   const energyEligible = world.config.ecologyMode === 'classic'
     ? null
     : retainedEnergy !== null && retainedEnergy > finiteNonNegative(world.config.reproductionEnergyCost)
@@ -86,7 +90,8 @@ export function summarizeSelectedSettlementPreview(world: World, individualId: n
     nextAge: survivor?.nextAge ?? null,
     maturityAge,
     retainedEnergy,
-    settledEnergy: survivor?.settledEnergy ?? null,
+    settledEnergy: survivor ? survivor.settledEnergy - relocationCost : null,
+    relocationCost,
     energyEligible,
     maturityEligible,
     reproductionStatus,

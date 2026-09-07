@@ -6,7 +6,7 @@ import { createWorld } from '../simulation/engine'
 import type { DecisionSummary } from '../simulation/types'
 import { summarizeSelectedSettlementPreview, type SelectedSettlementPreview } from './GenerationForecast'
 import type { CreatureInspectorActionControls, CreatureInspectorProps } from './CreatureInspector'
-import { CreatureInspector, decisionCandidateMatches, formatCandidateUtilitySummary, formatCurrentCreaturePurpose, formatDecisionActionLabel, formatDecisionBasis, formatDecisionContext, formatDecisionProvenance, formatDecisionTargetLabel, formatSelectedSettlementOutcome, formatSelectedSettlementReproduction } from './CreatureInspector'
+import { CreatureInspector, formatCreatureHome, decisionCandidateMatches, formatCandidateUtilitySummary, formatCurrentCreaturePurpose, formatDecisionActionLabel, formatDecisionBasis, formatDecisionContext, formatDecisionProvenance, formatDecisionTargetLabel, formatSelectedSettlementOutcome, formatSelectedSettlementReproduction } from './CreatureInspector'
 
 const summary:DecisionSummary={
   chosen:'prey',
@@ -21,6 +21,14 @@ const summary:DecisionSummary={
 }
 
 describe('captured decision inspector helpers',()=>{
+  it('explains the home location and recorded move without inventing a move for founders',()=>{
+    const c=createWorld(defaultConfig).creatures[0]
+    Object.assign(c,{homeX:.025,homeY:.5})
+    expect(formatCreatureHome(c)).toBe('Home: left edge, 50% down.')
+    c.lastHomeMove={generation:2,fromX:.025,fromY:.56,toX:.025,toY:.5,energyCost:1.25,reason:'danger'}
+    expect(formatCreatureHome(c)).toContain('Last moved for generation 2: farther from where it was attacked; spent 1.3 energy')
+  })
+
   it('humanizes each captured action and formats candidate counts',()=>{
     expect(formatDecisionActionLabel('food')).toBe('Forage for food')
     expect(formatDecisionActionLabel('prey')).toBe('Hunt prey')

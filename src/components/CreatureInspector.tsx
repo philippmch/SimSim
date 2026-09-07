@@ -5,6 +5,15 @@ import IndividualHistory from './IndividualHistory'
 import type { SimulationActivityMoment } from './SimulationActivity'
 import './CreatureInspector.css'
 
+export function formatCreatureHome(selected: Creature): string {
+  const x=selected.homeX,y=selected.homeY
+  const location=x<=.026?`left edge, ${Math.round(y*100)}% down`:x>=.974?`right edge, ${Math.round(y*100)}% down`:y<=.026?`top edge, ${Math.round(x*100)}% across`:y>=.974?`bottom edge, ${Math.round(x*100)}% across`:`${Math.round(x*100)}% across, ${Math.round(y*100)}% down`
+  const move=selected.lastHomeMove
+  if(!move)return `Home: ${location}.`
+  const reason=move.reason==='food'?'closer to remembered food':move.reason==='danger'?'farther from where it was attacked':'a better balance of remembered food and danger'
+  return `Home: ${location}. Last moved for generation ${move.generation}: ${reason}; spent ${move.energyCost.toFixed(1)} energy.`
+}
+
 export interface PerceptionTelemetryCopy {
   creatures: string
   food: string
@@ -49,7 +58,7 @@ export function formatSelectedSettlementOutcome(preview:SelectedSettlementPrevie
   if(preview.outcome!=='survived')return`Would not survive · ${FORECAST_LOSS_LABELS[preview.outcome]}.`
   const nextGeneration=safePreviewGeneration(preview.generation)
   const age=preview.nextAge===null?'next age unavailable':`age ${preview.nextAge}`
-  return`Would survive → ${nextGeneration===null?'the next generation':`generation ${nextGeneration+1}`} · ${age} · ${formatPreviewNumber(preview.settledEnergy)} energy.`
+  return`Would survive → ${nextGeneration===null?'the next generation':`generation ${nextGeneration+1}`} · ${age} · ${formatPreviewNumber(preview.settledEnergy)} energy.${preview.relocationCost?` Includes ${formatPreviewNumber(preview.relocationCost)} energy spent moving home.`:''}`
 }
 
 export function formatSelectedSettlementReproduction(preview:SelectedSettlementPreview):string{
@@ -226,6 +235,7 @@ export function CreatureInspector({ selected, world, ecologyMode, dayTime, state
       {selected.alive&&!selected.home&&<p className="creature-destination">Destination: {targetLabel}</p>}
       <dl className="creature-reserves"><div><dt>Energy now</dt><dd>{formatPreviewNumber(selected.energy)}</dd></div><div><dt>Food collected</dt><dd>{formatPreviewFood(selected.food)}{ecologyMode==='classic'?' / 2':''}</dd></div><div><dt>Age</dt><dd>{selected.age} {selected.age===1?'generation':'generations'}</dd></div></dl>
       <p className="creature-energy-note">{ecologyMode==='energy-regrowth'?'Food restores energy. Reaching zero means death, even at home.':'Moving uses energy. Collect food and return home before the day ends.'}</p>
+      <p className="creature-energy-note">{formatCreatureHome(selected)}</p>
     </div>
     <details className="utility-breakdown creature-technical"><summary>Survival preview</summary><div role="note" style={settlementPreviewStyle}>
       <strong>If generation ended now</strong>

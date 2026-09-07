@@ -41,6 +41,8 @@ const creature = record({
   ...fields('vx vy', range(-.155, .155)),
   ...fields('food age', count), ...fields('alive returning home', boolean), mode, targetType: nullable(target), targetId: nullable(id),
   memory: record({ ...fields('foodX foodY threatX threatY', nullable(normalized)), ...fields('foodUntil threatUntil', number) }),
+  homeExperience: optional(record({ ...fields('foodCount dangerCount', count), ...fields('foodX foodY dangerX dangerY', normalized) })),
+  lastHomeMove: optional(record({ generation: id, ...fields('fromX fromY toX toY', normalized), energyCost: range(0, 1e30), reason: enumeration('food', 'danger', 'food-and-danger') })),
   deathCause: nullable(enumeration('hunted', 'energy')), decisionSummary: optional(decision),
   perceptionDiagnostics: optional(record({ mode: perceptionMode, reactionWindow: number, creatures: perceptionCounts, food: perceptionCounts })),
 })
@@ -55,7 +57,7 @@ const ledger = record({
 const location: Check = value => Array.isArray(value) && value.length === 2 && value.every(item => number(item) && item >= 0 && item <= 1)
 const activity = record({
   ...fields('sequence generation', id), day: number, tick: count, count, summary: string,
-  kind: enumeration('food-collected', 'attack-success', 'attack-failure', 'energy-death', 'reached-home', 'natural-regrowth', 'intervention', 'generation-settlement'),
+  kind: enumeration('food-collected', 'attack-success', 'attack-failure', 'energy-death', 'reached-home', 'home-relocated', 'natural-regrowth', 'intervention', 'generation-settlement'),
   location: optional(location), actorIds: optional(array(id, MAX_POPULATION * 2)), attackerId: optional(id), preyId: optional(id),
   contestChance: optional(value => number(value) && (value as number) >= 0 && (value as number) <= 1),
 })

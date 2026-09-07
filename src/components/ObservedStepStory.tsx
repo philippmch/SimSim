@@ -10,7 +10,7 @@ export interface FirstGenerationGuideProps{
   stepState:'ready'|'pending'|'observed'|'finishing'
 }
 
-const labels:Record<WorldActivityKind,string>={'food-collected':'Food collected','attack-success':'Attack success','attack-failure':'Attack failed','energy-death':'Energy loss','reached-home':'Reached home','natural-regrowth':'Natural regrowth',intervention:'Intervention','generation-settlement':'Generation settled'}
+const labels:Record<WorldActivityKind,string>={'food-collected':'Food collected','attack-success':'Attack success','attack-failure':'Attack failed','energy-death':'Energy loss','reached-home':'Reached home','home-relocated':'Chose a new home','natural-regrowth':'Natural regrowth',intervention:'Intervention','generation-settlement':'Generation settled'}
 const safe=(value:unknown):value is number=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0
 const validKind=(value:unknown):value is WorldActivityKind=>typeof value==='string'&&Object.prototype.hasOwnProperty.call(labels,value)
 

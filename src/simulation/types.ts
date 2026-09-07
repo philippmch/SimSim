@@ -25,6 +25,9 @@ export interface Config {
 }
 
 export interface Memory {foodX:number|null;foodY:number|null;foodUntil:number;threatX:number|null;threatY:number|null;threatUntil:number}
+/** One round of direct experience; zero-count coordinates carry no information. */
+export interface HomeExperience {foodCount:number;foodX:number;foodY:number;dangerCount:number;dangerX:number;dangerY:number}
+export interface HomeMove {generation:number;fromX:number;fromY:number;toX:number;toY:number;energyCost:number;reason:'food'|'danger'|'food-and-danger'}
 export interface Creature {
   id:number;x:number;y:number;homeX:number;homeY:number;angle:number;vx:number;vy:number
   individualId:number;lineageId:number;parentIndividualId:number|null;birthGeneration:number
@@ -35,6 +38,8 @@ export interface Creature {
   deathCause:'hunted'|'energy'|null
   decisionSummary?:DecisionSummary
   perceptionDiagnostics?:PerceptionDiagnostics
+  homeExperience?:HomeExperience
+  lastHomeMove?:HomeMove
 }
 export interface DecisionCandidateSummary{type:TargetType;mode:Mode;score:number;reason:string;targetId:number|null}
 export type DecisionSelectionBasis='best-utility'|'commitment'|'urgent-override'
@@ -84,7 +89,7 @@ export interface WorldEvent{generation:number;day:number;kind:InterventionKind;s
  * ticks deliberately do not create entries; aggregate events use `count` and
  * omit actor IDs when there is no single actor to name.
  */
-export type WorldActivityKind='food-collected'|'attack-success'|'attack-failure'|'energy-death'|'reached-home'|'natural-regrowth'|'intervention'|'generation-settlement'
+export type WorldActivityKind='food-collected'|'attack-success'|'attack-failure'|'energy-death'|'reached-home'|'home-relocated'|'natural-regrowth'|'intervention'|'generation-settlement'
 export interface WorldActivityEntry{
   sequence:number;generation:number;day:number;tick:number;kind:WorldActivityKind;summary:string
   /** Event units; for generation-settlement this is the exact next-population size. */

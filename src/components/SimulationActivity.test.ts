@@ -214,6 +214,13 @@ describe('simulation activity helpers', () => {
     expect(formatActivityContext(failure, {})).toContain('Current predation mode unavailable')
   })
 
+  it('recognizes voluntary home moves and explains the family cost rule',()=>{
+    const moved=normalizeActivityMoment(moment({kind:'home-relocated',actorIds:[7],summary:'Individual 7 chose a new home.'}),0)!
+    expect(moved.kindLabel).toBe('Chose a new home')
+    expect(formatActivityContext(moved,contextConfig)).toContain('Moving cost energy')
+    expect(formatActivityContext(moved,contextConfig)).toContain('offspring start at the chosen home')
+  })
+
   it('reports the exact settlement accounting rule without parsing or repeating summary prose', () => {
     const complete = normalizeActivityMoment(moment({ kind: 'generation-settlement', count: 5, summary: 'Generation 1 settled: 3 survivors + 2 admitted births → generation 2 starts with 5 creatures.' }), 0)!
     const incomplete = normalizeActivityMoment(moment({ kind: 'generation-settlement', count: 5 }), 0)!
@@ -227,7 +234,7 @@ describe('simulation activity helpers', () => {
     expect(contexts.join(' ')).not.toMatch(/NaN|Infinity|undefined/)
     expect(contexts.join(' ')).not.toMatch(/trait caused|because|led to/i)
     expect(contexts[0]).toContain('Phase attribution is unavailable')
-    expect(contexts[1]).toContain('returning and crossing the home radius')
+    expect(contexts[1]).toContain('Resting still uses energy')
     expect(contexts[2]).toContain('no per-patch breakdown')
     expect(contexts[3]).toContain('takes effect immediately')
   })

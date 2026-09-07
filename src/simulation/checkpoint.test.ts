@@ -20,6 +20,19 @@ function rewriteRun(text: string, path: string, value: unknown) {
 }
 
 describe('saved runs', () => {
+  it('validates optional home experience and movement records, while accepting old saves', () => {
+    const world=createWorld(defaultConfig), saved=encodeRun(world)
+    expect(decodeRun(saved).world.creatures[0].homeExperience).toBeUndefined()
+    const experience={foodCount:2,foodX:.4,foodY:.6,dangerCount:0,dangerX:0,dangerY:0}
+    expect(decodeRun(rewriteRun(saved,'creatures.0.homeExperience',experience)).world.creatures[0].homeExperience).toEqual(experience)
+    expect(()=>decodeRun(rewriteRun(saved,'creatures.0.homeExperience',{...experience,foodX:2}))).toThrow()
+    expect(()=>decodeRun(rewriteRun(saved,'creatures.0.homeExperience',{...experience,foodCount:-1}))).toThrow()
+    const move={generation:1,fromX:.025,fromY:.3,toX:.025,toY:.36,energyCost:1,reason:'food'}
+    expect(decodeRun(rewriteRun(saved,'creatures.0.lastHomeMove',move)).world.creatures[0].lastHomeMove).toEqual(move)
+    expect(()=>decodeRun(rewriteRun(saved,'creatures.0.lastHomeMove',{...move,energyCost:-1}))).toThrow()
+    expect(()=>decodeRun(rewriteRun(saved,'creatures.0.lastHomeMove',{...move,reason:'random'}))).toThrow()
+  })
+
   it.each([
     ['ledger', [null]], ['ledger.0.selection.start.speed', null],
     ['ledger.0.selectionByOutcome.hunted', {}], ['ledger.0.inheritance', { offspringCount: 1 }],

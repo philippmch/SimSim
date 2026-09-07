@@ -16,6 +16,7 @@ const ACTIVITY_KIND_LABELS: Record<WorldActivityKind, string> = {
   'attack-failure': 'Attack failed',
   'energy-death': 'Energy loss',
   'reached-home': 'Reached home',
+  'home-relocated': 'Chose a new home',
   'natural-regrowth': 'Natural regrowth',
   intervention: 'Intervention',
   'generation-settlement': 'Generation settled',
@@ -411,11 +412,13 @@ export function formatActivityContext(moment: SimulationActivityMoment, config?:
       return `Model context: Current predation mode unavailable; ${chanceText}, and the attack-cost rule is unavailable.`
     }
     case 'energy-death':
-      return 'Model context: Energy reached zero; movement, sensing, and admitted contest attempts can spend it. Phase attribution is unavailable for this record.'
+      return `Model context: Energy reached zero; movement, ${ecologyMode(config)==='energy-regrowth'?'resting metabolism, ':''}sensing, and admitted contest attempts can spend it. Phase attribution is unavailable for this record.`
+    case 'home-relocated':
+      return 'The creature chose a nearby home between rounds using remembered food or attacks. Moving cost energy. Its offspring start at the chosen home too.'
     case 'reached-home': {
       const mode = ecologyMode(config)
       if (mode === 'classic') return 'Model context: In classic mode, carrying food and crossing the home radius ends the active day.'
-      if (mode === 'energy-regrowth') return 'Model context: In energy-regrowth mode, returning and crossing the home radius ends the active day.'
+      if (mode === 'energy-regrowth') return 'Model context: Reaching home begins a rest. Resting still uses energy; hungry creatures may forage again if time allows.'
       return 'Model context: Home-radius and mode-specific return rules are unavailable in this snapshot.'
     }
     case 'natural-regrowth': {

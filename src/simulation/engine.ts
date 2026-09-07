@@ -11,6 +11,7 @@ import {advanceResourceDynamics,consumeResourceStock} from './resourceDynamics'
 import {settleLifecycle} from './lifecycle'
 import {retainIndividualActivity} from './individualHistory'
 import {restingEnergyRate,shouldLeaveHome} from './energyPolicy'
+import {chooseHomeMove,recordHomeFoodExperience,recordHomeDangerExperience} from './homePolicy'
 
 export {defaultConfig} from './config'
 export { getSelectionTakeaway, meetsStandardizedEffectThreshold, snapStandardizedEffect, SELECTION_SIGNAL_THRESHOLD, SELECTION_PATTERN_THRESHOLD, SELECTION_PATTERN_MIN_COUNT, SELECTION_THRESHOLD_TOLERANCE } from './selectionNarrative'
@@ -99,8 +100,8 @@ export function buildInheritanceSummary(pairs:readonly {parent:Pick<Creature,Bio
 }
 function founderValue(world:World,value:number,variation:number,min:number,max:number,multiplicative=true){if(!variation)return value;const noise=random(world)+random(world)+random(world)+random(world)-2;return clamp(multiplicative?value*(1+noise*variation):value+noise*variation,min,max)}
 type Identity={individualId:number;lineageId:number;parentIndividualId:number|null;birthGeneration:number}
-function makeCreature(world:World,traits:Partial<Creature>={},identity?:Partial<Identity>,founder=false):Creature{
-  const home=edgePoint(world),angle=Math.atan2(.5-home.y,.5-home.x)+(random(world)-.5)
+function makeCreature(world:World,traits:Partial<Creature>={},identity?:Partial<Identity>,founder=false,inheritedHome?:Pick<Creature,'homeX'|'homeY'>):Creature{
+  const home=inheritedHome?{x:inheritedHome.homeX,y:inheritedHome.homeY}:edgePoint(world),angle=Math.atan2(.5-home.y,.5-home.x)+(random(world)-.5)
   const physical=world.config.founderPhysicalVariation,behavior=world.config.founderBehaviorVariation
   const individualId=identity?.individualId??world.nextIndividualId++,lineageId=identity?.lineageId??world.nextLineageId++
   return{id:world.nextId++,x:home.x,y:home.y,homeX:home.x,homeY:home.y,angle,vx:0,vy:0,
@@ -265,10 +266,10 @@ export function tick(world:World,dt:number,boundaryConfig?:Config){
   const winners=<T extends {actor:number;resource:number;d:number}>(claims:T[])=>{const won=new Map<number,T>();for(const q of claims.sort((a,b)=>a.resource-b.resource||a.d-b.d||a.actor-b.actor))if(!won.has(q.resource))won.set(q.resource,q);return[...won.values()]}
   const foodWins=winners(foodClaims),foodById=new Map(world.food.map(food=>[food.id,food]))
   const eatenFood=new Set<number>()
-  for(const q of foodWins){const actor=byId.get(q.actor),food=foodById.get(q.resource);if(actor&&food&&(advanced||actor.food<2)){const reward=advanced?safeFoodEnergy(food,world.config):22;actor.food++;actor.energy+=reward;eatenFood.add(q.resource);world.dayFoodConsumed++;recordActivity(world,'food-collected',advanced?`${activityActorLabel(actor.individualId)} collected ${reward.toFixed(1)}-energy food.`:`${activityActorLabel(actor.individualId)} collected food.`,1,{actorIds:activityActorIds(actor.individualId),location:[food.x,food.y]});if(advanced&&food.patchId!==null)world.environment.patches=consumeResourceStock({patches:world.environment.patches},food.patchId).patches}}
+  for(const q of foodWins){const actor=byId.get(q.actor),food=foodById.get(q.resource);if(actor&&food&&(advanced||actor.food<2)){const reward=advanced?safeFoodEnergy(food,world.config):22;actor.food++;actor.energy+=reward;if(advanced)recordHomeFoodExperience(actor,food.x,food.y);eatenFood.add(q.resource);world.dayFoodConsumed++;recordActivity(world,'food-collected',advanced?`${activityActorLabel(actor.individualId)} collected ${reward.toFixed(1)}-energy food.`:`${activityActorLabel(actor.individualId)} collected food.`,1,{actorIds:activityActorIds(actor.individualId),location:[food.x,food.y]});if(advanced&&food.patchId!==null)world.environment.patches=consumeResourceStock({patches:world.environment.patches},food.patchId).patches}}
   world.food=world.food.filter(f=>!eatenFood.has(f.id))
   const attackClaims=collectAttackClaims(attackers,preyTargets,world.config),resolution=resolveAttackClaims(attackClaims,world.config,{seed:world.config.seed,generation:world.generation,tick:world.tickIndex})
-  for(const outcome of resolution.admitted){const attacker=activityActorLabel(outcome.attacker.individualId),prey=activityActorLabel(outcome.prey.individualId),chance=safeActivityChance(outcome.probability),chanceText=world.config.predationMode==='contest'&&chance!==null?` (contest chance ${formatActivityPercent(chance)}%)`:'';recordActivity(world,outcome.success?'attack-success':'attack-failure',`${outcome.success?`${attacker} caught ${prey}`:`${attacker}'s attack on ${prey} failed`}${chanceText}.`,1,{actorIds:activityActorIds(outcome.attacker.individualId,outcome.prey.individualId),attackerId:outcome.attacker.individualId,preyId:outcome.prey.individualId,contestChance:world.config.predationMode==='contest'?outcome.probability:undefined,location:[(outcome.attacker.x+outcome.prey.x)/2,(outcome.attacker.y+outcome.prey.y)/2]})}
+  for(const outcome of resolution.admitted){if(advanced){const target=byId.get(outcome.prey.id);if(target)recordHomeDangerExperience(target,outcome.attacker.x,outcome.attacker.y)}const attacker=activityActorLabel(outcome.attacker.individualId),prey=activityActorLabel(outcome.prey.individualId),chance=safeActivityChance(outcome.probability),chanceText=world.config.predationMode==='contest'&&chance!==null?` (contest chance ${formatActivityPercent(chance)}%)`:'';recordActivity(world,outcome.success?'attack-success':'attack-failure',`${outcome.success?`${attacker} caught ${prey}`:`${attacker}'s attack on ${prey} failed`}${chanceText}.`,1,{actorIds:activityActorIds(outcome.attacker.individualId,outcome.prey.individualId),attackerId:outcome.attacker.individualId,preyId:outcome.prey.individualId,contestChance:world.config.predationMode==='contest'?outcome.probability:undefined,location:[(outcome.attacker.x+outcome.prey.x)/2,(outcome.attacker.y+outcome.prey.y)/2]})}
   world.dayAttackAttempts+=world.config.predationMode==='threshold'?attackClaims.length:resolution.admitted.length;world.dayAttackSuccesses+=resolution.successes.length;world.dayAttackFailures+=resolution.failures.length;world.dayAttackContested+=resolution.rejected.filter(item=>item.reason==='prey-contested').length
   const attackEnergyDeaths:Creature[]=[]
   for(const delta of resolution.energyDeltas){const actor=byId.get(delta.id);if(actor){const wasAlive=actor.alive;actor.energy+=delta.delta;if(actor.energy<=0){actor.alive=false;actor.deathCause='energy';if(wasAlive)attackEnergyDeaths.push(actor)}}}
@@ -307,9 +308,18 @@ export function finishGeneration(world:World,boundaryConfig:Config=world.config)
       recordInspectedOutcome(world,inspectedIndividualId,world.generation,inspectedOutcome.cause)
     }
   }
-  const next:Creature[]=settlement.survivors.map(({individual:c,nextAge,settledEnergy})=>makeCreature(world,{speed:c.speed,size:c.size,sense:c.sense,aggression:c.aggression,caution:c.caution,exploration:c.exploration,age:nextAge,energy:settledEnergy},{individualId:c.individualId,lineageId:c.lineageId,parentIndividualId:c.parentIndividualId,birthGeneration:c.birthGeneration}))
+  const relocated:Creature[]=[]
+  const next:Creature[]=settlement.survivors.map(({individual:c,nextAge,settledEnergy})=>{
+    const move=chooseHomeMove(c,world.config,settledEnergy)
+    const home=move?{homeX:move.toX,homeY:move.toY}:c
+    const survivor=makeCreature(world,{speed:c.speed,size:c.size,sense:c.sense,aggression:c.aggression,caution:c.caution,exploration:c.exploration,age:nextAge,energy:settledEnergy-(move?.energyCost??0)},{individualId:c.individualId,lineageId:c.lineageId,parentIndividualId:c.parentIndividualId,birthGeneration:c.birthGeneration},false,world.config.ecologyMode==='energy-regrowth'?home:undefined)
+    if(move){survivor.lastHomeMove={...move,generation:world.generation+1};relocated.push(survivor)}
+    else if(c.lastHomeMove)survivor.lastHomeMove={...c.lastHomeMove}
+    return survivor
+  })
+  const nextParents=new Map(next.map(creature=>[creature.individualId,creature]))
   const newbornPairs:{parent:Creature;offspring:Creature}[]=[]
-  for(const {parent:c,energy} of settlement.births){const offspring=makeCreature(world,{speed:mutate(world,c.speed,'speed'),size:mutate(world,c.size,'size'),sense:mutate(world,c.sense,'sense'),aggression:mutate(world,c.aggression,'aggression'),caution:mutate(world,c.caution,'caution'),exploration:mutate(world,c.exploration,'exploration'),age:0,energy},{lineageId:c.lineageId,parentIndividualId:c.individualId,birthGeneration:world.generation+1});next.push(offspring);newbornPairs.push({parent:c,offspring})}
+  for(const {parent:c,energy} of settlement.births){const offspring=makeCreature(world,{speed:mutate(world,c.speed,'speed'),size:mutate(world,c.size,'size'),sense:mutate(world,c.sense,'sense'),aggression:mutate(world,c.aggression,'aggression'),caution:mutate(world,c.caution,'caution'),exploration:mutate(world,c.exploration,'exploration'),age:0,energy},{lineageId:c.lineageId,parentIndividualId:c.individualId,birthGeneration:world.generation+1},false,world.config.ecologyMode==='energy-regrowth'?nextParents.get(c.individualId):undefined);next.push(offspring);newbornPairs.push({parent:c,offspring})}
   const inheritance=buildInheritanceSummary(newbornPairs)
   const ledger:GenerationLedger={generation:world.generation,startPopulation:start.length,outcomes,foodAtStart:world.generationFoodStart,foodProduced:world.dayFoodProduced,foodRemoved:world.dayFoodRemoved,foodConsumed:world.dayFoodConsumed,foodRemaining:world.food.length,preyConsumed:world.dayPreyConsumed,attackAttempts:world.dayAttackAttempts,attackSuccesses:world.dayAttackSuccesses,attackFailures:world.dayAttackFailures,attackContested:world.dayAttackContested,attackAttemptBasis:world.config.predationMode==='threshold'?'claims':'admitted',birthsEligible:settlement.eligibleParents.length,birthsAdmitted:birthParents.length,birthsCapped:settlement.birthsCapped,...(world.config.ecologyMode==='energy-regrowth'?{birthsImmature:settlement.immatureParents.length}:{}),selection:{start:selectionSummary(start),survivor:selectionSummary(survivors),reproducer:selectionSummary(birthParents)},selectionByOutcome,inheritance}
   world.ledger.push(ledger);if(world.ledger.length>MAX_HISTORY_POINTS)world.ledger=world.ledger.slice(-MAX_HISTORY_POINTS)
@@ -317,6 +327,10 @@ export function finishGeneration(world:World,boundaryConfig:Config=world.config)
   const maturityNote=world.config.ecologyMode==='energy-regrowth'&&settlement.immatureParents.length?` ${activityCountLabel(settlement.immatureParents.length,'energy-ready survivor')} waited for maturity.`:''
   recordActivity(world,'generation-settlement',`Generation ${world.generation} settled: ${activityCountLabel(outcomes.survived,'survivor')} + ${activityCountLabel(birthParents.length,'admitted birth')} → generation ${world.generation+1} starts with ${activityCountLabel(next.length,'creature')}.${maturityNote}`,next.length)
   world.generation++;world.dayTime=0;world.tickIndex=0;world.creatures=next;if(world.inspectedIndividualId!==null&&!next.some(c=>c.individualId===world.inspectedIndividualId))world.inspectedIndividualId=null
+  for(const creature of relocated){
+    const move=creature.lastHomeMove!,reason=move.reason==='food'?'closer to food it collected':move.reason==='danger'?'away from an attack it experienced':'closer to collected food and away from attacks'
+    recordActivity(world,'home-relocated',`${activityActorLabel(creature.individualId)} moved home ${reason}, spending ${move.energyCost.toFixed(1)} energy.`,1,{actorIds:[creature.individualId],location:[move.toX,move.toY]})
+  }
   const nextFoodBudget=advanceFoodBudget(world.environment,boundaryConfig,world.generation);if(boundaryConfig.ecologyMode==='classic'){world.food=spawnFood(world,nextFoodBudget,boundaryConfig);syncPatchStocks(world)}world.generationFoodStart=world.food.length;world.history.push(averages(world.creatures,world.generation-1));if(world.history.length>MAX_HISTORY_POINTS)world.history=world.history.slice(-MAX_HISTORY_POINTS)
   world.dayHunted=0;world.dayFoodProduced=0;world.dayFoodRemoved=0;world.dayFoodConsumed=0;world.dayPreyConsumed=0;world.dayAttackAttempts=0;world.dayAttackSuccesses=0;world.dayAttackFailures=0;world.dayAttackContested=0
 }

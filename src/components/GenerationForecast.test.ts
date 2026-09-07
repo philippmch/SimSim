@@ -2,11 +2,24 @@ import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { CLASSIC_MODES, defaultConfig, MAX_POPULATION } from '../simulation/config'
-import { createWorld } from '../simulation/engine'
+import { createWorld, finishGeneration } from '../simulation/engine'
 import { formatGenerationForecastAriaLabel, formatGenerationForecastBirths, formatGenerationForecastEquation, formatGenerationForecastLosses, formatGenerationForecastTransition, GenerationForecast, summarizeGenerationForecast, summarizeSelectedSettlementPreview, type GenerationForecastSummary } from './GenerationForecast'
 import { formatSelectedSettlementReproduction } from './CreatureInspector'
 
 describe('generation forecast', () => {
+  it('includes voluntary relocation cost in next-round energy without changing survival or birth admission',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1,maturityAge:0,energyRetention:.75,reproductionEnergyCost:40})
+    const c=world.creatures[0]
+    Object.assign(c,{home:true,homeX:.025,homeY:.3,energy:200,homeExperience:{foodCount:1,foodX:.08,foodY:.8,dangerCount:0,dangerX:0,dangerY:0}})
+    const snapshot=structuredClone(world),preview=summarizeSelectedSettlementPreview(world,c.individualId)!
+    expect(world).toEqual(snapshot)
+    expect(preview.relocationCost).toBeGreaterThan(0)
+    expect(preview.reproductionStatus).toBe('admitted')
+    finishGeneration(world)
+    expect(world.creatures.find(x=>x.individualId===c.individualId)!.energy).toBe(preview.settledEnergy)
+    expect(preview.settledEnergy).toBe(110-preview.relocationCost!)
+  })
+
   it('uses classic settlement rules for the current cohort and loss causes', () => {
     const world = createWorld({ ...defaultConfig, ...CLASSIC_MODES, initialPopulation: 4, foodPerDay: 0 })
     const [breeder, survivor, unfed, late] = world.creatures
