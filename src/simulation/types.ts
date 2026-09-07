@@ -110,5 +110,7 @@ export interface World {
   events:WorldEvent[]
   /** Bounded salient activity trail; createWorld initializes it and engine writes repair older snapshots. */
   activity:WorldActivityEntry[];activityDropped:number;activitySequence:number
+  /** Bounded actor-event archive across generations; absent in legacy snapshots. */
+  individualActivity?:WorldActivityEntry[];individualActivityDropped?:number
   lastReport:{survived:number;born:number;starved:number;hunted:number;energy:number;unfed:number;late:number;aged:number;capped:number}
 }

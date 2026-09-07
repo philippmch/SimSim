@@ -1,6 +1,8 @@
 import type { BiologicalTrait, Config, Creature, DecisionCandidateSummary, DecisionProvenance, DecisionSelectionBasis, DecisionSummary, PerceptionDiagnostics, TargetType, World } from '../simulation/types'
 import { FORECAST_LOSS_LABELS, summarizeSelectedSettlementPreview, type SelectedSettlementPreview } from './SettlementPreview'
 import PerceptionBreakdown, { validPerceptionCounts } from './PerceptionBreakdown'
+import IndividualHistory from './IndividualHistory'
+import type { SimulationActivityMoment } from './SimulationActivity'
 
 export interface PerceptionTelemetryCopy {
   creatures: string
@@ -172,6 +174,7 @@ export interface CreatureInspectorProps {
   huntContactRule: string
   /** Optional live snapshot used by the App path to derive the preview lazily. */
   world?: World
+  onReviewMoment?: (moment: SimulationActivityMoment) => void
   /** Scalar lifecycle facts derived from the complete cohort; never a World reference. */
   settlementPreview?: SelectedSettlementPreview|null
   /** Optional aliases for the same cohort controls shown in the playback bar. */
@@ -194,7 +197,7 @@ export interface CreatureInspectorActionControls {
   finishGenerationTitle: string
 }
 
-export function CreatureInspector({ selected, world, ecologyMode, dayTime, stateLabel, targetLabel, decisionTargetLabel, huntContactRule, settlementPreview, actionControls, embedded=false, onClose }: CreatureInspectorProps) {
+export function CreatureInspector({ selected, world, ecologyMode, dayTime, stateLabel, targetLabel, decisionTargetLabel, huntContactRule, settlementPreview, actionControls, embedded=false, onClose, onReviewMoment }: CreatureInspectorProps) {
   const perceptionCopy = selected.perceptionDiagnostics ? formatPerceptionTelemetry(selected.perceptionDiagnostics) : null
   const decision=selected.decisionSummary
   const decisionContext=formatDecisionContext(selected,dayTime)
@@ -204,6 +207,7 @@ export function CreatureInspector({ selected, world, ecologyMode, dayTime, state
   const selectedSettlementPreview=settlementPreview===undefined&&world?summarizeSelectedSettlementPreview(world,selected.individualId):settlementPreview??null
 
   const details=<>
+    {world&&<IndividualHistory key={`history-${selected.individualId}`} selected={selected} world={world} onReviewMoment={onReviewMoment}/>}
     <div className="utility-breakdown" role="note" style={settlementPreviewStyle}>
       <strong>If generation ended now</strong>
       {selectedSettlementPreview

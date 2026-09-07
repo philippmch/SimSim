@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
-import { getSelectionTakeaway, MAX_WORLD_EVENTS, meetsStandardizedEffectThreshold, SELECTION_PATTERN_MIN_COUNT, SELECTION_PATTERN_THRESHOLD, snapStandardizedEffect } from '../simulation/engine'
+import { MAX_WORLD_EVENTS } from '../simulation/engine'
+import { getSelectionTakeaway, meetsStandardizedEffectThreshold, SELECTION_PATTERN_MIN_COUNT, SELECTION_PATTERN_THRESHOLD, snapStandardizedEffect } from '../simulation/selectionNarrative'
 import { END_CAUSES } from '../simulation/types'
 import type { AttackAttemptBasis, BiologicalTrait, EndCause, GenerationLedger, InheritanceTraitSummary, SelectionSummary, WorldEvent } from '../simulation/types'
 import { completePendingGenerationJournalFocus } from './Charts'
