@@ -58,6 +58,30 @@ playback and inspects its current state. An orange “Then” marker shows a rec
 event site when available; guides connect it to actors' current positions, not
 to reconstructed movement paths.
 
+Arena view controls zoom from 1× to 4×. Drag with a mouse or touch to pan while
+zoomed. Focus the arena or view controls to use arrow keys, plus/minus, or Home
+to reset. Inspections bring the selected subject or reviewed event site into
+view. Zooming and panning do not advance the simulation.
+
+The individual inspector's **Individual history** follows its stable biological
+identity across generations. A separate shared archive retains up to 480 actor
+events, oldest first, with generation and event context. Older archived records
+remain readable after leaving the short arena review trail; recent records can
+be reviewed in the arena. This bounded archive excludes relatives and ordinary
+movement ticks and does not promise a complete biography.
+
+**Save & resume run** provides one manual save slot in the current browser.
+**Save run** captures the current simulation moment, configuration, random state,
+environment, individuals, and retained history. It survives closing and reopening
+the browser. **Resume saved run** asks before replacing the current run and staged
+settings, then restores the saved moment paused. Save again to replace the slot;
+clearing browser data removes it. Configuration links still share only a setup.
+
+Steering wraps accumulated headings before choosing the shortest turn, so
+equivalent orientations produce the same pursuit, obstacle detours, and energy
+use. Hunting and energy rules remain model assumptions, with regression tests
+for costs, cooldowns, simultaneous attacks, and generation settlement.
+
 **Review event in arena** pins a retained record, including earlier generations,
 instead of highlighting an unrelated newer event. Actor inspection also reviews
 its associated record when a stable event identity is available. Review explains

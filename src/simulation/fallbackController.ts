@@ -41,8 +41,8 @@ export function fallbackController(initial: Config | World, onSnapshot: Snapshot
   return {
     mode: 'fallback',
     send(command: WorkerCommand) {
-      if (command.type === 'init' || command.type === 'reset') {
-        world = createWorld(command.config)
+      if (command.type === 'init' || command.type === 'reset' || command.type === 'restore') {
+        world = command.type === 'restore' ? structuredClone(command.world) : createWorld(command.config)
         playing = false
         remainder = 0
         emitSnapshot()

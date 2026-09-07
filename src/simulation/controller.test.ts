@@ -14,6 +14,39 @@ afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();FakeWorker.instances=[]}
 const settleLazyFallback=()=>vi.dynamicImportSettled()
 
 describe('controller failover and ordering',()=>{
+  it('restores a new epoch, rejects old snapshots and keeps the saved state during failover',async()=>{
+    vi.stubGlobal('Worker',FakeWorker)
+    const saved=createWorld({...defaultConfig,seed:733})
+    saved.dayTime=2.5;saved.tickIndex=100
+    const observed:typeof saved[]=[]
+    const controller=createController(defaultConfig,world=>observed.push(world),()=>{})
+    const worker=FakeWorker.instances[0]
+    controller.send({type:'play'})
+    controller.send({type:'restore',world:saved})
+    const restore=worker.sent.at(-1)
+    expect(restore?.type).toBe('restore')
+    expect(restore&&'epoch'in restore?restore.epoch:undefined).toBe(2)
+    worker.emit({type:'snapshot',epoch:1,world:createWorld(defaultConfig)})
+    expect(observed).toHaveLength(0)
+    worker.fail()
+    await settleLazyFallback()
+    expect(observed.at(-1)).toEqual(saved)
+    controller.dispose()
+  })
+  it('queues restore during fallback loading before advancing the saved world',async()=>{
+    vi.stubGlobal('Worker',undefined)
+    const saved=createWorld({...defaultConfig,seed:734})
+    saved.generation=3;saved.dayTime=2.5;saved.tickIndex=100
+    const observed:typeof saved[]=[]
+    const controller=createController(defaultConfig,world=>observed.push(world),()=>{})
+    controller.send({type:'restore',world:saved})
+    controller.send({type:'step',stepId:88})
+    await settleLazyFallback()
+    expect(observed.at(-1)?.config.seed).toBe(734)
+    expect(observed.at(-1)?.generation).toBe(3)
+    expect(observed.at(-1)?.tickIndex).toBeGreaterThan(100)
+    controller.dispose()
+  })
   it('starts fallback from the latest world snapshot without resetting progress',()=>{const world=createWorld({...defaultConfig,seed:78});world.generation=7;world.dayTime=4.25;world.creatures[0].food=1;let observed=world;const controller=fallbackController(world,value=>{observed=value});expect(observed.generation).toBe(7);expect(observed.dayTime).toBe(4.25);expect(observed.creatures[0].food).toBe(1);expect(observed).not.toBe(world);controller.dispose()})
   it('lazily starts fallback and queues every command issued before it is ready',async()=>{
     vi.stubGlobal('Worker',undefined)

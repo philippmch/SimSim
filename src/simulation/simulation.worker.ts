@@ -7,7 +7,7 @@ let world:World|undefined,playing=false,speed=1,last=performance.now(),remainder
 const emit=(event:WorkerEvent)=>self.postMessage(event)
 setInterval(()=>{if(!world||!playing)return;const now=performance.now(),schedule=scheduledTicks(Math.min(.1,(now-last)/1000),speed,remainder);last=now;remainder=schedule.remainder;runScheduled(world,schedule.count);if(!world.creatures.length)playing=false;emit({type:'snapshot',world,epoch,lastCommandId})},50)
 self.onmessage=(event:MessageEvent<WorkerCommand>)=>{try{const command=event.data
-  if(command.type==='init'||command.type==='reset'){epoch=command.epoch??epoch+1;lastCommandId=0;world=createWorld(command.config);playing=false;remainder=0;emit({type:'snapshot',world,epoch,lastCommandId})}
+  if(command.type==='init'||command.type==='reset'||command.type==='restore'){epoch=command.epoch??epoch+1;lastCommandId=0;world=command.type==='restore'?structuredClone(command.world):createWorld(command.config);playing=false;remainder=0;emit({type:'snapshot',world,epoch,lastCommandId})}
   else if(command.type==='play'){playing=true;last=performance.now()}
   else if(command.type==='pause')playing=false
   else if(command.type==='step'&&world){playing=false;last=performance.now();remainder=0;const{stepContext,stepResult}=advanceToNextActionWithContext(world);emit({type:'snapshot',world,epoch,lastCommandId,stepId:command.stepId,stepResult,stepContext})}

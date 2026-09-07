@@ -181,9 +181,9 @@ export function createController(config: Config, onSnapshot: SnapshotHandler, on
     if (disposed || fallbackState === 'failed') return
 
     let nextCommand = command
-    if (command.type === 'init' || command.type === 'reset') {
-      currentConfig = command.config
-      latestWorld = undefined
+    if (command.type === 'init' || command.type === 'reset' || command.type === 'restore') {
+      currentConfig = command.type === 'restore' ? command.world.config : command.config
+      latestWorld = command.type === 'restore' ? structuredClone(command.world) : undefined
       pendingInterventions = []
       nextCommandId = 0
       playing = false
