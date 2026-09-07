@@ -59,6 +59,31 @@ describe('motion',()=>{
     expect(Math.hypot(m.vx-c.vx,m.vy-c.vy)).toBeLessThanOrEqual(w.config.acceleration*.1/c.size+1e-12)
     expect(m.vx).toBeGreaterThan(-.01)
   })
+  it.each([-8,-2,2,8])('keeps movement and energy identical after %i full heading revolutions',turns=>{
+    const w=world(1),c=w.creatures[0]
+    Object.assign(c,{x:.5,y:.5,homeX:.05,homeY:.05,angle:.2,vx:.02,vy:.004})
+    const d=decision(c,.8,.7),baseline=proposeMotion(c,d,w.config,[],.1)
+    const offset=turns*Math.PI*2,rotated=proposeMotion({...c,angle:c.angle+offset},d,w.config,[],.1)
+    expect(rotated.angle-offset).toBeCloseTo(baseline.angle,12)
+    for(const field of ['x','y','vx','vy','energy'] as const)expect(rotated[field]).toBeCloseTo(baseline[field],12)
+  })
+  it('keeps the short turn when a hunting pursuit crosses several revolutions',()=>{
+    const w=world(1),c=w.creatures[0]
+    Object.assign(c,{x:.5,y:.5,angle:Math.PI*4-.05,vx:.02,vy:0})
+    const d={...decision(c,.8,.5),mode:'hunting' as const,targetType:'prey' as const,targetId:99}
+    const m=proposeMotion(c,d,w.config,[],.1)
+    expect(m.angle-c.angle).toBeCloseTo(.05,12)
+    expect(Math.sin(m.angle)).toBeCloseTo(0,12)
+    expect(m.vx).toBeGreaterThan(c.vx)
+  })
+  it('keeps obstacle detours equivalent for accumulated headings',()=>{
+    const w=world(1),c=w.creatures[0],o={id:77,x:.5,y:.5,radius:.1}
+    Object.assign(c,{x:.39,y:.5,vx:.038,vy:0,angle:0})
+    const d=decision(c,.7,.5),baseline=proposeMotion(c,d,w.config,[o],.1)
+    const offset=8*Math.PI,rotated=proposeMotion({...c,angle:offset},d,w.config,[o],.1)
+    expect(rotated.angle-offset).toBeCloseTo(baseline.angle,12)
+    for(const field of ['x','y','vx','vy','energy'] as const)expect(rotated[field]).toBeCloseTo(baseline[field],12)
+  })
   it('prevents obstacle penetration and bounds escape',()=>{
     const w=world(1),c=w.creatures[0],o={id:77,x:.5,y:.5,radius:.1}
     Object.assign(c,{x:.39,y:.5,vx:.08,vy:0,angle:0})

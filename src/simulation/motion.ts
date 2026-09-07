@@ -3,7 +3,9 @@ import type { Decision } from './behavior'
 import { clamp } from './random'
 
 export interface Motion {id:number;x:number;y:number;vx:number;vy:number;angle:number;energy:number;home:boolean}
-const angleDelta=(a:number,b:number)=>((b-a+Math.PI*3)%(Math.PI*2))-Math.PI
+// Headings accumulate across ticks; JavaScript's remainder can be negative
+// after multiple revolutions. Wrap both signs before choosing the short turn.
+const angleDelta=(a:number,b:number)=>{const wrapped=(b-a+Math.PI*3)%(Math.PI*2);return(wrapped<0?wrapped+Math.PI*2:wrapped)-Math.PI}
 const MOTION_EPS=1e-10
 type Point={x:number;y:number}
 
