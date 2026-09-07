@@ -643,12 +643,12 @@ function App(){
   useEffect(()=>{
     if(!shouldFocusSelectedInspector({requestedIndividualId:selectedInspectorFocusRequestRef.current,selectedIndividualId,inspectorRendered:Boolean(selected)}))return
     selectedInspectorFocusRequestRef.current=null
-    selectedInspectorRef.current?.focus()
+    selectedInspectorRef.current?.focus({preventScroll:true})
   },[selected,selectedIndividualId])
   useEffect(()=>{
     if(!shouldFocusResourcePatchInspector({requestedPatchId:selectedPatchInspectorFocusRequestRef.current,selectedPatchId,inspectorRendered:Boolean(selectedPatch)}))return
     selectedPatchInspectorFocusRequestRef.current=null
-    selectedPatchInspectorRef.current?.focus()
+    selectedPatchInspectorRef.current?.focus({preventScroll:true})
   },[selectedPatch,selectedPatchId])
   useEffect(()=>{
     if(selectedIndividualId===null||world.creatures.some(creature=>creature.alive&&creature.individualId===selectedIndividualId))return
