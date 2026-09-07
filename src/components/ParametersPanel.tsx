@@ -48,19 +48,24 @@ function SelectControl({ label, value, onChange, options }: { label: string; val
 
 function ParametersPanel({ draft, liveConfig, dirty, actionStatus, runtimeMode, setDraft, onStatusChange, onApply }: ParametersPanelProps) {
   const importRef = useRef<HTMLInputElement>(null)
+  const seedRef = useRef<HTMLInputElement>(null)
   const update = <K extends keyof Config>(key: K, value: Config[K]) => setDraft(config => ({ ...config, [key]: value }))
   const maturityAge = typeof draft.maturityAge === 'number' && Number.isFinite(draft.maturityAge) ? Math.max(0, Math.min(200, Math.round(draft.maturityAge))) : 0
   const patchQualityVariation = typeof draft.patchQualityVariation === 'number' && Number.isFinite(draft.patchQualityVariation) ? Math.max(0, Math.min(1, draft.patchQualityVariation)) : 0
 
   return <>
-    <div className="seed-row"><label htmlFor="seed">Random seed</label><input id="seed" type="number" value={draft.seed} min="1" max="9999999" onChange={event => { const value = event.currentTarget.valueAsNumber; update('seed', Number.isFinite(value) ? Math.max(1, Math.min(9999999, Math.round(value))) : defaultConfig.seed) }} /><button aria-label="Choose a new random seed" onClick={() => update('seed', Math.floor(Math.random() * 9999998) + 1)}>↻</button></div>
+    <div className="seed-row"><label htmlFor="seed">Random seed</label><input ref={seedRef} id="seed" type="number" value={draft.seed} min="1" max="9999999" onChange={event => { const value = event.currentTarget.valueAsNumber; update('seed', Number.isFinite(value) ? Math.max(1, Math.min(9999999, Math.round(value))) : defaultConfig.seed) }} /><button aria-label="Choose a new random seed" onClick={() => update('seed', Math.floor(Math.random() * 9999998) + 1)}>↻</button></div>
     <div className="share-tools" role="group" aria-label="Experiment sharing and files">
       <button onClick={async () => { try { await navigator.clipboard.writeText(experimentUrl(liveConfig, location.href)); onStatusChange('Experiment link copied.') } catch { onStatusChange('Could not access the clipboard.') } }}>Copy experiment link</button>
       <button onClick={() => { try { const blob = new Blob([exportExperiment(liveConfig)], { type: 'application/json' }), url = URL.createObjectURL(blob), link = document.createElement('a'); link.href = url; link.download = `evolution-field-lab-seed-${liveConfig.seed}.json`; link.click(); URL.revokeObjectURL(url); onStatusChange('Experiment exported.') } catch { onStatusChange('Could not export this experiment.') } }}>Export experiment</button>
       <button onClick={() => importRef.current?.click()}>Import experiment</button>
       <input ref={importRef} className="sr-only" type="file" accept="application/json,.json" onChange={async event => { try { const file = event.target.files?.[0]; if (!file) return; if (file.size > MAX_EXPERIMENT_TEXT) throw new Error('too large'); const imported = importExperiment(await file.text()); if (!imported) throw new Error(); setDraft(imported); onStatusChange('Experiment imported. Apply and restart to use it.') } catch { onStatusChange('Import failed: choose a valid experiment JSON file under 64 KB.') } finally { event.target.value = '' } }} />
     </div>
+    <p className="model-note">Links and exports use the running experiment's settings. Apply staged edits first to include them.</p>
     <p className="action-status" role="status">{actionStatus}{runtimeMode === 'fallback' ? ' Running in compatibility mode.' : ''}</p>
+    <div className="share-tools" role="group" aria-label="Staged parameter changes">
+      <button type="button" disabled={!dirty} style={{ minHeight: 44, opacity: dirty ? 1 : .5 }} onClick={() => { setDraft({ ...liveConfig }); onStatusChange('Staged changes discarded. Running experiment settings restored.'); seedRef.current?.focus() }}>Discard staged changes</button>
+    </div>
     <fieldset><legend>Simulation model</legend>
       <div className="model-presets" role="group" aria-label="Simulation model presets">
         <button aria-pressed={draft.ecologyMode === 'energy-regrowth' && draft.perceptionMode === 'realistic' && draft.predationMode === 'contest'} onClick={() => setDraft(config => ({ ...config, ecologyMode: 'energy-regrowth', perceptionMode: 'realistic', predationMode: 'contest' }))}>Ecological</button>

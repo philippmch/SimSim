@@ -156,6 +156,10 @@ use the same versioned JSON envelope. URL configuration takes precedence over
 local storage, which takes precedence over defaults. Simulation seeds and stable
 fixed-step updates reproduce the same run.
 
+Parameter edits are staged until **Apply parameters & restart**. **Discard staged
+changes** restores the running experiment's settings without restarting or
+changing playback. Experiment links and exports use the running settings.
+
 Everything runs in the browser. There are no accounts, analytics, server calls,
 or uploads. Experiment links place configuration—not simulation history—in the
 URL. Exported files remain on the user's device.
