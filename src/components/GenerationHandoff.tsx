@@ -254,10 +254,16 @@ export function GenerationHandoff({
   const forecastContext = previewPresent ? playbackStatus === 'Extinct' ? 'no settlement preview' : 'if settled now' : null
   const comparisonContext = [currentContext, forecastContext, hasRecords ? 'previous recorded result' : 'no recorded result yet'].filter(Boolean).join(' · ')
   return <div className="interventions" role="group" aria-label="Generation handoff" style={{ alignItems: 'stretch', flexWrap: 'wrap', gap: '8px 14px' }}>
-    <span style={{ flex: '1 1 100%', minWidth: 0, marginRight: 0, whiteSpace: 'normal' }}><strong style={{ fontSize: 12 }}>Generation handoff</strong><small>{comparisonContext}</small></span>
-    <CurrentStateLane world={world} playbackStatus={playbackStatus} playing={playing} living={living} total={total} active={active}/>
-    {forecastNode}
     {hasRecords && <RecordedGenerationHandoff ledgers={ledgers} onReviewGeneration={onReviewGeneration} revealGeneration={revealGeneration} onRevealComplete={onRevealComplete} currentGeneration={read(world, 'generation')} forecastPresent={previewPresent} playbackStatus={playbackStatus}/>}
+    {!hasRecords && <span style={{ ...detailStyle, flex: '1 1 100%' }}>No generation results recorded yet. After a generation ends, see who survived, why creatures died, and how the population changed.</span>}
+    <details style={{ flex: '1 1 100%', minWidth: 0 }}>
+      <summary style={{ cursor: 'pointer', color: 'var(--muted)' }}>Current generation and survival preview</summary>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 14px', paddingTop: 10 }}>
+        <span style={{ flex: '1 1 100%', minWidth: 0, marginRight: 0, whiteSpace: 'normal' }}><strong style={{ fontSize: 12 }}>Generation handoff</strong><small>{comparisonContext}</small></span>
+        <CurrentStateLane world={world} playbackStatus={playbackStatus} playing={playing} living={living} total={total} active={active}/>
+        {forecastNode}
+      </div>
+    </details>
   </div>
 }
 

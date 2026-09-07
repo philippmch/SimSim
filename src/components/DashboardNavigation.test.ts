@@ -40,6 +40,16 @@ describe('dashboard navigation markup', () => {
 })
 
 describe('openDashboardSection', () => {
+  it('opens enclosing disclosures before scrolling to a review target', () => {
+    const order: string[] = []
+    const outer = { setAttribute: () => order.push('outer opened'), parentElement: null }
+    const inner = { setAttribute: () => order.push('inner opened'), parentElement: { closest: () => outer } }
+    const target = { ...targetSpy(), closest: () => inner as unknown as Element, scrollIntoView: () => order.push('scrolled') }
+    openDashboardSection(DASHBOARD_SECTION_IDS.generationJournal, {
+      document: { getElementById: () => target }, scheduleFocus: callback => callback(),
+    })
+    expect(order).toEqual(['inner opened', 'outer opened', 'scrolled'])
+  })
   it('scrolls the stable target and focuses a freshly queried replacement', () => {
     const first = targetSpy()
     const replacement = targetSpy()

@@ -5,7 +5,8 @@ import type { GenerationLedger, World } from '../simulation/types'
 import { defaultConfig, createWorld } from '../simulation/engine'
 import { GenerationHandoff, formatGenerationHandoffDay, formatGenerationHandoffPhase, formatGenerationHandoffPopulation } from './GenerationHandoff'
 import type { GenerationHandoffProps } from './GenerationHandoff'
-import { GENERATION_HANDOFF_REVEAL_SCROLL_OPTIONS, RecordedGenerationHandoff, formatGenerationHandoffTransition, resolveGenerationHandoffRevealTarget, resolveGenerationHandoffTransition } from './RecordedGenerationHandoff'
+import { GENERATION_HANDOFF_REVEAL_SCROLL_OPTIONS, RecordedGenerationHandoff, formatGenerationDeaths, formatGenerationOutcome, formatGenerationHandoffTransition, resolveGenerationHandoffRevealTarget, resolveGenerationHandoffTransition } from './RecordedGenerationHandoff'
+import { summarizeSettlementReport } from './SettlementReport'
 import type { SettlementReportSummary } from './SettlementReport'
 
 const makeLedger = (overrides: Record<string, unknown> = {}): GenerationLedger => ({
@@ -40,6 +41,30 @@ const recordedMarkup = (ledgers: unknown, revealGeneration: number | null = null
 }))
 
 describe('generation handoff formatters', () => {
+  it('explains birth-admitted growth, decline, and extinction from the recorded cohort', () => {
+    const stable = summarizeSettlementReport(makeLedger())!
+    expect(formatGenerationOutcome(stable)).toBe('2 of 3 survived and 1 offspring was born. Generation 5 began with 3 creatures, the same population size.')
+    const growing = summarizeSettlementReport(makeLedger({ birthsEligible: 2, birthsAdmitted: 2 }))!
+    expect(formatGenerationOutcome(growing)).toContain('Generation 5 began with 4 creatures, 1 more than this cohort.')
+    const declined = summarizeSettlementReport(makeLedger({ birthsAdmitted: 0, birthsCapped: 1 }))!
+    expect(formatGenerationOutcome(declined)).toContain('0 offspring were born')
+    expect(formatGenerationOutcome(declined)).toContain('2 creatures, 1 fewer than this cohort.')
+    const extinct = summarizeSettlementReport(makeLedger({ outcomes: { survived: 0, hunted: 0, energy: 3, unfed: 0, late: 0, aged: 0 }, birthsAdmitted: 0 }))!
+    expect(formatGenerationOutcome(extinct)).toContain('0 creatures, 3 fewer than this cohort.')
+    expect(formatGenerationDeaths(extinct)).toBe('3 died: 3 ran out of energy.')
+  })
+
+  it('explains exact nonzero death causes and keeps incomplete causes unknown', () => {
+    const summary = summarizeSettlementReport(makeLedger({ startPopulation: 8, outcomes: { survived: 2, hunted: 2, energy: 1, unfed: 1, late: 1, aged: 1 } }))!
+    expect(formatGenerationDeaths(summary)).toBe('6 died: 2 were hunted; 1 ran out of energy; 1 had not eaten by the end of the day; 1 did not reach home before nightfall; 1 reached their maximum age.')
+    expect(formatGenerationDeaths(summarizeSettlementReport(makeLedger())!)).toBe('1 died: 1 was hunted.')
+    const noDeaths = summarizeSettlementReport(makeLedger({ startPopulation: 2, outcomes: { survived: 2, hunted: 0, energy: 0, unfed: 0, late: 0, aged: 0 } }))!
+    expect(formatGenerationDeaths(noDeaths)).toBe('No creatures died in this generation.')
+    const incomplete = summarizeSettlementReport(makeLedger({ outcomes: { survived: 2, hunted: 0 } }))!
+    expect(formatGenerationDeaths(incomplete)).toContain('death records are incomplete')
+    expect(formatGenerationDeaths(incomplete)).not.toContain('No creatures died')
+  })
+
   it('resolves only a matching safe generation and uses a non-animated nearest scroll', () => {
     const target = { scrollIntoView: vi.fn() }
     expect(resolveGenerationHandoffRevealTarget(7, 7, target)).toEqual({ generation: 7, target, options: GENERATION_HANDOFF_REVEAL_SCROLL_OPTIONS })
@@ -84,6 +109,17 @@ describe('generation handoff formatters', () => {
 })
 
 describe('generation handoff states', () => {
+  it('keeps recorded outcomes and review visible while details and forecasts start collapsed', () => {
+    const output = markup(makeWorld({ generation: 5, ledger: [makeLedger()] }), 'Paused')
+    expect(output).toContain('Generation 4 complete')
+    expect(output.indexOf('2 of 3 survived')).toBeLessThan(output.indexOf('<details>'))
+    expect(output.indexOf('</details>')).toBeLessThan(output.indexOf('aria-label="Review generation 4"'))
+    expect(output).toContain('Recorded details</summary>')
+    expect(output).toContain('Current generation and survival preview</summary>')
+    expect(output).not.toMatch(/<details[^>]*\bopen/)
+    expect(output).not.toContain('role="dialog"')
+  })
+
   it('places the live forecast after current state in one labeled comparison', () => {
     const world = makeWorld({ generation: 4 })
     const output = renderToStaticMarkup(createElement(GenerationHandoff, {
@@ -159,7 +195,7 @@ describe('generation handoff states', () => {
 
     expect(visibleFalsey).toContain('Current cohort · if settled now · previous recorded result')
     expect(visibleFalsey).toContain('This settlement ended Generation 3')
-    expect(visibleFalsey).toContain('>0<div')
+    expect(visibleFalsey).toContain('>0</div>')
     expect(truthyEmpty).toContain('Current cohort · previous recorded result')
     expect(truthyEmpty).not.toContain('if settled now')
     expect(truthyEmpty).not.toContain('This settlement ended Generation 3')
@@ -182,7 +218,7 @@ describe('generation handoff states', () => {
     const actualIndex = output.indexOf('data-handoff-kind="actual"')
     expect(output).toContain('Current cohort · if settled now · previous recorded result')
     expect(currentIndex).toBeLessThan(forecastIndex)
-    expect(forecastIndex).toBeLessThan(actualIndex)
+    expect(actualIndex).toBeLessThan(currentIndex)
     expect(output).toContain('Forecast transition · Generation 4 → 5')
     expect(output).toContain('Generation 3 → 4 · recorded at settlement')
     expect(output).toContain('This settlement ended Generation 3 and started the current Generation 4 cohort at day 0. Current-state and preview numbers belong to Generation 4, not this recorded result.')
@@ -230,7 +266,7 @@ describe('generation handoff states', () => {
     expect(output).toContain('Reproduction: 1 eligible parent · 1 admitted birth · 0 capacity-capped births')
     expect(output).not.toContain('mature + energy-eligible')
     expect(output).toContain('Review generation 4')
-    expect(output).toContain('Actual result · not a counterfactual forecast')
+    expect(output).toContain('Generation 4 complete')
     expect(output).toContain('role="status" aria-live="polite" aria-atomic="true"')
     expect(output).toContain('Recorded settlement, Generation 4 → 5 (actual result, not a counterfactual forecast)')
     expect(output.match(/aria-live="polite"/g)).toHaveLength(1)

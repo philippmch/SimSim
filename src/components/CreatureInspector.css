@@ -1,0 +1,10 @@
+.creature-now{padding:16px 0 10px}
+.creature-now h3{margin:0 0 7px;font-size:20px;line-height:1.25;color:var(--ink)}
+.creature-now p{max-width:65ch;margin:5px 0;font-size:14px;line-height:1.5}
+.creature-now .creature-destination,.creature-now .creature-energy-note{color:var(--muted);font-size:12px}
+.creature-reserves{display:flex;flex-wrap:wrap;gap:12px 28px;margin:14px 0 9px}
+.creature-reserves div{display:flex;flex-direction:column;gap:3px}
+.creature-reserves dt{font-size:12px;color:var(--muted)}
+.creature-reserves dd{margin:0;font-size:17px;font-weight:650;font-variant-numeric:tabular-nums}
+.creature-technical>summary{min-height:28px;padding:5px 0;font-size:13px}
+.creature-technical>summary:focus-visible{outline:2px solid var(--ink);outline-offset:3px}

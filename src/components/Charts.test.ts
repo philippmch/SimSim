@@ -57,6 +57,16 @@ describe('trait histogram colors',()=>{
 })
 
 describe('generation history timeline',()=>{
+  it('reveals a collapsed journal before either direct review path scrolls to its selector',()=>{
+    for (const selectorAvailable of [true, false]) {
+      let open=false
+      const disclosure={setAttribute:()=>{open=true},parentElement:null}
+      const target={...journalTarget(),closest:()=>disclosure as unknown as Element,scrollIntoView:()=>expect(open).toBe(true)}
+      const documentRef={getElementById:(id:string)=>id==='generation-journal'||(selectorAvailable&&id==='generation-review')?target:null}
+      expect(openGenerationJournalReview({document:documentRef,scheduleFocus:callback=>callback()})).toBe(true)
+      expect(open).toBe(true)
+    }
+  })
   it('states that behavior history combines survivors and newborns',()=>{
     expect(BEHAVIOR_HISTORY_CONTEXT).toBe('Mean behavior traits in each next population; survivors and newborns combined.')
     expect(BEHAVIOR_HISTORY_CONTEXT).not.toContain('Inherited')

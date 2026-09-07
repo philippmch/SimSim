@@ -3,6 +3,7 @@ import { FORECAST_LOSS_LABELS, summarizeSelectedSettlementPreview, type Selected
 import PerceptionBreakdown, { validPerceptionCounts } from './PerceptionBreakdown'
 import IndividualHistory from './IndividualHistory'
 import type { SimulationActivityMoment } from './SimulationActivity'
+import './CreatureInspector.css'
 
 export interface PerceptionTelemetryCopy {
   creatures: string
@@ -31,6 +32,18 @@ const formatPreviewFood=(value:number)=>!Number.isFinite(value)?'unavailable':Nu
 const formatPreviewCount=(count:number,singular:string)=>`${count} ${count===1?singular:`${singular}s`}`
 const formatPreviewAge=(value:number|null)=>value===null||!Number.isSafeInteger(value)||value<0?'unavailable':String(value)
 const safePreviewGeneration=(value:number)=>Number.isSafeInteger(value)&&value>=1&&value<Number.MAX_SAFE_INTEGER?value:null
+
+/** Describe the held action, without attributing a historical decision to it. */
+export function formatCurrentCreaturePurpose(selected:Creature,ecologyMode:Config['ecologyMode']):string{
+  if(!selected.alive)return selected.deathCause==='energy'?'Its energy ran out. It can no longer move or feed.':selected.deathCause==='hunted'?'It was caught by another creature. It can no longer move or feed.':'This creature is no longer alive.'
+  if(selected.home)return ecologyMode==='energy-regrowth'?'Resting saves movement energy, but still uses energy. If it becomes hungry and there is time, it can leave to forage again.':'It has finished its trip and will wait here until the next generation.'
+  if(selected.targetType==='memory')return'It is checking a remembered food location. The food may already be gone.'
+  if(selected.mode==='foraging')return'It is moving toward food to replenish its energy.'
+  if(selected.mode==='hunting')return'It is pursuing another creature as a source of food. A chase does not guarantee a catch.'
+  if(selected.mode==='fleeing')return'It is moving away from danger it detected or remembers.'
+  if(selected.mode==='returning')return'It is heading back to shelter. Food collected, energy reserves, and time remaining can favor returning.'
+  return'It is searching the arena for opportunities. It has no food or prey destination at the moment.'
+}
 
 export function formatSelectedSettlementOutcome(preview:SelectedSettlementPreview):string{
   if(preview.outcome!=='survived')return`Would not survive · ${FORECAST_LOSS_LABELS[preview.outcome]}.`
@@ -207,14 +220,22 @@ export function CreatureInspector({ selected, world, ecologyMode, dayTime, state
   const selectedSettlementPreview=settlementPreview===undefined&&world?summarizeSelectedSettlementPreview(world,selected.individualId):settlementPreview??null
 
   const details=<>
-    {world&&<IndividualHistory key={`history-${selected.individualId}`} selected={selected} world={world} onReviewMoment={onReviewMoment}/>}
-    <div className="utility-breakdown" role="note" style={settlementPreviewStyle}>
+    <div className="creature-now" role="group" aria-label="What this creature is doing now">
+      <h3>{!selected.alive?'No longer alive':selected.home?'Resting at home':stateLabel}</h3>
+      <p>{formatCurrentCreaturePurpose(selected,ecologyMode)}</p>
+      {selected.alive&&!selected.home&&<p className="creature-destination">Destination: {targetLabel}</p>}
+      <dl className="creature-reserves"><div><dt>Energy now</dt><dd>{formatPreviewNumber(selected.energy)}</dd></div><div><dt>Food collected</dt><dd>{formatPreviewFood(selected.food)}{ecologyMode==='classic'?' / 2':''}</dd></div><div><dt>Age</dt><dd>{selected.age} {selected.age===1?'generation':'generations'}</dd></div></dl>
+      <p className="creature-energy-note">{ecologyMode==='energy-regrowth'?'Food restores energy. Reaching zero means death, even at home.':'Moving uses energy. Collect food and return home before the day ends.'}</p>
+    </div>
+    <details className="utility-breakdown creature-technical"><summary>Survival preview</summary><div role="note" style={settlementPreviewStyle}>
       <strong>If generation ended now</strong>
       {selectedSettlementPreview
         ? <span style={decisionLineStyle}>{`${formatSelectedSettlementOutcome(selectedSettlementPreview)} ${formatSelectedSettlementReproduction(selectedSettlementPreview)}`}</span>
         : <span style={decisionLineStyle}>Settlement details unavailable for this individual.</span>}
       <small style={settlementFramingStyle}>Counterfactual snapshot · not a prediction · updates as the cohort changes</small>
-    </div>
+    </div></details>
+    {world&&<IndividualHistory key={`history-${selected.individualId}`} selected={selected} world={world} onReviewMoment={onReviewMoment}/>}
+    <details key={`technical-${selected.individualId}`} className="utility-breakdown creature-technical"><summary>Decision and perception details</summary>
     {decision
       ? <div className="utility-breakdown" role="group" aria-label="Latest captured decision"><strong>Latest decision: {formatDecisionActionLabel(decision.chosen)}</strong><span style={decisionLineStyle}>Chosen target: {formatDecisionTargetLabel(decision,decisionTargetLabel)}</span><span style={decisionLineStyle}>Reason: {decisionReason}</span><span style={decisionLineStyle}>Selection basis: {formatDecisionBasis(decision.selectionBasis)}</span><span style={decisionLineStyle}>{formatDecisionProvenance(decision.decidedAt)}</span></div>
       : <div className="utility-breakdown" role="group" aria-label="Latest captured decision"><strong>{selected.home?'No active decision while home.':'No decision captured yet'}</strong><span style={decisionLineStyle}>{selected.home?(ecologyMode==='energy-regrowth'?'This individual is resting and using energy. Hunger can send it out to forage again.':'This individual is waiting at home; there is no active action to explain.'):selected.alive?'Advance the simulation to capture its next decision.':'This individual is inactive; no further decisions will be captured.'}</span></div>}
@@ -225,6 +246,7 @@ export function CreatureInspector({ selected, world, ecologyMode, dayTime, state
     {selected.mode==='hunting'&&<div className="utility-breakdown" role="note"><strong>Hunt contact rule</strong><span>{huntContactRule}</span></div>}
     <details key={`traits-${selected.individualId}`} className="utility-breakdown"><summary>Trait profile · 6 values</summary><dl>{(['speed','size','sense','aggression','caution','exploration']as BiologicalTrait[]).map(trait=><div key={trait}><dt>{trait}</dt><dd>{selected[trait].toFixed(3)}</dd></div>)}</dl></details>
     {decision&&<details key={`candidates-${selected.individualId}`} className="utility-breakdown"><summary>{formatCandidateUtilitySummary(candidates.length)}</summary><small style={{display:'block',marginTop:4,color:'var(--muted)'}}>Scores rank candidates within this captured decision—not probability or biological fitness; perception can refresh before the next decision.</small><table><caption className="sr-only">Captured candidate relative utilities; scores rank candidates within this decision, not probability or biological fitness</caption><thead><tr><th>Candidate</th><th>Relative utility</th><th>Reason</th></tr></thead><tbody>{candidates.map((candidate,i)=>{const chosen=i===chosenIndex;return <tr key={`${candidate.type}-${candidate.targetId}-${i}`} aria-label={chosen?`${candidate.type} chosen candidate`:undefined}><td>{candidate.type}{chosen&&<small> · Chosen</small>}</td><td>{Number.isFinite(candidate.score)?candidate.score.toFixed(2):'unavailable'}</td><td>{typeof candidate.reason==='string'&&candidate.reason.trim()?candidate.reason:'Reason unavailable'}</td></tr>})}</tbody></table></details>}
+    </details>
   </>
   if(embedded)return details
   return <section className="inspector" aria-label={`Selected individual ${selected.individualId}`}>

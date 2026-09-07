@@ -32,6 +32,7 @@ export const DASHBOARD_SECTION_SCROLL_OPTIONS: ScrollIntoViewOptions = {
 export const DASHBOARD_SECTION_SCROLL_STYLE: CSSProperties = { scrollMarginTop: '84px' }
 
 export interface DashboardNavigationTarget {
+  closest?: (selector: string) => Element | null
   scrollIntoView: (options?: ScrollIntoViewOptions) => void
   focus: (options?: FocusOptions) => void
 }
@@ -66,6 +67,7 @@ export function openDashboardSection(sectionId: DashboardSectionId, options: Das
   const target = documentRef.getElementById(sectionId)
   if (!target) return false
 
+  revealEnclosingDetails(target)
   target.scrollIntoView(DASHBOARD_SECTION_SCROLL_OPTIONS)
   const scheduleFocus = options.scheduleFocus ?? scheduleDashboardSectionFocus
   scheduleFocus(() => {
@@ -89,3 +91,11 @@ export function DashboardNavigation({ onNavigate = defaultDashboardNavigation }:
 }
 
 export default DashboardNavigation
+
+export function revealEnclosingDetails(target: { closest?: (selector: string) => Element | null }) {
+  let disclosure = target.closest?.('details')
+  while (disclosure) {
+    disclosure.setAttribute('open', '')
+    disclosure = disclosure.parentElement?.closest('details')
+  }
+}

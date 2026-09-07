@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ARENA_FOCUS_OPTIONS, ARENA_HUNT_CONTACT_KEY, arenaPlaybackStatus, CREATURE_STATE_METADATA, formatArenaDayProgress, formatArenaFocusDescription, formatArenaFocusOption, formatArenaPlaybackDetail, formatObservedPath, formatSelectedTarget } from './components/ArenaCanvasModel'
 import type { ArenaPlaybackStatus, CreatureState } from './components/ArenaCanvasModel'
-import { createWorld, getLineageAnalytics, getModeCounts, getStats } from './simulation/engine'
+import { createWorld, getModeCounts } from './simulation/engine'
 import { MAX_FOOD,MAX_FOUNDER_MIGRATION_BATCH,MAX_POPULATION, sanitizeConfig } from './simulation/config'
 import { createController } from './simulation/controller'
 import type { SimulationController,SimulationSnapshotMeta } from './simulation/controller'
@@ -11,20 +11,17 @@ import type {StepActivityEvidence} from './components/ObservedStepStory'
 import type {CreatureInspectorActionControls} from './components/CreatureInspector'
 import type {SimulationActivityMoment} from './components/SimulationActivity'
 import {isActivityReviewRetained} from './components/ActivityReviewModel'
-import DashboardNavigation, { DASHBOARD_SECTION_IDS, DASHBOARD_SECTION_SCROLL_STYLE, openDashboardSection } from './components/DashboardNavigation'
+import { DASHBOARD_SECTION_IDS, openDashboardSection } from './components/DashboardNavigation'
 
 const ExperimentPanel=lazy(()=>import('./components/ExperimentPanel').then(module=>({default:module.ExperimentPanel})))
 const ArenaCanvas=lazy(()=>import('./components/ArenaCanvasRenderer').then(module=>({default:module.ArenaCanvas})))
+const DashboardPanels=lazy(()=>import('./components/DashboardPanels'))
+const FieldOverview=lazy(()=>import('./components/FieldOverview'))
 const ArenaLegend=lazy(()=>import('./components/ArenaLegend'))
 const ActivityReviewNotice=lazy(()=>import('./components/ActivityReviewNotice'))
-const GenerationJournal=lazy(()=>import('./components/GenerationJournal'))
-const InsightsPanel=lazy(()=>import('./components/InsightsPanel'))
-const LivePulse=lazy(()=>import('./components/LivePulse'))
 const TerminalOutcome=lazy(()=>import('./components/TerminalOutcome'))
 const CreatureInspector=lazy(()=>import('./components/CreatureInspector'))
-const PopulationStory=lazy(()=>import('./components/PopulationStory'))
 const GenerationHandoff=lazy(()=>import('./components/GenerationHandoff'))
-const GenerationAccounting=lazy(()=>import('./components/GenerationAccounting'))
 const SimulationActivity=lazy(()=>import('./components/SimulationActivity'))
 const ObservedStepStory=lazy(()=>import('./components/ObservedStepStory'))
 
@@ -32,7 +29,6 @@ const InterventionFeed=lazy(()=>import('./components/InterventionFeed'))
 const ParametersPanel=lazy(()=>import('./components/ParametersPanel'))
 const SavedRunControls=lazy(()=>import('./components/SavedRunControls'))
 const ResourcePatchInspector=lazy(()=>import('./components/ResourcePatchInspector'))
-const creatureStates=Object.entries(CREATURE_STATE_METADATA) as [CreatureState,(typeof CREATURE_STATE_METADATA)[CreatureState]][]
 
 /** Reserve enough short-viewport room for the complete wrapped transport rail. */
 export const COMPACT_TRANSPORT_QUERY = '(max-width: 720px)'
@@ -525,12 +521,10 @@ function App(){
   const playingRef=useRef(playing);playingRef.current=playing
   const extinctRef=useRef(extinct);extinctRef.current=extinct
   const resumeOnVisibleRef=useRef(false)
-  const stats=getStats(world)
   const modes=getModeCounts(world)
   const activeModeTotal=Object.values(modes).reduce((sum,count)=>sum+count,0)
   const stateCounts:Record<CreatureState,number>={safe:living-activeModeTotal,...modes}
   const arenaFocusCount=arenaFocus==='all'?living:stateCounts[arenaFocus]
-  const lineage=getLineageAnalytics(world)
   const selected=world.creatures.find(c=>c.individualId===selectedIndividualId&&c.alive)
   const selectedPatch=world.environment.patches.find(patch=>patch.id===selectedPatchId)
   const decisionTargetLabel=selected?.decisionSummary
@@ -707,48 +701,31 @@ function App(){
           <button className="reset" onClick={reset}>{dirty?'Apply & restart':'Restart run'}</button>
         </div>
         {arenaFilters}
-        <Suspense fallback={null}><SavedRunControls world={world} onRestore={replaceRun} disabled={pendingCommand!==null}/></Suspense>
+        <Suspense fallback={null}><FieldOverview world={world}/></Suspense>
         {activeReviewedMoment&&<Suspense fallback={null}><ActivityReviewNotice moment={activeReviewedMoment} activity={world.activity} creatures={world.creatures} focusFrom={reviewFocusSourceRef.current} onReviewMoment={reviewActivity} onReturnToLatest={endActivityReview}/></Suspense>}
 
+        {selected&&<div ref={selectedInspectorRef} className="inspector-focus-target" tabIndex={-1} aria-label={`Selected individual ${selected.individualId} details`} style={{scrollMarginTop:'84px'}}><SelectedInspectorShell selected={selected} actionControls={actionControls} onClose={closeSelected}><CreatureInspector embedded onReviewMoment={moment=>reviewActivity(moment,selected.individualId)} selected={selected} world={world} ecologyMode={world.config.ecologyMode} dayTime={world.dayTime} stateLabel={CREATURE_STATE_METADATA[selected.home?'safe':selected.mode].label} targetLabel={formatSelectedTarget(selected,world.creatures,world.food)} decisionTargetLabel={decisionTargetLabel} huntContactRule={ARENA_HUNT_CONTACT_KEY} onClose={closeSelected}/></SelectedInspectorShell></div>}
         {selectedPatch&&<div ref={selectedPatchInspectorRef} className="inspector-focus-target" tabIndex={-1} aria-label="Selected resource patch details" style={{scrollMarginTop:'84px'}}><Suspense fallback={<ResourcePatchInspectorFallback/>}><ResourcePatchInspector world={world} selectedPatchId={selectedPatchId} onClose={closeSelectedPatch}/></Suspense></div>}
         {manualStepStory.visible&&<Suspense fallback={<ObservedStepStoryFallback observedPath={observedPath}/>}><ObservedStepStory observedPath={observedPath} evidence={stepActivityEvidence}/></Suspense>}
-        <SimulationEventStory world={world} selectedIndividualId={selectedIndividualId} onShowIndividual={showActivityIndividual} onReviewMoment={reviewActivity} reviewedMoment={activeReviewedMoment} suppressAnnouncementSequence={stepAnnouncementSequence}/>
-        {selected&&<div ref={selectedInspectorRef} className="inspector-focus-target" tabIndex={-1} aria-label={`Selected individual ${selected.individualId} details`} style={{scrollMarginTop:'84px'}}><SelectedInspectorShell selected={selected} actionControls={actionControls} onClose={closeSelected}><CreatureInspector embedded onReviewMoment={moment=>reviewActivity(moment,selected.individualId)} selected={selected} world={world} ecologyMode={world.config.ecologyMode} dayTime={world.dayTime} stateLabel={CREATURE_STATE_METADATA[selected.home?'safe':selected.mode].label} targetLabel={formatSelectedTarget(selected,world.creatures,world.food)} decisionTargetLabel={decisionTargetLabel} huntContactRule={ARENA_HUNT_CONTACT_KEY} onClose={closeSelected}/></SelectedInspectorShell></div>}
         {terminalOutcome&&!selected&&<div ref={terminalOutcomeRef} className="inspector-focus-target" tabIndex={-1} aria-label={`Individual ${terminalOutcome.individualId} terminal outcome focus target`} style={{scrollMarginTop:'84px'}}><Suspense fallback={null}><TerminalOutcome outcome={terminalOutcome} onDismiss={()=>selectIndividual(null)}/></Suspense></div>}
         <Suspense fallback={<GenerationHandoffFallback/>}><GenerationHandoff world={world} playbackStatus={arenaStatus} playing={playing} onReviewGeneration={reviewSettlement} revealGeneration={generationRevealRequest} onRevealComplete={clearGenerationReveal}/></Suspense>
         {arenaStatus==='Awaiting settlement'&&<div className="pending" aria-label="Settlement status">{arenaDetail}</div>}
+        <div className="run-tools">
+        <Suspense fallback={null}><SavedRunControls world={world} onRestore={replaceRun} disabled={pendingCommand!==null}/></Suspense>
+        <details className="workspace-disclosure"><summary>Change the environment<small>Add food, create a drought, or introduce founders</small></summary>
         <div className="interventions" role="group" aria-label="Live ecological interventions">
           <span><strong>Change the environment</strong><small>Takes effect immediately</small></span>
           <button onClick={()=>intervene('resource-bloom')} disabled={world.food.length>=MAX_FOOD} title={world.food.length>=MAX_FOOD?'Food is at the safety cap':'Add a deterministic pulse of food'}>Resource bloom</button>
           <button onClick={()=>intervene('drought')} disabled={!world.food.length} title={!world.food.length?'There is no food to remove':'Remove 40% of current food'}>Drought</button>
           <button onClick={()=>intervene('founder-migration')} disabled={founderMigrationCopy.available===0} title={founderMigrationCopy.title} aria-label={founderMigrationCopy.ariaLabel}>{founderMigrationCopy.buttonLabel}</button>
         </div>
+        </details></div>
+        <details className="workspace-disclosure"><summary>Event history<small>Review specific moments in the arena</small></summary>
+        <SimulationEventStory world={world} selectedIndividualId={selectedIndividualId} onShowIndividual={showActivityIndividual} onReviewMoment={reviewActivity} reviewedMoment={activeReviewedMoment} suppressAnnouncementSequence={stepAnnouncementSequence}/>
+        </details>
         {dirty&&<div className="pending" role="status">Changes are staged and will take effect when you choose <strong>Apply &amp; restart</strong>.</div>}
 
-        <DashboardNavigation/>
-
-        <div className="dashboard">
-          <section id={DASHBOARD_SECTION_IDS.liveOverview} tabIndex={-1} className="dashboard" aria-label="Live statistics" style={DASHBOARD_SECTION_SCROLL_STYLE}>
-          <div className="summary-strip">
-            <div className="population-summary"><span>Living population</span><strong>{living}</strong><small>Generation {world.generation}</small></div>
-            <dl className="trait-summary">
-              <div><dt>Average speed</dt><dd>{stats.avgSpeed.toFixed(2)}</dd></div>
-              <div><dt>Average size</dt><dd>{stats.avgSize.toFixed(2)}</dd></div>
-              <div><dt>Average sense</dt><dd>{stats.avgSense.toFixed(2)}</dd></div>
-            </dl>
-          </div>
-          <div className="behavior-summary" aria-label="Live behavior gene averages">
-            <strong>Inherited behavior</strong><span>Aggression <b>{stats.avgAggression.toFixed(2)}</b></span><span>Caution <b>{stats.avgCaution.toFixed(2)}</b></span><span>Exploration <b>{stats.avgExploration.toFixed(2)}</b></span>
-          </div>
-          <div className="mode-line activity-line" aria-label={`What creatures are doing now. ${living} living creatures total.`}><strong>What creatures are doing now</strong>{creatureStates.map(([state,metadata])=><span key={state}><i aria-hidden="true" style={{backgroundColor:metadata.color}}/><b>{stateCounts[state]}</b> {metadata.label.toLowerCase()}</span>)}</div>
-          <Suspense fallback={<div className="ecology-line activity-line" role="group" aria-label="Live simulation pulse. Waiting for the next simulation update."><strong>Live pulse</strong><span>Waiting for the next simulation update.</span></div>}><LivePulse key={livePulseRun} world={world}/></Suspense>
-          <div className="ecology-line" aria-label="Current model and energy statistics"><strong>{world.config.ecologyMode==='energy-regrowth'?'Ecological model':'Classic model'}</strong><span>{world.config.perceptionMode==='realistic'?'Directional vision':'Perfect local vision'}</span><span>{world.config.predationMode==='contest'?'Hunts can fail':'Larger creatures catch smaller prey'}</span><span>mean energy <b>{stats.avgEnergy.toFixed(1)}</b></span><span>mean age <b>{stats.avgAge.toFixed(1)}</b></span></div>
-          <Suspense fallback={<GenerationAccountingFallback/>}><GenerationAccounting world={world} globalFoodCap={MAX_FOOD}/></Suspense>
-          </section>
-          <section id={DASHBOARD_SECTION_IDS.generationJournal} tabIndex={-1} aria-label="Generation journal review" style={DASHBOARD_SECTION_SCROLL_STYLE}><Suspense fallback={<div className="evolution-story generation-journal" aria-busy="true"><p className="journal-empty" role="status">Opening generation journal…</p></div>}><GenerationJournal ledgers={world.ledger} events={world.events} requestedGeneration={requestedGeneration} onRequestedGenerationChange={setRequestedGeneration}/></Suspense></section>
-          <section id={DASHBOARD_SECTION_IDS.populationLineages} tabIndex={-1} aria-label="Population & lineages" style={DASHBOARD_SECTION_SCROLL_STYLE}><Suspense fallback={<div className="evolution-story" aria-busy="true"><p className="journal-empty" role="status">Opening population story…</p></div>}><PopulationStory lineage={lineage}/></Suspense></section>
-          <section id={DASHBOARD_SECTION_IDS.insightsCharts} tabIndex={-1} aria-label="Insights & charts" style={DASHBOARD_SECTION_SCROLL_STYLE}><Suspense fallback={<div className="evolution-story generation-journal" aria-busy="true"><p className="journal-empty" role="status">Opening insights…</p></div>}><InsightsPanel world={world} requestedGeneration={requestedGeneration} onSelectGeneration={setRequestedGeneration}/></Suspense></section>
-        </div>
+        <Suspense fallback={null}><DashboardPanels world={world} livePulseRun={livePulseRun} requestedGeneration={requestedGeneration} onSelectGeneration={setRequestedGeneration}/></Suspense>
       </section>
       {settingsOpen&&isNarrow&&<div className="settings-backdrop" aria-hidden="true" onMouseDown={closeSettings}/>}
       <aside ref={settingsRef} id="settings" className={`settings ${settingsOpen?'open':''}`} role={isNarrow?'dialog':'region'} aria-modal={isNarrow&&settingsOpen||undefined} aria-labelledby="settings-title">

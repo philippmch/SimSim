@@ -93,6 +93,23 @@ function settlementDescription(summary: SettlementReportSummary): string {
   return equation === 'Settlement equation unavailable' ? GENERATION_HANDOFF_UNAVAILABLE : equation
 }
 
+/** Uses the validated recorded cohort, never the live population or a forecast. */
+export function formatGenerationOutcome(summary: SettlementReportSummary): string {
+  const change = summary.exactNextPopulation - summary.evaluatedCohort
+  const comparison = change === 0 ? 'the same population size' : `${Math.abs(change)} ${change > 0 ? 'more' : 'fewer'} than this cohort`
+  return `${summary.survivors} of ${summary.evaluatedCohort} survived and ${summary.admittedBirths} ${summary.admittedBirths === 1 ? 'offspring was' : 'offspring were'} born. Generation ${summary.nextGeneration} began with ${summary.exactNextPopulation} creatures, ${comparison}.`
+}
+
+export function formatGenerationDeaths(summary: SettlementReportSummary): string {
+  if (summary.totalLosses === null) return 'Some death records are incomplete. Open the recorded details for the available causes.'
+  if (summary.totalLosses === 0) return 'No creatures died in this generation.'
+  const descriptions = { hunted: 'were hunted', energy: 'ran out of energy', unfed: 'had not eaten by the end of the day', late: 'did not reach home before nightfall', aged: 'reached their maximum age' }
+  const causes = (Object.keys(descriptions) as (keyof typeof descriptions)[])
+    .filter(cause => (summary.losses[cause] ?? 0) > 0)
+    .map(cause => `${summary.losses[cause]} ${cause === 'hunted' && summary.losses[cause] === 1 ? 'was hunted' : descriptions[cause]}`)
+  return `${summary.totalLosses} died: ${causes.join('; ')}.`
+}
+
 export interface RecordedGenerationHandoffProps {
   ledgers: readonly GenerationLedger[] | unknown
   onReviewGeneration: (generation: number) => void
@@ -158,14 +175,21 @@ export function RecordedGenerationHandoff({ ledgers, onReviewGeneration, revealG
   const reproductionDescription = formatSettlementReproductionBreakdown(summary)
   return <>
     <div ref={actualRef} data-handoff-kind="actual" style={actualLaneStyle}>
+      <span style={labelStyle}><strong style={{ fontSize: 16 }}>Generation {summary.generation} complete</strong></span>
+      <span style={{ ...detailStyle, color: 'var(--ink)', maxWidth: '75ch' }}>{formatGenerationOutcome(summary)}</span>
+      <span style={{ ...detailStyle, maxWidth: '75ch' }}>{formatGenerationDeaths(summary)}</span>
+      <details>
+        <summary style={{ cursor: 'pointer', color: 'var(--muted)' }}>Recorded details</summary>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 6 }}>
       <span style={labelStyle}><strong>Actual recorded result</strong><small>Generation {summary.generation} → {summary.nextGeneration} · recorded at settlement</small></span>
       {transition && <span data-handoff-detail="generation-transition" role="note" aria-label="Generation transition" style={{ ...detailStyle, color: 'var(--ink)' }}>{formatGenerationHandoffTransition(transition)}</span>}
       <span style={{ ...detailStyle, color: 'var(--ink)' }}>{equation}</span>
       <span data-handoff-detail="losses" style={detailStyle}>{lossDescription}</span>
       <span data-handoff-detail="reproduction" style={detailStyle}>{reproductionDescription}</span>
+        </div>
+      </details>
       <span style={actionRowStyle}>
         <button type="button" className="settings-toggle" onClick={() => onReviewGeneration(summary.generation)} aria-label={`Review generation ${summary.generation}`}>Review generation {summary.generation}</button>
-        <small style={detailStyle}>Actual result · not a counterfactual forecast</small>
       </span>
     </div>
     <output className="sr-only" role="status" aria-live="polite" aria-atomic="true">{formatSettlementAnnouncement(summary)}</output>

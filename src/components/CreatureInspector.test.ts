@@ -6,7 +6,7 @@ import { createWorld } from '../simulation/engine'
 import type { DecisionSummary } from '../simulation/types'
 import { summarizeSelectedSettlementPreview, type SelectedSettlementPreview } from './GenerationForecast'
 import type { CreatureInspectorActionControls, CreatureInspectorProps } from './CreatureInspector'
-import { CreatureInspector, decisionCandidateMatches, formatCandidateUtilitySummary, formatDecisionActionLabel, formatDecisionBasis, formatDecisionContext, formatDecisionProvenance, formatDecisionTargetLabel, formatSelectedSettlementOutcome, formatSelectedSettlementReproduction } from './CreatureInspector'
+import { CreatureInspector, decisionCandidateMatches, formatCandidateUtilitySummary, formatCurrentCreaturePurpose, formatDecisionActionLabel, formatDecisionBasis, formatDecisionContext, formatDecisionProvenance, formatDecisionTargetLabel, formatSelectedSettlementOutcome, formatSelectedSettlementReproduction } from './CreatureInspector'
 
 const summary:DecisionSummary={
   chosen:'prey',
@@ -156,7 +156,7 @@ const controls=(overrides:Partial<CreatureInspectorActionControls>={}):CreatureI
 })
 
 describe('progressive individual inspector disclosure',()=>{
-  it('keeps the plain-language decision explanation ahead of both dense disclosures',()=>{
+  it('leads with the live action and reserves, keeping captured telemetry in a closed disclosure',()=>{
     const world=createWorld({...defaultConfig,initialPopulation:1})
     const selected=world.creatures[0]
     selected.decisionSummary=summary
@@ -169,7 +169,10 @@ describe('progressive individual inspector disclosure',()=>{
     expect(markup).toContain('Reason: Target commitment')
     expect(markup).toContain('Selection basis: Chosen by target commitment')
     expect(markup).toContain('Captured decision · Generation 3 · day 1.25 · reaction window 4')
-    expect(firstDetails).toBeGreaterThan(markup.indexOf('Latest decision: Hunt prey'))
+    expect(firstDetails).toBeGreaterThan(markup.indexOf('Energy now'))
+    expect(firstDetails).toBeGreaterThan(markup.indexOf('What this creature is doing now'))
+    expect(firstDetails).toBeLessThan(markup.indexOf('Latest decision: Hunt prey'))
+    expect(markup).toContain('<summary>Decision and perception details</summary>')
     expect(secondDetails).toBeGreaterThan(firstDetails)
     expect(markup).toContain('<summary>Trait profile · 6 values</summary>')
     expect(markup).toContain('<summary>Compare candidate utilities · 2 candidates</summary>')
@@ -180,6 +183,30 @@ describe('progressive individual inspector disclosure',()=>{
     expect(markup).toContain('scores rank candidates within this decision, not probability or biological fitness')
     expect(markup).toContain('perception can refresh before the next decision')
     expect([...markup.matchAll(/<details\b[^>]*>/g)].every(match=>!/\bopen(?:=|>)/.test(match[0]))).toBe(true)
+  })
+
+  it('describes present shelter and death states instead of reusing a retained hunting reason',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1})
+    const selected=world.creatures[0]
+    Object.assign(selected,{home:true,mode:'hunting',decisionSummary:summary})
+    const markup=renderInspector(world,selected,{stateLabel:'Hunting'})
+    expect(markup).toContain('<h3>Resting at home</h3>')
+    expect(formatCurrentCreaturePurpose(selected,'energy-regrowth')).toContain('still uses energy')
+    expect(formatCurrentCreaturePurpose(selected,'classic')).toContain('wait here until the next generation')
+    selected.alive=false
+    selected.deathCause='energy'
+    expect(formatCurrentCreaturePurpose(selected,'energy-regrowth')).toContain('energy ran out')
+    expect(renderInspector(world,selected)).toContain('<h3>No longer alive</h3>')
+  })
+
+  it('explains remembered food without claiming the resource is still there',()=>{
+    const world=createWorld({...defaultConfig,initialPopulation:1})
+    const selected=world.creatures[0]
+    Object.assign(selected,{home:false,alive:true,mode:'foraging',targetType:'memory'})
+    expect(formatCurrentCreaturePurpose(selected,'energy-regrowth')).toContain('food may already be gone')
+    selected.mode='fleeing'
+    selected.targetType='threat'
+    expect(formatCurrentCreaturePurpose(selected,'energy-regrowth')).toContain('detected or remembers')
   })
 
   it('distinguishes active and home creatures with no captured decision',()=>{

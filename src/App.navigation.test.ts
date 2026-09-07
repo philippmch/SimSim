@@ -1,7 +1,8 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import App from './App'
+import DashboardPanels from './components/DashboardPanels'
+import {createWorld, defaultConfig} from './simulation/engine'
 import { DASHBOARD_SECTION_IDS, DASHBOARD_SECTION_NAVIGATION } from './components/DashboardNavigation'
 
 describe('dashboard section navigation integration', () => {
@@ -13,7 +14,7 @@ describe('dashboard section navigation integration', () => {
     })
 
     try {
-      const markup = renderToStaticMarkup(createElement(App))
+      const markup = renderToStaticMarkup(createElement(DashboardPanels, {world:createWorld(defaultConfig),livePulseRun:0,requestedGeneration:null,onSelectGeneration:()=>{}}))
 
       for (const { id } of DASHBOARD_SECTION_NAVIGATION) {
         expect(markup.match(new RegExp(`aria-controls="${id}"`, 'g'))).toHaveLength(1)

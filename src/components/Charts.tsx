@@ -1,3 +1,4 @@
+import { revealEnclosingDetails } from './DashboardNavigation'
 import { END_CAUSES } from '../simulation/types'
 import type { BiologicalTrait,EndCause,GenerationLedger,HistoryPoint,World,WorldEvent } from '../simulation/types'
 import { MAX_WORLD_EVENTS } from '../simulation/engine'
@@ -35,6 +36,7 @@ export const GENERATION_REVIEW_TARGET_ID='generation-review'
 export const GENERATION_JOURNAL_PENDING_FOCUS_ATTRIBUTE='data-generation-journal-focus-pending'
 
 export interface GenerationJournalJumpTarget {
+  closest?: (selector: string) => Element | null
   disabled?:boolean
   scrollIntoView:(options?:ScrollIntoViewOptions)=>void
   focus:(options?:FocusOptions)=>void
@@ -85,6 +87,7 @@ export function openGenerationJournalReview(options:GenerationJournalJumpOptions
   if(!documentRef)return false
   const journal=documentRef.getElementById(GENERATION_JOURNAL_TARGET_ID),review=documentRef.getElementById(GENERATION_REVIEW_TARGET_ID),enabledReview=journalReviewEnabled(review),pending=!enabledReview&&Boolean(journal),scrollTarget=enabledReview?review:journal
   if(!scrollTarget)return false
+  revealEnclosingDetails(scrollTarget)
   scrollTarget.scrollIntoView(GENERATION_JOURNAL_SCROLL_OPTIONS)
   if(pending){
     markGenerationJournalFocusPending(scrollTarget)
