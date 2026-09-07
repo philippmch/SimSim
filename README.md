@@ -47,7 +47,9 @@ line. Movement-only ticks are omitted, so this is not a long per-tick trace or
 replay. The latest retained event stays above expandable history at every screen
 size. Clicking a creature opens its bounded inspection telemetry, which compares
 its current destination with the captured choice and explains the timing of
-decision and perception samples.
+decision and perception samples. An expandable perception table separates food
+and creature counts, showing detections and the first reason each missed item
+was filtered out. Perfect-perception mode explains its different sensing rules.
 
 The arena guide sits below playback controls so its explanations never cover
 the field. Live action counts and the Focus filter remain visible when the

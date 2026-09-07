@@ -1,5 +1,6 @@
 import type { BiologicalTrait, Config, Creature, DecisionCandidateSummary, DecisionProvenance, DecisionSelectionBasis, DecisionSummary, PerceptionDiagnostics, TargetType, World } from '../simulation/types'
 import { FORECAST_LOSS_LABELS, summarizeSelectedSettlementPreview, type SelectedSettlementPreview } from './SettlementPreview'
+import PerceptionBreakdown, { validPerceptionCounts } from './PerceptionBreakdown'
 
 export interface PerceptionTelemetryCopy {
   creatures: string
@@ -141,8 +142,13 @@ export function formatDecisionContext(selected:Creature,dayTime:number):string[]
 
 /** Keep the inspector's rejection buckets additive and understandable at a glance. */
 export function formatPerceptionTelemetry(diagnostics: PerceptionDiagnostics): PerceptionTelemetryCopy {
-  const creature = diagnostics.creatures
-  const food = diagnostics.food
+  const creature = validPerceptionCounts(diagnostics.creatures, diagnostics.mode)
+  const food = validPerceptionCounts(diagnostics.food, diagnostics.mode)
+  if (!creature || !food) return {
+    creatures: creature ? `Other active creatures detected ${creature.detected}/${creature.total}` : 'Other active creature counts unavailable',
+    food: food ? `Food detected ${food.detected}/${food.total}` : 'Food counts unavailable',
+    notDetected: 'Combined not-detected counts unavailable: the sample is incomplete or inconsistent.',
+  }
   const combined = (key: 'range'|'fov'|'occlusion'|'detection') => creature[key] + food[key]
   const range = combined('range')
   const fov = combined('fov')
@@ -211,6 +217,7 @@ export function CreatureInspector({ selected, world, ecologyMode, dayTime, state
     <div className="utility-breakdown" role="group" aria-label="Current action context"><strong>Current action context</strong>{decisionContext.map(line=><span key={line} style={decisionLineStyle}>{line}</span>)}</div>
     <div className="inspector-grid"><dl style={{gridColumn:'1/-1'}}><div><dt>Age</dt><dd>{selected.age} generations</dd></div><div><dt>Energy</dt><dd>{selected.energy.toFixed(1)}</dd></div><div><dt>Food</dt><dd>{selected.food}{ecologyMode==='classic'?' / 2':' collected'}</dd></div><div><dt>State</dt><dd>{stateLabel}</dd></div><div><dt>Held destination</dt><dd>{!selected.alive?'None · inactive':selected.home?'None · home':targetLabel}</dd></div><div><dt>Attack ready</dt><dd>{selected.attackCooldownUntil<=dayTime?'now':`in ${(selected.attackCooldownUntil-dayTime).toFixed(2)}s`}</dd></div><div><dt>Memory</dt><dd>food {selected.memory.foodX===null?'none':'active'} · threat {selected.memory.threatX===null?'none':'active'}</dd></div></dl></div>
     {selected.perceptionDiagnostics&&perceptionCopy&&<div className="perception-summary" role="group" aria-label="Selected creature perception telemetry"><strong>Perception window {Number.isSafeInteger(selected.perceptionDiagnostics.reactionWindow)&&selected.perceptionDiagnostics.reactionWindow>=0?selected.perceptionDiagnostics.reactionWindow:'unavailable'}</strong><span>{perceptionCopy.creatures}</span><span>{perceptionCopy.food}</span><span>{perceptionCopy.notDetected}</span></div>}
+    {selected.perceptionDiagnostics&&<PerceptionBreakdown key={`perception-${selected.individualId}`} diagnostics={selected.perceptionDiagnostics}/>}
     {selected.mode==='hunting'&&<div className="utility-breakdown" role="note"><strong>Hunt contact rule</strong><span>{huntContactRule}</span></div>}
     <details key={`traits-${selected.individualId}`} className="utility-breakdown"><summary>Trait profile · 6 values</summary><dl>{(['speed','size','sense','aggression','caution','exploration']as BiologicalTrait[]).map(trait=><div key={trait}><dt>{trait}</dt><dd>{selected[trait].toFixed(3)}</dd></div>)}</dl></details>
     {decision&&<details key={`candidates-${selected.individualId}`} className="utility-breakdown"><summary>{formatCandidateUtilitySummary(candidates.length)}</summary><small style={{display:'block',marginTop:4,color:'var(--muted)'}}>Scores rank candidates within this captured decision—not probability or biological fitness; perception can refresh before the next decision.</small><table><caption className="sr-only">Captured candidate relative utilities; scores rank candidates within this decision, not probability or biological fitness</caption><thead><tr><th>Candidate</th><th>Relative utility</th><th>Reason</th></tr></thead><tbody>{candidates.map((candidate,i)=>{const chosen=i===chosenIndex;return <tr key={`${candidate.type}-${candidate.targetId}-${i}`} aria-label={chosen?`${candidate.type} chosen candidate`:undefined}><td>{candidate.type}{chosen&&<small> · Chosen</small>}</td><td>{Number.isFinite(candidate.score)?candidate.score.toFixed(2):'unavailable'}</td><td>{typeof candidate.reason==='string'&&candidate.reason.trim()?candidate.reason:'Reason unavailable'}</td></tr>})}</tbody></table></details>}
